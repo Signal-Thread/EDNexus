@@ -25,7 +25,7 @@ public sealed class TwitchExtensionJwtService : ITwitchExtensionJwtService
     }
 
     /// <inheritdoc />
-    public TwitchJwtValidationResult Validate(string token)
+    public TwitchJwtValidationResult Validate(string token, IReadOnlyCollection<string>? allowedRoles = null)
     {
         if (string.IsNullOrWhiteSpace(_options.ExtensionSecret))
         {
@@ -42,11 +42,16 @@ public sealed class TwitchExtensionJwtService : ITwitchExtensionJwtService
             return TwitchJwtValidationResult.Failure("Extension secret is not valid base64.");
         }
 
-        return Validate(token, key, _options.ClockSkewSeconds, _timeProvider.GetUtcNow());
+        return Validate(token, key, _options.ClockSkewSeconds, _timeProvider.GetUtcNow(), allowedRoles);
     }
 
     /// <summary>Validation entry point that takes the raw key bytes directly (used by tests).</summary>
-    internal static TwitchJwtValidationResult Validate(string token, byte[] key, int clockSkewSeconds, DateTimeOffset now)
+    internal static TwitchJwtValidationResult Validate(
+        string token,
+        byte[] key,
+        int clockSkewSeconds,
+        DateTimeOffset now,
+        IReadOnlyCollection<string>? allowedRoles = null)
     {
         if (string.IsNullOrWhiteSpace(token))
         {
@@ -85,6 +90,7 @@ public sealed class TwitchExtensionJwtService : ITwitchExtensionJwtService
             return TwitchJwtValidationResult.Failure("Signature verification failed.");
         }
 
+        // Nothing in the payload is read until the signature above has verified.
         using var payload = JsonDocument.Parse(payloadBytes);
         var root = payload.RootElement;
 
@@ -99,16 +105,45 @@ public sealed class TwitchExtensionJwtService : ITwitchExtensionJwtService
             return TwitchJwtValidationResult.Failure("Token has expired.");
         }
 
-        string? channelId = root.TryGetProperty("channel_id", out var channelElement)
-            ? channelElement.GetString()
-            : null;
-        string? userId = root.TryGetProperty("user_id", out var userElement) ? userElement.GetString() : null;
-        string? opaqueUserId = root.TryGetProperty("opaque_user_id", out var opaqueElement)
-            ? opaqueElement.GetString()
-            : null;
-        string? role = root.TryGetProperty("role", out var roleElement) ? roleElement.GetString() : null;
+        if (root.TryGetProperty("nbf", out var nbfElement))
+        {
+            if (nbfElement.ValueKind != JsonValueKind.Number || !nbfElement.TryGetInt64(out var nbf))
+            {
+                return TwitchJwtValidationResult.Failure("Token has a malformed 'nbf' claim.");
+            }
 
-        var claims = new TwitchExtensionClaims(channelId, userId, opaqueUserId, role, exp);
+            // Compared in whole Unix seconds, like nbf itself, so an out-of-range value can't throw the
+            // way DateTimeOffset.FromUnixTimeSeconds would.
+            if (nbf > now.ToUnixTimeSeconds() + clockSkewSeconds)
+            {
+                return TwitchJwtValidationResult.Failure("Token is not yet valid.");
+            }
+        }
+
+        var channelId = GetStringClaim(root, "channel_id");
+        if (string.IsNullOrWhiteSpace(channelId))
+        {
+            return TwitchJwtValidationResult.Failure("Token is missing the 'channel_id' claim.");
+        }
+
+        var role = GetStringClaim(root, "role");
+        if (role is not ("broadcaster" or "moderator" or "viewer" or "external"))
+        {
+            return TwitchJwtValidationResult.Failure(
+                "Unsupported or missing 'role' claim; only broadcaster, moderator, viewer, and external are accepted.");
+        }
+
+        if (allowedRoles is not null && !allowedRoles.Contains(role, StringComparer.Ordinal))
+        {
+            return TwitchJwtValidationResult.Failure($"Token role '{role}' is not one of the allowed roles.");
+        }
+
+        var claims = new TwitchExtensionClaims(
+            channelId,
+            GetStringClaim(root, "user_id"),
+            GetStringClaim(root, "opaque_user_id"),
+            role,
+            exp);
         return TwitchJwtValidationResult.Success(claims);
     }
 
@@ -143,6 +178,12 @@ public sealed class TwitchExtensionJwtService : ITwitchExtensionJwtService
 
         return $"{headerSegment}.{payloadSegment}.{signature}";
     }
+
+    /// <summary>Reads a string claim, treating an absent or non-string value as missing.</summary>
+    private static string? GetStringClaim(JsonElement payload, string name) =>
+        payload.TryGetProperty(name, out var element) && element.ValueKind == JsonValueKind.String
+            ? element.GetString()
+            : null;
 
     private static string Base64UrlEncode(byte[] bytes) =>
         Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');

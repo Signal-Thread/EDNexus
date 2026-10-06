@@ -1,6 +1,8 @@
+using System.Diagnostics.CodeAnalysis;
 using EDNexus.Ebs.Options;
 using EDNexus.Ebs.Security;
 using EDNexus.Ebs.Services;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Options;
 
 namespace EDNexus.Ebs.Endpoints;
@@ -42,8 +44,8 @@ public static class OAuthEndpoints
         if (!string.IsNullOrEmpty(codeChallengeMethod) && !string.Equals(codeChallengeMethod, "S256", StringComparison.Ordinal))
             return Results.Problem("Only the S256 code_challenge_method is supported.", statusCode: StatusCodes.Status400BadRequest);
 
-        if (!IsLoopbackRedirect(redirectUri))
-            return Results.Problem("redirect_uri must be a loopback (localhost/127.0.0.1) address.", statusCode: StatusCodes.Status400BadRequest);
+        if (!TryParseLoopbackRedirect(redirectUri, out _))
+            return Results.Problem("redirect_uri must be an http loopback (localhost/127.0.0.1/[::1]) address.", statusCode: StatusCodes.Status400BadRequest);
 
         var twitch = twitchOptions.Value;
         var sessionId = store.CreateSession(redirectUri, state, codeChallenge, TimeSpan.FromMinutes(Math.Max(1, ebsOptions.Value.OAuthSessionTtlMinutes)));
@@ -79,23 +81,28 @@ public static class OAuthEndpoints
         if (string.IsNullOrWhiteSpace(sessionId) || !store.TryConsumeSession(sessionId, out var session))
             return ErrorPage("This login link has expired or was already used. Please restart the login from EDNexus.");
 
+        // /oauth/authorize only stores a redirect_uri that passed this same check. Re-parsing it here
+        // means every redirect below is built from the validated Uri, never from the raw stored string.
+        if (!TryParseLoopbackRedirect(session.DesktopRedirectUri, out var desktopRedirectUri))
+            return ErrorPage("This login session is invalid. Please restart the login from EDNexus.");
+
         var error = request.Query["error"].ToString();
         if (!string.IsNullOrEmpty(error))
         {
             var description = request.Query["error_description"].ToString();
-            return Results.Redirect(BuildDesktopRedirect(session.DesktopRedirectUri, session.DesktopState, error: error, errorDescription: description));
+            return Results.Redirect(BuildDesktopRedirect(desktopRedirectUri, session.DesktopState, error: error, errorDescription: description));
         }
 
         var code = request.Query["code"].ToString();
         if (string.IsNullOrWhiteSpace(code))
-            return Results.Redirect(BuildDesktopRedirect(session.DesktopRedirectUri, session.DesktopState, error: "server_error", errorDescription: "Twitch did not return an authorization code."));
+            return Results.Redirect(BuildDesktopRedirect(desktopRedirectUri, session.DesktopState, error: "server_error", errorDescription: "Twitch did not return an authorization code."));
 
         try
         {
             var twitchToken = await twitchClient.ExchangeAuthorizationCodeAsync(code, twitchOptions.Value.OAuthRedirectUri, ct).ConfigureAwait(false);
             var user = await twitchClient.GetUserAsync(twitchToken.AccessToken, ct).ConfigureAwait(false);
             if (user is null || string.IsNullOrWhiteSpace(user.Id))
-                return Results.Redirect(BuildDesktopRedirect(session.DesktopRedirectUri, session.DesktopState, error: "server_error", errorDescription: "Could not retrieve the Twitch user profile."));
+                return Results.Redirect(BuildDesktopRedirect(desktopRedirectUri, session.DesktopState, error: "server_error", errorDescription: "Could not retrieve the Twitch user profile."));
 
             var username = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Login : user.DisplayName;
             var twitchExpiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(twitchToken.ExpiresIn);
@@ -111,12 +118,12 @@ public static class OAuthEndpoints
                 default);
 
             var authCode = store.CreateAuthorizationCode(pending, TimeSpan.FromSeconds(Math.Max(10, ebsOptions.Value.OAuthCodeTtlSeconds)));
-            return Results.Redirect(BuildDesktopRedirect(session.DesktopRedirectUri, session.DesktopState, code: authCode));
+            return Results.Redirect(BuildDesktopRedirect(desktopRedirectUri, session.DesktopState, code: authCode));
         }
         catch (TwitchOAuthException ex)
         {
             logger.LogWarning(ex, "Twitch rejected the OAuth callback exchange.");
-            return Results.Redirect(BuildDesktopRedirect(session.DesktopRedirectUri, session.DesktopState, error: "server_error", errorDescription: "Twitch rejected the login."));
+            return Results.Redirect(BuildDesktopRedirect(desktopRedirectUri, session.DesktopState, error: "server_error", errorDescription: "Twitch rejected the login."));
         }
     }
 
@@ -163,20 +170,24 @@ public static class OAuthEndpoints
         return Results.Ok();
     }
 
-    private static string BuildDesktopRedirect(string desktopRedirectUri, string desktopState, string? code = null, string? error = null, string? errorDescription = null)
+    private static string BuildDesktopRedirect(Uri desktopRedirectUri, string desktopState, string? code = null, string? error = null, string? errorDescription = null)
     {
-        var query = new List<string> { $"state={Uri.EscapeDataString(desktopState)}" };
-        if (!string.IsNullOrEmpty(code)) query.Add($"code={Uri.EscapeDataString(code)}");
-        if (!string.IsNullOrEmpty(error)) query.Add($"error={Uri.EscapeDataString(error)}");
-        if (!string.IsNullOrEmpty(errorDescription)) query.Add($"error_description={Uri.EscapeDataString(errorDescription)}");
-        var separator = desktopRedirectUri.Contains('?') ? '&' : '?';
-        return $"{desktopRedirectUri}{separator}{string.Join('&', query)}";
+        var query = new List<KeyValuePair<string, string?>> { new("state", desktopState) };
+        if (!string.IsNullOrEmpty(code)) query.Add(new("code", code));
+        if (!string.IsNullOrEmpty(error)) query.Add(new("error", error));
+        if (!string.IsNullOrEmpty(errorDescription)) query.Add(new("error_description", errorDescription));
+
+        // Serialized from the parsed Uri, so the Location header is exactly the address that passed
+        // TryParseLoopbackRedirect. AddQueryString keeps any query string the desktop registered.
+        return QueryHelpers.AddQueryString(desktopRedirectUri.AbsoluteUri, query);
     }
 
-    private static bool IsLoopbackRedirect(string redirectUri) =>
-        Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri)
+    // Exact host matching on purpose (not Uri.IsLoopback). Uri.Host keeps the brackets on IPv6
+    // literals, so the IPv6 loopback has to be matched as "[::1]".
+    private static bool TryParseLoopbackRedirect(string redirectUri, [NotNullWhen(true)] out Uri? uri) =>
+        Uri.TryCreate(redirectUri, UriKind.Absolute, out uri)
         && uri.Scheme == Uri.UriSchemeHttp
-        && (uri.Host == "localhost" || uri.Host == "127.0.0.1" || uri.Host == "::1");
+        && (uri.Host == "localhost" || uri.Host == "127.0.0.1" || uri.Host == "[::1]");
 
     private static IResult ErrorPage(string message) => Results.Content(
         $"""
