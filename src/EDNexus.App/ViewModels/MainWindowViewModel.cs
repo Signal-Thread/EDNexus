@@ -210,7 +210,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             settings: _boot.Settings,
             reportingSuppressed: () => _boot.Dev.Enabled,
             settingsStore: _boot.Store);
-        _boot.Crash.Attach(host.Bus); // report journal handler errors
+        _boot.Crash.Attach(host.Bus, host.State); // report journal handler errors; redact the CMDR name
         host.VoiceCallouts.CalloutRaised += OnVoiceCalloutRaised;
 
         // The radio plays in the background independent of the 250ms state-refresh tick, so it gets
