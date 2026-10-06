@@ -19,8 +19,14 @@ public sealed class EddnJournalTransformer
     private static readonly HashSet<string> PrivateJournalKeys = new(StringComparer.Ordinal)
     {
         "ActiveFine", "CockpitBreach", "BoostUsed", "FuelLevel", "FuelUsed", "JumpDist",
-        "Latitude", "Longitude", "Altitude", "Heading", "Wanted", "MyReputation",
-        "SquadronFaction", "HappiestSystem", "HomeSystem",
+        "Latitude", "Longitude", "Altitude", "Heading", "Wanted",
+    };
+
+    // Commander-private fields found inside each Factions[] entry (FSDJump/Location/CarrierJump), not
+    // at the root. The journal schema disallows them there, so any left in get the upload rejected.
+    private static readonly HashSet<string> PrivateFactionKeys = new(StringComparer.Ordinal)
+    {
+        "MyReputation", "SquadronFaction", "HappiestSystem", "HomeSystem",
     };
 
     // Cosmetic "modules" that are not real outfitting stock.
@@ -59,11 +65,23 @@ public sealed class EddnJournalTransformer
         var msg = ToObject(raw);
         StripLocalised(msg);
         foreach (var key in PrivateJournalKeys) msg.Remove(key);
+        StripPrivateFactionKeys(msg);
 
         if (!Augment(msg, state)) return null;
         AddGameFlags(msg, state);
 
         return Envelope(EddnSchemas.Journal, msg, state);
+    }
+
+    /// <summary>
+    /// Removes <see cref="PrivateFactionKeys"/> from every entry of a <c>Factions</c> array, whichever
+    /// event carries it. A missing or non-array <c>Factions</c>, or a non-object entry, is left as-is.
+    /// </summary>
+    private static void StripPrivateFactionKeys(JsonObject msg)
+    {
+        if (msg["Factions"] is not JsonArray factions) return;
+        foreach (var faction in factions.OfType<JsonObject>())
+            foreach (var key in PrivateFactionKeys) faction.Remove(key);
     }
 
     /// <summary>Ensures StarSystem/SystemAddress/StarPos are present and consistent; false = drop.</summary>
