@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using EDNexus.Core.Journal;
 
@@ -160,7 +161,8 @@ public sealed class CommunityGoalTracker
     }
 
     private static DateTimeOffset? ReadTime(JsonElement item, string prop)
-        => GetString(item, prop) is { Length: > 0 } s && DateTimeOffset.TryParse(s, out var parsed) ? parsed : null;
+        => GetString(item, prop) is { Length: > 0 } s
+           && DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed) ? parsed : null;
 
     // --- Raw JsonElement helpers: CurrentGoals entries are nested elements, not top-level
     // JournalEntry payloads, so the JournalEntry accessors don't apply directly. ---

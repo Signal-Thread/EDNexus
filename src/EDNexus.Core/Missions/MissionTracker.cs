@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using EDNexus.Core.Journal;
 
@@ -251,5 +252,6 @@ public sealed class MissionTracker
     }
 
     private static DateTimeOffset? ReadTime(JournalEntry e, string prop)
-        => e.GetString(prop) is { Length: > 0 } s && DateTimeOffset.TryParse(s, out var parsed) ? parsed : null;
+        => e.GetString(prop) is { Length: > 0 } s
+           && DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed) ? parsed : null;
 }
