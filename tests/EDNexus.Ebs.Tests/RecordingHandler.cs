@@ -13,6 +13,9 @@ internal sealed class RecordingHandler : HttpMessageHandler
 
     public List<string> Bodies { get; } = new();
     public List<Uri?> Uris { get; } = new();
+
+    /// <summary>The <c>Client-Id</c> header of each request that carried one.</summary>
+    public List<string> ClientIds { get; } = new();
     public int CallCount => _count;
 
     public RecordingHandler(HttpStatusCode status = HttpStatusCode.OK, string body = "{}")
@@ -23,7 +26,12 @@ internal sealed class RecordingHandler : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
-        lock (Bodies) { Bodies.Add(body); Uris.Add(request.RequestUri); }
+        lock (Bodies)
+        {
+            Bodies.Add(body);
+            Uris.Add(request.RequestUri);
+            if (request.Headers.TryGetValues("Client-Id", out var clientId)) ClientIds.AddRange(clientId);
+        }
         var n = Interlocked.Increment(ref _count);
         var (status, respBody) = _responder(n);
         return new HttpResponseMessage(status) { Content = new StringContent(respBody) };

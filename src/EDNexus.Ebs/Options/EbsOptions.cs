@@ -19,11 +19,69 @@ public sealed class EbsOptions
     /// </summary>
     public int MaxStatePayloadBytes { get; set; } = 5000;
 
+    /// <summary>Twitch's hard ceiling on a PubSub message; <see cref="MaxStatePayloadBytes"/> may not exceed it.</summary>
+    public const int TwitchPubSubMaxMessageBytes = 5120;
+
+    /// <summary>
+    /// Largest request body, in bytes, that <c>/api/update-state</c> and the <c>/oauth/*</c> endpoints
+    /// read. A state update is at most <see cref="MaxStatePayloadBytes"/> plus a thin envelope, so
+    /// anything near this is not a real client — it is refused (<c>413</c>) before it is buffered.
+    /// </summary>
+    public int MaxRequestBodyBytes { get; set; } = 16 * 1024;
+
     /// <summary>Maximum number of state updates accepted per broadcaster channel per window.</summary>
     public int UpdateStateRateLimit { get; set; } = 1;
 
     /// <summary>The rate limit window, in seconds, applied to <see cref="UpdateStateRateLimit"/>.</summary>
     public int UpdateStateRateLimitWindowSeconds { get; set; } = 2;
+
+    /// <summary>
+    /// Per-IP limit on the <c>/oauth/*</c> endpoints (all four share one budget). A normal login is
+    /// three requests, so the default 30 per window is generous for a person and cheap for an attacker to exhaust.
+    /// </summary>
+    public int OAuthRateLimit { get; set; } = 30;
+
+    /// <summary>The window, in seconds, of <see cref="OAuthRateLimit"/>.</summary>
+    public int OAuthRateLimitWindowSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Per-client-IP limit on <c>GET /api/initial-state</c>, which every viewer's browser calls when
+    /// the extension loads. Keyed on the forwarded client address (see <see cref="TrustedProxyNetworks"/>),
+    /// so it is per viewer, not per proxy.
+    /// </summary>
+    public int InitialStateRateLimit { get; set; } = 60;
+
+    /// <summary>The window, in seconds, of <see cref="InitialStateRateLimit"/>.</summary>
+    public int InitialStateRateLimitWindowSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// <c>max-age</c> (seconds) of the public <c>Cache-Control</c> on a <c>200</c> from
+    /// <c>GET /api/initial-state</c>, so a CDN/proxy/browser can absorb a burst of viewers. Live updates
+    /// travel by PubSub, so a few seconds of staleness is invisible; it also bounds how long a card
+    /// the broadcaster just switched off can still be served from a cache. Zero disables caching.
+    /// </summary>
+    public int InitialStateCacheSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// Exact IP addresses of reverse proxies whose <c>X-Forwarded-For</c>/<c>X-Forwarded-Proto</c>
+    /// headers are trusted. When this and <see cref="TrustedProxyNetworks"/> are both empty the
+    /// defaults apply: loopback and the private ranges (10/8, 172.16/12, 192.168/16, fc00::/7), which
+    /// covers a proxy container on the same Docker network. Only one hop is trusted.
+    /// </summary>
+    public string[] TrustedProxies { get; set; } = [];
+
+    /// <summary>
+    /// CIDR ranges (e.g. <c>172.18.0.0/16</c>) of reverse proxies whose forwarded headers are trusted.
+    /// See <see cref="TrustedProxies"/> for the default when both are empty.
+    /// </summary>
+    public string[] TrustedProxyNetworks { get; set; } = [];
+
+    /// <summary>The ranges trusted as a proxy when neither <see cref="TrustedProxies"/> nor <see cref="TrustedProxyNetworks"/> is configured.</summary>
+    public static readonly string[] DefaultTrustedProxyNetworks =
+        ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"];
+
+    /// <summary>How often, in minutes, expired channel snapshots are deleted from the database.</summary>
+    public int ChannelStatePruneIntervalMinutes { get; set; } = 15;
 
     /// <summary>
     /// How long a pending OAuth session (between the desktop hitting <c>/oauth/authorize</c> and

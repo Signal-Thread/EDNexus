@@ -95,6 +95,7 @@ public sealed class RestartSurvivalTests : IDisposable
             {
                 ["Twitch:ExtensionSecret"] = "c3VwZXItc2VjcmV0LWV4dGVuc2lvbi1rZXktMTIzNA==",
                 ["Twitch:ClientId"] = "test-client-id",
+                ["Twitch:ClientSecret"] = "test-client-secret",
                 ["Twitch:ExtensionId"] = "test-extension-id",
                 ["Ebs:StorageProvider"] = "Sqlite",
                 ["Ebs:DataDirectory"] = dataDirectory,

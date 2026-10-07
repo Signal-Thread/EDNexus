@@ -45,4 +45,21 @@ public sealed class InMemoryChannelStateStore : IChannelStateStore
 
     /// <inheritdoc />
     public void Remove(string channelId) => _state.TryRemove(channelId, out _);
+
+    /// <inheritdoc />
+    public int PruneExpired()
+    {
+        if (_maxAge is not { } maxAge) return 0;
+
+        var removed = 0;
+        var now = _timeProvider.GetUtcNow();
+        foreach (var pair in _state)
+        {
+            if (now - pair.Value.UpdatedAt > maxAge
+                && _state.TryRemove(new KeyValuePair<string, (JsonElement, DateTimeOffset)>(pair.Key, pair.Value)))
+                removed++;
+        }
+
+        return removed;
+    }
 }

@@ -32,12 +32,22 @@ public sealed record PubSubBroadcastRequest
     /// 5 KiB (5120 byte) ceiling; callers should pass a value at or below that.
     /// </param>
     /// <exception cref="ArgumentException">Thrown when <paramref name="broadcasterId"/> is empty.</exception>
+    /// <exception cref="InvalidPubSubStateException">
+    /// Thrown when <paramref name="state"/> is missing (<see cref="JsonValueKind.Undefined"/>), <c>null</c>
+    /// or not a JSON object — the snapshot contract is an object, and an undefined element cannot be
+    /// serialized at all.
+    /// </exception>
     /// <exception cref="PubSubPayloadTooLargeException">
     /// Thrown when the serialized message exceeds <paramref name="maxMessageBytes"/>.
     /// </exception>
     public static PubSubBroadcastRequest Create(string broadcasterId, JsonElement state, int maxMessageBytes = 5000)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(broadcasterId);
+
+        if (state.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidPubSubStateException(state.ValueKind);
+        }
 
         var message = JsonSerializer.Serialize(state);
         var byteCount = Encoding.UTF8.GetByteCount(message);
@@ -52,6 +62,14 @@ public sealed record PubSubBroadcastRequest
             Message = message,
         };
     }
+}
+
+/// <summary>Thrown when a state payload is missing, <c>null</c> or not a JSON object.</summary>
+public sealed class InvalidPubSubStateException(JsonValueKind kind)
+    : Exception(kind is JsonValueKind.Undefined or JsonValueKind.Null
+        ? "The request must contain a \"state\" JSON object."
+        : $"\"state\" must be a JSON object, not {kind.ToString().ToLowerInvariant()}.")
+{
 }
 
 /// <summary>Thrown when a state payload would exceed Twitch's PubSub message size limit.</summary>

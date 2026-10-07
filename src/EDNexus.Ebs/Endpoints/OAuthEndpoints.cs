@@ -15,12 +15,28 @@ public static class OAuthEndpoints
 {
     public static IEndpointRouteBuilder MapOAuthEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/oauth/authorize", HandleAuthorizeAsync);
-        app.MapGet("/oauth/callback", HandleCallbackAsync);
-        app.MapPost("/oauth/token", HandleTokenAsync);
-        app.MapPost("/oauth/revoke", HandleRevokeAsync);
+        // One per-IP budget across all four (the "oauth" policy): they are unauthenticated, and
+        // /authorize and /token each allocate server-side state.
+        app.MapGet("/oauth/authorize", HandleAuthorizeAsync).RequireRateLimiting(RateLimitPolicy);
+        app.MapGet("/oauth/callback", HandleCallbackAsync).RequireRateLimiting(RateLimitPolicy);
+        app.MapPost("/oauth/token", HandleTokenAsync).RequireRateLimiting(RateLimitPolicy);
+        app.MapPost("/oauth/revoke", HandleRevokeAsync).RequireRateLimiting(RateLimitPolicy);
         return app;
     }
+
+    /// <summary>Name of the rate-limit policy shared by every <c>/oauth/*</c> route.</summary>
+    public const string RateLimitPolicy = "oauth";
+
+    // A real redirect_uri is a loopback address with a port and a short path; state is a random
+    // token; a PKCE S256 challenge is always exactly 43 base64url characters. Anything bigger is not
+    // a client of ours and would only be bytes held in memory for the session's lifetime.
+    private const int MaxRedirectUriLength = 512;
+    private const int MaxStateLength = 512;
+    private const int CodeChallengeLength = 43;
+    private const int MaxTokenFieldLength = 512;
+
+    private static bool IsBase64UrlChallenge(string value) =>
+        value.Length == CodeChallengeLength && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
     /// <summary>
     /// Step 1: the desktop app opens the commander's browser here. Records the desktop's own
@@ -41,8 +57,14 @@ public static class OAuthEndpoints
         if (string.IsNullOrWhiteSpace(redirectUri) || string.IsNullOrWhiteSpace(state) || string.IsNullOrWhiteSpace(codeChallenge))
             return Results.Problem("redirect_uri, state, and code_challenge are all required.", statusCode: StatusCodes.Status400BadRequest);
 
+        if (redirectUri.Length > MaxRedirectUriLength || state.Length > MaxStateLength)
+            return Results.Problem("redirect_uri or state is too long.", statusCode: StatusCodes.Status400BadRequest);
+
         if (!string.IsNullOrEmpty(codeChallengeMethod) && !string.Equals(codeChallengeMethod, "S256", StringComparison.Ordinal))
             return Results.Problem("Only the S256 code_challenge_method is supported.", statusCode: StatusCodes.Status400BadRequest);
+
+        if (!IsBase64UrlChallenge(codeChallenge))
+            return Results.Problem("code_challenge must be a 43-character base64url S256 challenge.", statusCode: StatusCodes.Status400BadRequest);
 
         if (!TryParseLoopbackRedirect(redirectUri, out _))
             return Results.Problem("redirect_uri must be an http loopback (localhost/127.0.0.1/[::1]) address.", statusCode: StatusCodes.Status400BadRequest);
@@ -78,6 +100,7 @@ public static class OAuthEndpoints
         ITwitchOAuthClient twitchClient,
         IOptions<TwitchEbsOptions> twitchOptions,
         IOptions<EbsOptions> ebsOptions,
+        TimeProvider timeProvider,
         ILogger<Program> logger,
         CancellationToken ct)
     {
@@ -109,7 +132,7 @@ public static class OAuthEndpoints
                 return Results.Redirect(BuildDesktopRedirect(desktopRedirectUri, session.DesktopState, error: "server_error", errorDescription: "Could not retrieve the Twitch user profile."));
 
             var username = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Login : user.DisplayName;
-            var twitchExpiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(twitchToken.ExpiresIn);
+            var twitchExpiresAtUtc = timeProvider.GetUtcNow().AddSeconds(twitchToken.ExpiresIn);
 
             var pending = new PendingBroadcasterAuth(
                 user.Id,
@@ -140,6 +163,9 @@ public static class OAuthEndpoints
         if (string.IsNullOrWhiteSpace(body.Code) || string.IsNullOrWhiteSpace(body.CodeVerifier) || string.IsNullOrWhiteSpace(body.RedirectUri))
             return Results.Problem("code, code_verifier, and redirect_uri are all required.", statusCode: StatusCodes.Status400BadRequest);
 
+        if (body.Code.Length > MaxTokenFieldLength || body.CodeVerifier.Length > MaxTokenFieldLength || body.RedirectUri.Length > MaxRedirectUriLength)
+            return Results.Problem("code, code_verifier, or redirect_uri is too long.", statusCode: StatusCodes.Status400BadRequest);
+
         if (!store.TryConsumeAuthorizationCode(body.Code, out var pending))
             return Results.Problem("invalid_grant: the authorization code is unknown, expired, or already used.", statusCode: StatusCodes.Status400BadRequest);
 
@@ -166,6 +192,7 @@ public static class OAuthEndpoints
         ITwitchOAuthClient twitchClient,
         IChannelStateStore stateStore,
         ITwitchPubSubClient pubSubClient,
+        ChannelLocks channelLocks,
         CancellationToken ct)
     {
         var header = request.Headers.Authorization.ToString();
@@ -175,14 +202,25 @@ public static class OAuthEndpoints
         var token = header["Bearer ".Length..].Trim();
         if (store.TryGetByToken(token, out var record))
         {
-            // Clear before revoking: if the clear throws, the token still works and the client can
-            // retry. Revoking first would leave no credential able to clear that channel. A failed
-            // offline broadcast does not hold the revoke back: the snapshot is already gone, and
-            // leaving a signed-out credential valid through a PubSub outage is the worse outcome.
-            _ = await ChannelStateClearing.ClearAsync(record.ChannelId, stateStore, pubSubClient, ct).ConfigureAwait(false);
+            // Under the channel lock, so an update-state that already passed authentication cannot
+            // store its snapshot after this clear and leave a public card with no credential able to
+            // remove it (it re-checks its token once it holds the lock, and finds this one revoked).
+            using (await channelLocks.AcquireAsync(record.ChannelId, ct).ConfigureAwait(false))
+            {
+                // Clear before revoking: if the clear throws, the token still works and the client can
+                // retry. Revoking first would leave no credential able to clear that channel. A failed
+                // offline broadcast does not hold the revoke back: the snapshot is already gone, and
+                // leaving a signed-out credential valid through a PubSub outage is the worse outcome.
+                _ = await ChannelStateClearing.ClearAsync(record.ChannelId, stateStore, pubSubClient, ct).ConfigureAwait(false);
+                store.Revoke(token);
+            }
+
+            // Best-effort and outside the lock: the EBS credential is already dead, and this is a
+            // network call to Twitch. Twitch documents the endpoint as taking the access token; it does
+            // not describe the refresh token being revoked with it, and the refresh token is not
+            // revoked separately here — it is deleted with the record and expires on Twitch's own schedule.
             try { await twitchClient.RevokeTokenAsync(record.TwitchAccessToken, ct).ConfigureAwait(false); }
             catch { /* best-effort */ }
-            store.Revoke(token);
         }
 
         return Results.Ok();

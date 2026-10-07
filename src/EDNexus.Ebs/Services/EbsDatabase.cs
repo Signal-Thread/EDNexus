@@ -14,7 +14,7 @@ public sealed class EbsDatabase
     public const string FileName = "ebs.db";
 
     /// <summary>Schema version stamped into <c>PRAGMA user_version</c>. Bump it and add a migration step when the schema changes.</summary>
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     private readonly string _connectionString;
 
@@ -103,6 +103,14 @@ public sealed class EbsDatabase
                     updated_at TEXT NOT NULL
                 );
                 """;
+            command.ExecuteNonQuery();
+        }
+
+        if (version < 2)
+        {
+            // The periodic prune (SqliteChannelStateStore.PruneExpired) deletes by age; without an
+            // index that is a full-table scan under the writer lock.
+            command.CommandText = "CREATE INDEX IF NOT EXISTS ix_channel_state_updated_at ON channel_state (updated_at);";
             command.ExecuteNonQuery();
         }
 

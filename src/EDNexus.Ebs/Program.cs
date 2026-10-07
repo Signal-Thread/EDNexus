@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using System.Threading.RateLimiting;
 using EDNexus.Ebs.Endpoints;
@@ -8,6 +9,8 @@ using EDNexus.Ebs.Services;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.DataProtection.Repositories;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
@@ -16,28 +19,48 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services
     .AddOptions<TwitchEbsOptions>()
     .Bind(builder.Configuration.GetSection(TwitchEbsOptions.SectionName))
-    // Fail fast at startup rather than throwing a raw FormatException from inside a request handler
-    // (TwitchExtensionJwtService.CreateExternalServiceToken) the first time a state update comes in.
-    .Validate(
-        o => !string.IsNullOrWhiteSpace(o.ExtensionSecret) && IsValidBase64(o.ExtensionSecret),
-        "Twitch:ExtensionSecret must be set to a non-empty, valid base64 string.")
+    // Fail fast at startup (ids/secrets present, a decodable Extension Secret, an https redirect URI)
+    // rather than throwing a raw FormatException from inside a request handler the first time a state
+    // update comes in, or sending viewers to a Twitch error page. See TwitchEbsOptionsValidator.
     .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<TwitchEbsOptions>, TwitchEbsOptionsValidator>();
 builder.Services
     .AddOptions<EbsOptions>()
     .Bind(builder.Configuration.GetSection(EbsOptions.SectionName))
-    // The desktop app refreshes an unchanged live card on a fixed schedule; a shorter limit would
-    // take live cards down between refreshes. Refuse to start rather than fail silently for viewers.
-    .Validate(
-        o => o.ChannelStateMaxAgeHours <= 0 || o.ChannelStateMaxAgeHours >= EbsOptions.MinChannelStateMaxAgeHours,
-        $"Ebs:ChannelStateMaxAgeHours must be 0 (no limit) or at least {EbsOptions.MinChannelStateMaxAgeHours}: "
-        + "the desktop app refreshes an unchanged card every 6 hours.")
+    // Includes the snapshot-age floor: the desktop app refreshes an unchanged live card on a fixed
+    // schedule, so a shorter limit would take live cards down between refreshes. See EbsOptionsValidator.
     .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<EbsOptions>, EbsOptionsValidator>();
+
+// Behind the documented reverse proxy the TCP peer is the proxy, so without this every viewer would
+// share one rate-limit bucket (and the client address in any log would be the proxy's). The proxy's
+// X-Forwarded-For is trusted ONLY when the peer is a configured proxy, and for one hop. Resolved
+// through IOptions so test/host overrides are honoured.
+builder.Services
+    .AddOptions<ForwardedHeadersOptions>()
+    .Configure<IOptions<EbsOptions>>((forwarded, ebsOptions) =>
+    {
+        var ebs = ebsOptions.Value;
+        forwarded.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        forwarded.ForwardLimit = 1;
+
+        // ASP.NET trusts loopback by default; replace that with the explicit list (or the defaults).
+        forwarded.KnownProxies.Clear();
+        forwarded.KnownIPNetworks.Clear();
+        foreach (var proxy in ebs.TrustedProxies)
+            if (IPAddress.TryParse(proxy, out var address)) forwarded.KnownProxies.Add(address);
+
+        var networks = ebs.TrustedProxyNetworks;
+        if (networks.Length == 0 && ebs.TrustedProxies.Length == 0)
+            networks = EbsOptions.DefaultTrustedProxyNetworks;
+        foreach (var network in networks)
+            if (System.Net.IPNetwork.TryParse(network, out var parsed)) forwarded.KnownIPNetworks.Add(parsed);
+    });
 
 builder.Services.AddSingleton(TimeProvider.System);
-// Still needed by TwitchPubSubClient to sign the EBS's own OUTBOUND JWT for the Helix PubSub call —
-// Validate() (inbound JWT verification) is no longer used now that /api/update-state authenticates
-// via the EBS-issued long-lived broadcaster token (IBroadcasterTokenStore) instead of a Twitch
-// Extension JWT.
+builder.Services.AddSingleton<ChannelLocks>();
+// Signs the EBS's own OUTBOUND JWT for the Helix PubSub call. /api/update-state authenticates via the
+// EBS-issued long-lived broadcaster token (IBroadcasterTokenStore); no inbound Twitch JWT is accepted.
 builder.Services.AddSingleton<ITwitchExtensionJwtService, TwitchExtensionJwtService>();
 
 // Durable state (see EbsOptions.StorageProvider): broadcaster tokens + Twitch grants and each
@@ -92,8 +115,13 @@ builder.Services.AddHttpClient<ITwitchPubSubClient, TwitchPubSubClient>(client =
     // long a single misbehaving/slow call can hold resources.
     client.Timeout = TimeSpan.FromSeconds(10);
 });
-builder.Services.AddHttpClient<ITwitchOAuthClient, TwitchOAuthClient>();
+builder.Services.AddHttpClient<ITwitchOAuthClient, TwitchOAuthClient>(client =>
+{
+    // Same reasoning as above, and a login/refresh waits on this: fail in seconds, not the 100s default.
+    client.Timeout = TimeSpan.FromSeconds(15);
+});
 builder.Services.AddHostedService<TwitchTokenRefreshBackgroundService>();
+builder.Services.AddHostedService<ChannelStatePruneBackgroundService>();
 
 // CORS: only the extension's own Twitch-hosted iframe (https://*.ext-twitch.tv) — plus, for local
 // development, the Twitch Developer Rig or any origin explicitly listed in Ebs:AdditionalAllowedFrontendOrigins
@@ -106,7 +134,10 @@ builder.Services.AddCors(options =>
     options.AddPolicy("extension-frontend", policy => policy
         .SetIsOriginAllowed(origin => IsAllowedFrontendOrigin(origin, additionalFrontendOrigins))
         .WithMethods("GET")
-        .AllowAnyHeader());
+        .AllowAnyHeader()
+        // A browser hides every response header outside the CORS-safelisted set from the extension's
+        // script unless it is exposed; the frontend honours Retry-After on a 429 from initial-state.
+        .WithExposedHeaders("Retry-After"));
 });
 
 // Rate limiting: throttle state updates and initial-state reads per broadcaster channel, so a
@@ -123,6 +154,8 @@ builder.Services.AddRateLimiter(options =>
     {
         if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
             context.HttpContext.Response.Headers.RetryAfter = ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        // A throttled answer must never be replayed from a shared cache to someone who is not throttled.
+        context.HttpContext.Response.Headers.CacheControl = "no-store";
         return ValueTask.CompletedTask;
     };
 
@@ -156,13 +189,29 @@ builder.Services.AddRateLimiter(options =>
         });
     });
 
+    // Per client address — the forwarded one, since UseForwardedHeaders runs first — so each viewer
+    // gets their own budget instead of every viewer sharing the proxy's.
     options.AddPolicy("initial-state", httpContext =>
     {
+        var ebsOptions = httpContext.RequestServices.GetRequiredService<IOptions<EbsOptions>>().Value;
         var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ => new FixedWindowRateLimiterOptions
         {
-            PermitLimit = 20,
-            Window = TimeSpan.FromSeconds(10),
+            PermitLimit = Math.Max(1, ebsOptions.InitialStateRateLimit),
+            Window = TimeSpan.FromSeconds(Math.Max(1, ebsOptions.InitialStateRateLimitWindowSeconds)),
+            QueueLimit = 0,
+        });
+    });
+
+    // The four unauthenticated /oauth/* routes share one per-IP budget.
+    options.AddPolicy(OAuthEndpoints.RateLimitPolicy, httpContext =>
+    {
+        var ebsOptions = httpContext.RequestServices.GetRequiredService<IOptions<EbsOptions>>().Value;
+        var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = Math.Max(1, ebsOptions.OAuthRateLimit),
+            Window = TimeSpan.FromSeconds(Math.Max(1, ebsOptions.OAuthRateLimitWindowSeconds)),
             QueueLimit = 0,
         });
     });
@@ -184,6 +233,35 @@ var app = builder.Build();
 // Ebs:DataDirectory or an unreadable/too-new database fails the deploy instead of the first request.
 app.Services.GetRequiredService<IBroadcasterTokenStore>();
 app.Services.GetRequiredService<IChannelStateStore>();
+
+// First, so every later middleware (and the rate limiter's partition key) sees the real client address.
+app.UseForwardedHeaders();
+
+// Cap the request body before anything reads it. Kestrel enforces the limit as the body streams (so a
+// chunked upload is cut off too); the Content-Length check refuses an honest oversized request without
+// reading a byte, and is what a TestServer host (no Kestrel feature) relies on.
+app.Use(async (context, next) =>
+{
+    if ((HttpMethods.IsPost(context.Request.Method) || HttpMethods.IsDelete(context.Request.Method))
+        && (context.Request.Path.StartsWithSegments("/api/update-state") || context.Request.Path.StartsWithSegments("/oauth")))
+    {
+        var limit = context.RequestServices.GetRequiredService<IOptions<EbsOptions>>().Value.MaxRequestBodyBytes;
+        if (context.Request.ContentLength > limit)
+        {
+            await Results.Problem(
+                    $"The request body exceeds the {limit} byte limit.",
+                    statusCode: StatusCodes.Status413PayloadTooLarge)
+                .ExecuteAsync(context).ConfigureAwait(false);
+            return;
+        }
+
+        var bodyLimit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (bodyLimit is { IsReadOnly: false })
+            bodyLimit.MaxRequestBodySize = limit;
+    }
+
+    await next().ConfigureAwait(false);
+});
 
 app.UseCors("extension-frontend");
 
@@ -229,6 +307,8 @@ app.MapPost("/api/update-state", async (
         UpdateStateRequest body,
         IChannelStateStore stateStore,
         ITwitchPubSubClient pubSubClient,
+        IBroadcasterTokenStore tokenStore,
+        ChannelLocks channelLocks,
         IOptions<EbsOptions> ebsOptions,
         ILogger<Program> logger,
         CancellationToken cancellationToken) =>
@@ -247,14 +327,36 @@ app.MapPost("/api/update-state", async (
         {
             pubSubRequest = PubSubBroadcastRequest.Create(channelId, body.State, ebsOptions.Value.MaxStatePayloadBytes);
         }
+        catch (InvalidPubSubStateException ex)
+        {
+            // A missing/null/non-object "state" — a client error, not the 500 an undefined JsonElement used to cause.
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+        }
         catch (PubSubPayloadTooLargeException ex)
         {
             return Results.Problem(ex.Message, statusCode: StatusCodes.Status413PayloadTooLarge);
         }
 
-        stateStore.Set(channelId, body.State);
+        // What was size-checked is the compact serialisation, so that is what is stored and broadcast —
+        // not the request's original whitespace, which the limit never saw.
+        using var compactState = JsonDocument.Parse(pubSubRequest.Message);
 
-        var published = await pubSubClient.BroadcastAsync(channelId, body.State, cancellationToken).ConfigureAwait(false);
+        bool published;
+        using (await channelLocks.AcquireAsync(channelId, cancellationToken).ConfigureAwait(false))
+        {
+            // Authenticated again now that this channel is ours alone: a sign-out (POST /oauth/revoke) that
+            // finished while this request waited has revoked the token, and storing the snapshot after that
+            // clear would leave a public card with no credential able to take it down.
+            if (!TryAuthenticateBroadcaster(httpRequest, tokenStore, requireValidTwitchGrant: true, out var stillAuthorizedChannel, out var failure)
+                || stillAuthorizedChannel != channelId)
+            {
+                return failure ?? Results.Unauthorized();
+            }
+
+            stateStore.Set(channelId, compactState.RootElement);
+            published = await pubSubClient.BroadcastAsync(channelId, compactState.RootElement, cancellationToken).ConfigureAwait(false);
+        }
+
         if (!published)
         {
             logger.LogWarning("Failed to publish state update for channel {ChannelId} to Twitch PubSub.", channelId);
@@ -276,6 +378,8 @@ app.MapDelete("/api/update-state", async (
         HttpRequest httpRequest,
         IChannelStateStore stateStore,
         ITwitchPubSubClient pubSubClient,
+        IBroadcasterTokenStore tokenStore,
+        ChannelLocks channelLocks,
         CancellationToken cancellationToken) =>
     {
         if (httpRequest.HttpContext.Items["ChannelId"] is not string channelId)
@@ -283,9 +387,23 @@ app.MapDelete("/api/update-state", async (
             return (IResult?)httpRequest.HttpContext.Items["BroadcasterAuthFailure"] ?? Results.Unauthorized();
         }
 
+        bool viewersTold;
+        using (await channelLocks.AcquireAsync(channelId, cancellationToken).ConfigureAwait(false))
+        {
+            // Still the channel's live credential? A token revoked while this waited must not clear
+            // a card the broadcaster has since published again under a new sign-in.
+            if (!TryAuthenticateBroadcaster(httpRequest, tokenStore, requireValidTwitchGrant: false, out var stillAuthorizedChannel, out var failure)
+                || stillAuthorizedChannel != channelId)
+            {
+                return failure ?? Results.Unauthorized();
+            }
+
+            viewersTold = await ChannelStateClearing.ClearAsync(channelId, stateStore, pubSubClient, cancellationToken).ConfigureAwait(false);
+        }
+
         // A 502, like the POST's, when viewers already watching were not told: the snapshot is gone
         // either way, and a retry is harmless, so the client tries again rather than leave them the card.
-        if (!await ChannelStateClearing.ClearAsync(channelId, stateStore, pubSubClient, cancellationToken).ConfigureAwait(false))
+        if (!viewersTold)
         {
             httpRequest.HttpContext.Response.Headers[ChannelStateClearing.SnapshotRemovedHeader] = "true";
             return Results.Problem(
@@ -297,11 +415,20 @@ app.MapDelete("/api/update-state", async (
     })
     .RequireRateLimiting("clear-state");
 
-app.MapGet("/api/initial-state/{channelId}", (string channelId, IChannelStateStore stateStore) =>
+app.MapGet("/api/initial-state/{channelId}", (HttpContext httpContext, string channelId, IChannelStateStore stateStore, IOptions<EbsOptions> ebsOptions) =>
     {
         if (!stateStore.TryGet(channelId, out var state))
         {
             return Results.NotFound(new { message = "No state has been published for this channel yet." });
+        }
+
+        // Lets a CDN/proxy/browser absorb a burst of viewers; live changes arrive by PubSub, so a few
+        // seconds of staleness is invisible. The CORS middleware adds Vary: Origin, so a shared cache
+        // keeps one copy per allowed origin instead of replaying one origin's Access-Control-Allow-Origin.
+        var cacheSeconds = ebsOptions.Value.InitialStateCacheSeconds;
+        if (cacheSeconds > 0)
+        {
+            httpContext.Response.Headers.CacheControl = $"public, max-age={cacheSeconds}";
         }
 
         return Results.Ok(state);
@@ -310,19 +437,6 @@ app.MapGet("/api/initial-state/{channelId}", (string channelId, IChannelStateSto
     .RequireCors("extension-frontend");
 
 app.Run();
-
-static bool IsValidBase64(string value)
-{
-    try
-    {
-        Convert.FromBase64String(value);
-        return true;
-    }
-    catch (FormatException)
-    {
-        return false;
-    }
-}
 
 static bool IsAllowedFrontendOrigin(string origin, HashSet<string> additionalOrigins)
 {

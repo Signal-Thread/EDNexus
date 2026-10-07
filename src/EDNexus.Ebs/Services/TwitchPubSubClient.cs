@@ -36,6 +36,10 @@ public sealed class TwitchPubSubClient : ITwitchPubSubClient
         _logger = logger;
     }
 
+    /// <summary>The <c>Client-Id</c> sent to Helix PubSub: the extension's id, else the application's.</summary>
+    internal static string ClientIdHeader(TwitchEbsOptions options) =>
+        string.IsNullOrWhiteSpace(options.ExtensionId) ? options.ClientId : options.ExtensionId;
+
     /// <inheritdoc />
     public async Task<bool> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken)
     {
@@ -47,7 +51,10 @@ public sealed class TwitchPubSubClient : ITwitchPubSubClient
             Content = JsonContent.Create(request),
         };
         httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        httpRequest.Headers.Add("Client-Id", _twitchOptions.ClientId);
+        // Twitch ties this call to the EXTENSION (the JWT is signed with its secret), so the header is
+        // the extension's Client ID. The OAuth application's ClientId is the fallback for a
+        // deployment that never set ExtensionId, which in practice is the same value.
+        httpRequest.Headers.Add("Client-Id", ClientIdHeader(_twitchOptions));
 
         using var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
