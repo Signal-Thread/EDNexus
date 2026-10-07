@@ -1,14 +1,21 @@
 /*
  * Shared identity tokens for both surfaces of the Twitch extension (the video overlay card and the
- * broadcaster config page). Reconciled with src/EDNexus.App/Themes/Theme.axaml so the desktop app
- * and the extension read as the same product instead of two independently re-picked palettes.
+ * broadcaster config page). Reconciled with src/EDNexus.App/Themes/Theme.axaml and the EDNexus design
+ * system so the desktop app and the extension read as the same product instead of two independently
+ * re-picked palettes.
  *
- * Surface-specific tokens (background, raised surface, line, radius, panel sizing) stay local to
- * card.css / config.css — the overlay is a translucent panel over video, the config page is an
- * opaque dashboard surface, and that difference is real, not drift.
+ * Every colour the extension uses is declared here (AGENTS.md rule 8): card.css and config.css only
+ * reference these with var(). The surface tokens are split by surface because the overlay is a
+ * translucent panel over video while the config page is an opaque dashboard surface — that difference
+ * is real, not drift — but they still live in one file so a colour is never picked ad hoc.
+ *
+ * The type scale follows the design system's Label (12px) and Body (13px) steps. Its 10px "micro" step
+ * is deliberately not used here: a stream is watched at a distance and over moving video, and 10px
+ * uppercase text did not hold up for contrast or legibility in the overlay.
  */
 
 :root {
+  /* Brand + status — same values as Theme.axaml (Amber/AmberDim/OnBrand/Ink/Good/Bad/Warning). */
   --ednx-orange: #f07100;
   --ednx-orange-dim: #b85200;
   --ednx-on-brand: #101216;
@@ -18,6 +25,23 @@
   --ednx-good: #5fd08b;
   --ednx-bad: #e0654f;
   --ednx-warning: #e0a33c;
+
+  /* Overlay surface: translucent, over live video. */
+  --ednx-overlay-bg: rgba(10, 11, 13, 0.92);
+  --ednx-overlay-raised: rgba(255, 255, 255, 0.05);
+  --ednx-overlay-line: rgba(255, 255, 255, 0.1);
+  --ednx-overlay-shadow: rgba(0, 0, 0, 0.5);
+
+  /* Config page surface: opaque, inside the Twitch dashboard (dark). */
+  --ednx-page-bg: #0e0f12;
+  --ednx-page-raised: rgba(255, 255, 255, 0.04);
+  --ednx-page-line: rgba(255, 255, 255, 0.12);
+  --ednx-page-code-bg: rgba(255, 255, 255, 0.08);
+  --ednx-page-field-bg: rgba(0, 0, 0, 0.35);
+
+  /* Type families and scale. */
   --ednx-font: "Inter", "Segoe UI", Roboto, system-ui, -apple-system, sans-serif;
   --ednx-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --ednx-text-label: 12px;
+  --ednx-text-body: 13px;
 }

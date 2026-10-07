@@ -7,48 +7,86 @@
   <link rel="stylesheet" href="css/config.css">
 </head>
 <!--
-  Broadcaster configuration page. Deliberately minimal: *what* viewers see is chosen in the EDNexus
-  desktop app (Settings → Twitch), because that is where the data originates and where a section
-  left switched off is never published in the first place. The only thing that belongs here is which
-  EBS this channel's extension should read from.
+  Broadcaster configuration page. There is nothing to configure here: *what* viewers see is chosen in
+  the EDNexus desktop app (Settings → Twitch), because that is where the data originates and where a
+  section left switched off is never published in the first place. So this page is setup guidance.
+
+  The one form below is a development aid. It is revealed by js/config.js only when this page is
+  served from localhost (the local dev server), so it can point a local test at a local EBS. On
+  Twitch's hosted bundle it never appears, and the viewer side ignores any stored value there.
 -->
 <body>
   <main class="wrap">
     <h1>EDNexus commander card</h1>
     <p class="lede">
       Shows your live Elite Dangerous session to viewers as a card they can pull out over the stream
-      and hide again.
+      and hide again. It is fed by the EDNexus desktop app running on the PC you play on, so there is
+      nothing to set up on this page.
     </p>
 
     <section class="panel">
-      <h2>Backend service</h2>
+      <h2>Get it showing</h2>
+      <ol class="steps">
+        <li>
+          Install and start <strong>EDNexus</strong> on the PC where you play Elite Dangerous.
+        </li>
+        <li>
+          In EDNexus open <strong>Settings → Twitch</strong> and choose <strong>Sign in with Twitch</strong>.
+          Your browser opens Twitch's own sign-in page; EDNexus never sees your Twitch password.
+        </li>
+        <li>
+          Tick <strong>Show my session to viewers</strong>, then pick which sections to share below it.
+        </li>
+        <li>
+          Activate this extension on your channel (Twitch dashboard → Extensions → My Extensions), as a
+          <strong>video overlay</strong>.
+        </li>
+      </ol>
       <p class="hint">
-        Leave this alone unless you run your own EBS. It must match the <code>EbsBaseUrl</code> set in
-        the desktop app under Settings → Twitch.
+        Viewers see a small tab on the left of your stream while you are playing, and nothing at all
+        otherwise. The card is cleared when you switch it off, sign out, or close EDNexus.
       </p>
-      <label class="field">
-        <span class="field__label">EBS base URL</span>
-        <input type="url" id="ebs" name="ebs" placeholder="https://ednexus.signal-and-thread.com" spellcheck="false">
-      </label>
-      <div class="actions">
-        <button type="button" id="save" class="button">Save</button>
-        <span class="status" id="status" role="status"></span>
-      </div>
     </section>
 
     <section class="panel">
       <h2>What viewers see</h2>
       <p class="hint">
         Choose this in the desktop app: <strong>Settings → Twitch → Stream card</strong>. Each section
-        — commander, credits, ship, location, fleet carrier, exobiology, mining, missions, cargo — is
-        opt-in, and anything switched off is never sent off your machine at all.
+        — commander, credits, ship, location, fleet carrier, exobiology, mining, missions, cargo — has
+        its own switch, and anything switched off is never sent off your machine at all. Your credit
+        balance is off until you turn it on; the other sections start on.
+      </p>
+      <p class="hint">
+        The card is public: anyone who knows your channel can read what it currently shows, in real
+        time. If you do not want your location visible to stream snipers, switch off
+        <strong>System, body &amp; station</strong> — and note that a fleet carrier's name and callsign are
+        a separate section, so switch off <strong>Fleet carrier &amp; booked jumps</strong> as well.
       </p>
     </section>
+
+    <!-- Development only; see the comment at the top of this file. -->
+    <form class="panel" id="dev-form" hidden>
+      <h2>Development: local EBS</h2>
+      <p class="hint">
+        Visible only when this page is served from localhost. Points a local test at a local EBS
+        (<code>http://localhost:8787</code> or <code>https://localhost:8787</code>); it is ignored
+        everywhere else.
+      </p>
+      <label class="field">
+        <span class="field__label">Local EBS base URL</span>
+        <input type="url" id="ebs" name="ebs" placeholder="https://localhost:8787" spellcheck="false" autocomplete="off">
+      </label>
+      <div class="actions">
+        <button type="submit" id="save" class="button">Save</button>
+        <span class="status" id="status" role="status" aria-live="polite"></span>
+      </div>
+    </form>
   </main>
 
   <!-- Twitch's extension helper. Must load before our own scripts: it defines window.Twitch.ext,
        which carries auth, the configuration service and the PubSub subscription. -->
   <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
+  <script src="js/state.js"></script>
   <script src="js/config.js"></script>
 </body>
 </html>

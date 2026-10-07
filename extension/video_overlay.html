@@ -10,9 +10,17 @@
   The overlay iframe covers the whole player, so the body itself must never intercept clicks —
   only the handle and the open panel do (see .ednx-root in card.css). Everything starts collapsed
   so a viewer who never opens the card sees nothing but a small tab.
+
+  The root starts `hidden`: js/card.js reveals it only once there is something to say (a live
+  card, or a connection problem worth flagging), so a channel that has the extension installed but
+  whose broadcaster is not running EDNexus shows nothing at all.
 -->
 <body class="ednx-body">
-  <div class="ednx-root" id="root" data-open="false" data-state="waiting">
+  <div class="ednx-root" id="root" data-open="false" data-state="waiting" data-stale="false" hidden>
+
+    <!-- Announces connection and staleness changes to assistive tech, including while the panel is
+         collapsed (when everything inside it is hidden from them). Written by js/card.js. -->
+    <p class="ednx-sr" id="live" role="status" aria-live="polite"></p>
 
     <!-- Collapsed state: the only thing on screen until a viewer asks for more. -->
     <button type="button" class="ednx-handle" id="handle" aria-expanded="false" aria-controls="panel">
@@ -52,11 +60,11 @@
 
       <!-- Sections are written by js/card.js; each one removes itself when the broadcaster
            has hidden it or the game has not reported anything for it yet. -->
-      <div class="ednx-sections" id="sections"></div>
+      <div class="ednx-sections" id="sections" tabindex="0" role="region" aria-label="Commander details"></div>
 
       <footer class="ednx-panel__foot">
-        <span class="ednx-stale" id="stale" hidden>Waiting for an update…</span>
-        <a class="ednx-brand" href="https://github.com/Signal-Thread-LLC/EDNexus" target="_blank" rel="noopener noreferrer">EDNexus</a>
+        <span class="ednx-stale" id="stale"></span>
+        <span class="ednx-brand">EDNexus</span>
       </footer>
     </section>
   </div>
