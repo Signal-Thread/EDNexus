@@ -15,6 +15,13 @@ namespace EDNexus.Core.Twitch;
 /// publishes the newest snapshot per <see cref="MinInterval"/>. A <c>401</c> stops publishing and
 /// raises <see cref="ReauthRequired"/> — a revoked grant never recovers by retrying — and resumes
 /// once a different token appears.
+/// <para>
+/// The card is a live picture, not a record: while the game runs an unchanged card is republished
+/// every <see cref="DefaultRefreshInterval"/> as a heartbeat (the viewer-side extension treats a card
+/// that has gone quiet for longer as stale), and it is taken off the air when the game exits
+/// (<see cref="GameExited"/>) and when the app does (<see cref="TakeOffAirForExit"/>) — a stale
+/// "Docked at X" must not stay public after the commander has stopped playing.
+/// </para>
 /// </remarks>
 public sealed class TwitchStreamCardService : IDisposable
 {
@@ -32,13 +39,14 @@ public sealed class TwitchStreamCardService : IDisposable
     public const int MaxPublishRetries = 5;
 
     /// <summary>
-    /// How often an unchanged card is republished while it is on the air. The EBS stops serving a
-    /// snapshot it has not heard about for a day (<c>Ebs:ChannelStateMaxAgeHours</c>), so without this
-    /// a card that simply has not changed would vanish for new viewers. The EBS refuses to start with
-    /// a limit under two of these periods (<c>EbsOptions.MinChannelStateMaxAgeHours</c>); change both
-    /// together.
+    /// How often an unchanged card is republished while the game is running and the card is on the
+    /// air — a heartbeat that keeps the snapshot's <c>at</c> timestamp fresh. The viewer-side
+    /// extension treats a card as stale after 25 minutes without one, so a card that simply has not
+    /// changed (docked and idle) stays live, while one whose publisher has gone away fades out on its
+    /// own. The EBS also stops serving a snapshot it has not heard about for
+    /// <c>Ebs:ChannelStateMaxAgeHours</c>; this period is far inside any sensible value of that.
     /// </summary>
-    public static readonly TimeSpan DefaultRefreshInterval = TimeSpan.FromHours(6);
+    public static readonly TimeSpan DefaultRefreshInterval = TimeSpan.FromMinutes(10);
 
     /// <summary>Longest <c>Retry-After</c> honoured. The EBS's own windows are a minute at most.</summary>
     public static readonly TimeSpan MaxRetryAfter = TimeSpan.FromMinutes(2);
@@ -79,6 +87,7 @@ public sealed class TwitchStreamCardService : IDisposable
     private readonly Func<StreamCardVisibility> _visibility;
     private readonly Func<bool> _isSuppressed;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly EbsCleanupQueue? _cleanup;
     private readonly TimeSpan _minInterval;
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _dirty = new(0, 1);
@@ -95,6 +104,12 @@ public sealed class TwitchStreamCardService : IDisposable
     private string? _rejectedToken;
     /// <summary>1 once disposed. Read from journal threads and the pump, so never a plain field.</summary>
     private int _disposed;
+    /// <summary>1 once the host has asked for a first publish; until then state changes (a journal replay) publish nothing.</summary>
+    private int _armed;
+    /// <summary>0 after a <c>Shutdown</c> journal event until the game starts again. Starts at 1: no event means no evidence of an exit.</summary>
+    private int _gameRunning = 1;
+    /// <summary>True once the card has been taken off the air for the current closed-game period, so it is not cleared again on every wake.</summary>
+    private bool _closedCleared;
 
     private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
@@ -121,7 +136,9 @@ public sealed class TwitchStreamCardService : IDisposable
     /// The endpoint, token and visibility are callbacks rather than values so signing in, switching
     /// the card off or repointing the EBS takes effect without rebuilding the service; a blank token
     /// simply leaves the pump idle. <paramref name="isSuppressed"/> is wired to developer mode, so
-    /// fabricated sample data never reaches a real audience.
+    /// fabricated sample data never reaches a real audience. <paramref name="cleanup"/> is where a
+    /// clear the EBS did not acknowledge (the game exited, the app is closing) is recorded, so it is
+    /// retried, across restarts if need be, until the card really is off the air.
     /// </remarks>
     public TwitchStreamCardService(
         CommanderState state,
@@ -130,8 +147,9 @@ public sealed class TwitchStreamCardService : IDisposable
         Func<string> updateStateEndpoint,
         Func<string?> token,
         Func<StreamCardVisibility>? visibility = null,
-        Func<bool>? isSuppressed = null)
-        : this(state, sources, client, updateStateEndpoint, token, visibility, isSuppressed, DefaultMinInterval, null) { }
+        Func<bool>? isSuppressed = null,
+        EbsCleanupQueue? cleanup = null)
+        : this(state, sources, client, updateStateEndpoint, token, visibility, isSuppressed, DefaultMinInterval, null, null, cleanup) { }
 
     /// <summary>Test-only constructor: a shortened publish interval and/or a controllable clock.</summary>
     internal TwitchStreamCardService(
@@ -144,8 +162,10 @@ public sealed class TwitchStreamCardService : IDisposable
         Func<bool>? isSuppressed,
         TimeSpan minInterval,
         Func<DateTimeOffset>? clock,
-        TimeSpan? refreshInterval = null)
+        TimeSpan? refreshInterval = null,
+        EbsCleanupQueue? cleanup = null)
     {
+        _cleanup = cleanup;
         _refreshInterval = refreshInterval ?? DefaultRefreshInterval;
         _state = state;
         _sources = sources;
@@ -184,7 +204,36 @@ public sealed class TwitchStreamCardService : IDisposable
     /// would be published without changing the commander picture, and with the game closed no journal
     /// event is coming — so the caller has to ask.
     /// </summary>
-    public void RequestPublish() => MarkDirty();
+    public void RequestPublish()
+    {
+        Volatile.Write(ref _armed, 1);
+        MarkDirty();
+    }
+
+    /// <summary>
+    /// The game has exited (a <c>Shutdown</c> journal event, live or at the end of a replayed
+    /// journal). Takes the card off the air and keeps it off until <see cref="GameStarted"/>, so the
+    /// last "Docked at X" is not left public once the commander has stopped playing.
+    /// </summary>
+    public void GameExited()
+    {
+        if (Interlocked.Exchange(ref _gameRunning, 0) == 0) return;
+        _closedCleared = false;
+        MarkDirty();
+    }
+
+    /// <summary>
+    /// A game session has started (or been seen to be running): publishing resumes. Called on the
+    /// first events of a new journal; harmless while the game is already known to be running.
+    /// </summary>
+    public void GameStarted()
+    {
+        if (Interlocked.Exchange(ref _gameRunning, 1) == 1) return;
+        MarkDirty();
+    }
+
+    /// <summary>False between a <c>Shutdown</c> event and the next session's first events.</summary>
+    public bool GameRunning => Volatile.Read(ref _gameRunning) != 0;
 
     /// <summary>
     /// The snapshot this service would publish right now. Exposed for the settings UI's "what viewers
@@ -211,6 +260,10 @@ public sealed class TwitchStreamCardService : IDisposable
         // A service stopped for reauth stays asleep until the commander logs in again — at which
         // point the token they are publishing with is a different one, and the pump can resume.
         if (IsDisposed || (StoppedForReauth && _token() == Volatile.Read(ref _rejectedToken))) return;
+        // A journal replay changes state property by property before the host asks for the first
+        // publish; reacting to those would put a half-warmed card (and, with the game closed, its last
+        // location) on the air.
+        if (Volatile.Read(ref _armed) == 0) return;
         try { _dirty.Release(); }
         catch (SemaphoreFullException) { /* already dirty — the pump will pick up the newest state */ }
         catch (ObjectDisposedException) { /* raced with Dispose */ }
@@ -221,7 +274,7 @@ public sealed class TwitchStreamCardService : IDisposable
         while (!ct.IsCancellationRequested)
         {
             bool changed;
-            try { changed = await _dirty.WaitAsync(_refreshInterval, ct).ConfigureAwait(false); }
+            try { changed = await _dirty.WaitAsync(NextHeartbeatIn(), ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
             catch (ObjectDisposedException) { return; }
 
@@ -270,6 +323,18 @@ public sealed class TwitchStreamCardService : IDisposable
         }
     }
 
+    /// <summary>
+    /// How long the pump may sleep before the card is due a heartbeat. Measured from the last publish
+    /// rather than from the last wake, so an unrelated wake-up cannot keep pushing the heartbeat out.
+    /// </summary>
+    private TimeSpan NextHeartbeatIn()
+    {
+        if (_lastPublishedKey is null) return _refreshInterval;
+        var remaining = _refreshInterval - (_clock() - _lastPublishedAt);
+        if (remaining > _refreshInterval) return _refreshInterval;
+        return remaining > _minInterval ? remaining : _minInterval;
+    }
+
     /// <summary>Returns the publish result, or null when there was nothing to send.</summary>
     private async Task<StreamStatePublishResult?> PublishIfChangedAsync(CancellationToken ct)
     {
@@ -285,6 +350,10 @@ public sealed class TwitchStreamCardService : IDisposable
             Volatile.Write(ref _rejectedToken, null);
             Volatile.Write(ref _stoppedForReauth, false);
         }
+
+        // The game is not running: the card is not a live picture any more, and the last one must not
+        // outlive the session. Take it off the air once, then stay quiet until the game starts again.
+        if (!GameRunning) return await ClearForClosedGameAsync(token!, ct).ConfigureAwait(false);
 
         var snapshot = StreamCardMapper.Map(_state, _sources, _visibility(), _clock());
 
@@ -306,9 +375,14 @@ public sealed class TwitchStreamCardService : IDisposable
             {
                 _lastPublishedKey = key;
                 _lastPublishedAt = _clock();
+                _closedCleared = false;
             }
         }
         finally { _sendGate.Release(); }
+
+        // A clear still queued for retry (the game exited, the card was switched off) is moot now that
+        // the card is on the air again on purpose; left alone it would take the new card down.
+        if (result.IsSuccess) _cleanup?.Discard(EbsCleanupKind.ClearCard, endpoint, token!);
 
         if (result.RequiresReauth)
         {
@@ -323,6 +397,62 @@ public sealed class TwitchStreamCardService : IDisposable
 
         Raise(result);
         return result;
+    }
+
+    private async Task<StreamStatePublishResult?> ClearForClosedGameAsync(string token, CancellationToken ct)
+    {
+        if (_closedCleared) return null;
+
+        var result = await ClearAndRecordAsync(_endpoint(), token, ct).ConfigureAwait(false);
+        if (IsClearDone(result)) _closedCleared = true;
+        return result;
+    }
+
+    /// <summary>
+    /// True once nothing is public to a new viewer any more: the EBS acknowledged the clear, rejected
+    /// the token, or removed the snapshot and only the offline broadcast is left to retry (which the
+    /// cleanup queue owns).
+    /// </summary>
+    private static bool IsClearDone(StreamStatePublishResult result) =>
+        EbsCleanupQueue.IsSettled(result) || result.Status == StreamStatePublishStatus.ClearedNotDelivered;
+
+    /// <summary>
+    /// A clear that survives failure: recorded in the cleanup queue (and so on disk) before it is
+    /// sent, and dropped from it once the EBS has acknowledged. Without a queue it is just a clear.
+    /// </summary>
+    private async Task<StreamStatePublishResult> ClearAndRecordAsync(string endpoint, string token, CancellationToken ct)
+    {
+        var entry = _cleanup?.Enqueue(EbsCleanupKind.ClearCard, endpoint, token);
+        var result = await TakeOffAirAsync(endpoint, token, ct).ConfigureAwait(false);
+        if (entry is not null) _cleanup!.Complete(entry, result);
+        return result;
+    }
+
+    /// <summary>
+    /// Takes the card off the air as the app closes, waiting at most <paramref name="timeout"/> so a
+    /// slow or unreachable EBS cannot hold up shutdown. A clear that does not finish in time is
+    /// already in the cleanup queue (when one is wired), which retries it on the next launch.
+    /// </summary>
+    /// <returns>True when the card is off the air, or there was nothing to clear.</returns>
+    public bool TakeOffAirForExit(TimeSpan timeout)
+    {
+        if (IsDisposed) return false;
+
+        // Not gated on developer mode: a real card from before it was switched on may still be up.
+        var token = _token();
+        if (string.IsNullOrWhiteSpace(token)) return true;
+        if (_closedCleared && _lastPublishedKey is null) return true;
+
+        var endpoint = _endpoint();
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            // Off the caller's thread: it is the UI thread, which must not be what a continuation of
+            // the clear is waiting to re-enter.
+            var clear = Task.Run(() => ClearAndRecordAsync(endpoint, token, cts.Token));
+            return clear.Wait(timeout) && IsClearDone(clear.Result);
+        }
+        catch (AggregateException) { return false; }  // cancelled at the deadline, or the client threw
     }
 
     /// <summary>

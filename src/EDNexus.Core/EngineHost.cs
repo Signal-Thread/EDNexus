@@ -121,6 +121,10 @@ public sealed class EngineHost : IDisposable
     /// Optional live predicate; while it returns true the reporters go silent. The app wires this to
     /// developer mode so fabricated events never reach EDDN or Inara.
     /// </param>
+    /// <param name="twitchCleanup">
+    /// Where a stream-card clear the EBS did not acknowledge (the game exited, the app is closing) is
+    /// queued for retry. Null on hosts that have no such queue.
+    /// </param>
     /// <remarks>
     /// The radio player (<see cref="EDNexus.Core.Radio.RadioPlayerService"/>) is deliberately not part of the
     /// host: it isn't journal-driven, and the host is rebuilt on "reset to live" / leaving developer
@@ -129,7 +133,8 @@ public sealed class EngineHost : IDisposable
     public EngineHost(
         string? journalDir = null,
         AppSettings? settings = null,
-        Func<bool>? reportingSuppressed = null)
+        Func<bool>? reportingSuppressed = null,
+        EbsCleanupQueue? twitchCleanup = null)
     {
         JournalDirectory = journalDir ?? JournalPaths.Resolve();
         _tracker = new StateTracker(Bus, State);
@@ -235,12 +240,27 @@ public sealed class EngineHost : IDisposable
                 updateStateEndpoint: () => new TwitchOAuthOptions { EbsBaseUrl = twitch.EbsBaseUrl }.UpdateStateEndpoint,
                 token: () => twitch.StreamCardEnabled ? twitch.Token : null,
                 visibility: () => twitch.Card.ToVisibility(),
-                isSuppressed: reportingSuppressed);
+                isSuppressed: reportingSuppressed,
+                cleanup: twitchCleanup);
+
+            // The card is a live picture: it comes down when the game exits and goes back up when a
+            // session starts. Fabricated developer-mode events say nothing about the real game.
+            Bus.Subscribe("Shutdown", _ => { if (reportingSuppressed?.Invoke() != true) _twitchCard.GameExited(); });
+            Bus.Subscribe("Fileheader", _ => { if (reportingSuppressed?.Invoke() != true) _twitchCard.GameStarted(); });
+            Bus.Subscribe("LoadGame", _ => { if (reportingSuppressed?.Invoke() != true) _twitchCard.GameStarted(); });
         }
 
         if (JournalDirectory is not null)
             _watcher = new JournalWatcher(JournalDirectory, Bus);
     }
+
+    /// <summary>
+    /// Takes the Twitch stream card off the air as the app closes, waiting at most
+    /// <paramref name="timeout"/>. Separate from <see cref="Dispose"/>, which also runs when the
+    /// engine is merely rebuilt (leaving developer mode, "reset to live") and must not blank the card.
+    /// </summary>
+    /// <returns>True when the card is off the air, or there was nothing to clear.</returns>
+    public bool TakeTwitchCardOffAirForExit(TimeSpan timeout) => _twitchCard?.TakeOffAirForExit(timeout) ?? true;
 
     /// <summary>
     /// Re-apply the commander's Discord Rich Presence settings to the live integration: connects or

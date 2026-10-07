@@ -242,7 +242,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         // While developer mode is on, reporting is paused so fabricated events never reach EDDN/Inara.
         var host = new EngineHost(
             settings: _boot.Settings,
-            reportingSuppressed: () => _boot.Dev.Enabled);
+            reportingSuppressed: () => _boot.Dev.Enabled,
+            twitchCleanup: _boot.TwitchCleanup);
         _boot.Crash.Attach(host.Bus, host.State); // report journal handler errors; redact the CMDR name
 
         // The stream card talks to a network service and can fail in several distinct ways. Without
@@ -299,6 +300,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            // App exit only (a host rebuild goes through RebuildHost): the card must not stay public
+            // after the app has gone. Bounded, so an unreachable EBS cannot hold up closing; whatever
+            // does not finish is in the cleanup queue and is retried on the next launch.
+            try { _host.TakeTwitchCardOffAirForExit(TimeSpan.FromSeconds(2)); }
+            catch (Exception ex) { Trace.TraceWarning($"Twitch: could not take the card off the air on exit: {ex.Message}"); }
             _host.Dispose();
         }
     }
