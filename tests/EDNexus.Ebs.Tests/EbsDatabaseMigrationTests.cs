@@ -61,6 +61,5 @@ public sealed class EbsDatabaseMigrationTests
         var versions = await Task.WhenAll(openers);
 
         Assert.All(versions, v => Assert.Equal(EbsDatabase.SchemaVersion, v));
-        SqliteConnection.ClearAllPools();
     }
 }

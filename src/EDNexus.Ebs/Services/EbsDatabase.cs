@@ -23,15 +23,18 @@ public sealed class EbsDatabase
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         DatabasePath = databasePath;
-        _connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Pooling = true,
-        }.ToString();
+        _connectionString = BuildConnectionString(databasePath);
 
         Migrate();
     }
+
+    /// <summary>The connection string used for <paramref name="databasePath"/>; tests use it to clear exactly this file's connection pool.</summary>
+    internal static string BuildConnectionString(string databasePath) => new SqliteConnectionStringBuilder
+    {
+        DataSource = databasePath,
+        Mode = SqliteOpenMode.ReadWriteCreate,
+        Pooling = true,
+    }.ToString();
 
     /// <summary>Absolute path of the database file.</summary>
     public string DatabasePath { get; }
