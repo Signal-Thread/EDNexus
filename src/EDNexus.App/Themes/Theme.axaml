@@ -26,6 +26,11 @@
   <SolidColorBrush x:Key="CardBorder" Color="#FF242830" />
   <!-- Translucent scrim for the always-on-top in-game overlay window. -->
   <SolidColorBrush x:Key="OverlayScrim" Color="#C8101216" />
+  <!-- Full-width banner backgrounds: the developer-mode action bar (warm near-black) and the
+       "update downloaded" bar (cool teal-black). Deliberately off the card surfaces so they read
+       as app chrome rather than content. -->
+  <SolidColorBrush x:Key="DevModeBarBg" Color="#FF141013" />
+  <SolidColorBrush x:Key="UpdateBarBg" Color="#FF112322" />
 
   <SolidColorBrush x:Key="Ink" Color="#FFE7E9EE" />
   <SolidColorBrush x:Key="InkDim" Color="#FF8A909C" />
