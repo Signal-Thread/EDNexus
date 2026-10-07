@@ -2,9 +2,9 @@
 <component type="desktop-application">
   <id>io.github.Signal_Thread_LLC.EDNexus</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <!-- TODO: set the real license. The repo currently mixes "Proprietary" (installer/fpm)
-       and "MIT" (debian/copyright). Flathub needs an accurate SPDX id here (e.g. MIT) or a
-       LicenseRef for closed source. -->
+  <!-- TODO (maintainer): this must match the repository's actual license. The repo does not
+       currently contain a LICENSE file, so this is a placeholder. Flathub needs an accurate SPDX id
+       here (e.g. MIT) or a LicenseRef for closed source. -->
   <project_license>LicenseRef-proprietary</project_license>
   <name>EDNexus</name>
   <summary>Elite Dangerous commander console</summary>
@@ -23,14 +23,8 @@
     </p>
   </description>
   <launchable type="desktop-id">io.github.Signal_Thread_LLC.EDNexus.desktop</launchable>
-  <screenshots>
-    <!-- Flathub REQUIRES at least one screenshot at a publicly reachable URL (not a local
-         file). Replace this placeholder with a real hosted image before submitting. -->
-    <screenshot type="default">
-      <image>https://raw.githubusercontent.com/Signal-Thread-LLC/EDNexus/main/docs/screenshots/dashboard.png</image>
-      <caption>The EDNexus dashboard</caption>
-    </screenshot>
-  </screenshots>
+  <!-- TODO before a Flathub submission: Flathub REQUIRES at least one <screenshots> entry whose
+       <image> is a publicly reachable URL. None is listed because no screenshot is hosted yet. -->
   <url type="homepage">https://github.com/Signal-Thread-LLC/EDNexus</url>
   <url type="bugtracker">https://github.com/Signal-Thread-LLC/EDNexus/issues</url>
   <!-- Empty OARS rating = no mature content in any category. -->

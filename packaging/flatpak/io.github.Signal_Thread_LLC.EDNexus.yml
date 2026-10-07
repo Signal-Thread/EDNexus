@@ -18,6 +18,11 @@ finish-args:
   - --device=dri
   # EDNexus uploads to EDDN and queries Inara / EDSM / Spansh.
   - --share=network
+  # Radio card audio (LibVLC output) and the Mining alert chime go through PulseAudio / PipeWire-Pulse.
+  - --socket=pulseaudio
+  # Discord Rich Presence talks to the Discord client over a Unix socket in $XDG_RUNTIME_DIR. This is the
+  # standard grant; it also covers the sandboxed Discord Flatpak's socket (xdg-run/app/com.discordapp.Discord).
+  - --filesystem=xdg-run/discord-ipc-*
   # Read-only access to the Elite Dangerous journals the game writes under Proton.
   # Steam Deck: the internal library lives under ~/.local/share/Steam; games moved to a
   # microSD card are mounted under /run/media. These are the host paths — see the README

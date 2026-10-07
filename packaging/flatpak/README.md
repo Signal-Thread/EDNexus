@@ -41,8 +41,8 @@ Both artifacts are produced by `build-flatpak.sh` and attached to each GitHub Re
 Flathub's builders block network access during the build, so `dotnet restore` can't run there.
 Since EDNexus already publishes a **self-contained** bundle (its own .NET runtime, no ICU via
 `InvariantGlobalization`), the manifest consumes that bundle as a checksummed `archive` source.
-This also matches how the `.deb` and Windows installers are produced — one build artifact,
-reused everywhere.
+The Windows installer is likewise built from a self-contained publish, so each platform ships
+one pre-built artifact.
 
 ## Local build & test
 
@@ -73,10 +73,19 @@ appstreamcli validate io.github.Signal_Thread_LLC.EDNexus.metainfo.xml
 
 1. Replace the manifest's `archive` source with the real Release URL + the `sha256` that
    `build-flatpak.sh` printed (revert the local `dir` swap).
-2. Add at least one **publicly reachable** screenshot URL to the `.metainfo.xml`
-   (Flathub rejects submissions without one) and set the correct `<project_license>`.
+2. Add a `<screenshots>` entry with at least one **publicly reachable** image URL to the
+   `.metainfo.xml` (Flathub rejects submissions without one; none is hosted yet, so the element
+   is currently omitted) and set the correct `<project_license>`.
 3. Open a PR at [github.com/flathub/flathub](https://github.com/flathub/flathub) adding a repo
    named after the app ID, with the manifest + these sibling files.
+
+## Sandbox permissions
+
+Besides the Steam/Proton journal paths below, the manifest grants `--share=network` (EDDN, Inara,
+EDSM, Spansh, Galnet, RavenColonial, Twitch), `--socket=pulseaudio` (radio / alert audio) and
+`--filesystem=xdg-run/discord-ipc-*` (Discord Rich Presence). Note the radio card needs LibVLC,
+which is not part of `org.freedesktop.Platform`; without it the radio reports an error state
+rather than crashing.
 
 ## Journal detection under the sandbox (read this)
 
