@@ -23,6 +23,17 @@ public partial class SettingsWindow : Window
     // commander actually changed it.
     private bool _radioEnabledAtOpen;
 
+    // The crash-reporting answer the dialog opened with. Null means the commander has not been asked
+    // yet (or dismissed the prompt), which a Save must not turn into a "no".
+    private bool? _crashConsentAtOpen;
+
+    // Set by "Test voice", which applies the voice and volume live; a dialog closed without saving puts
+    // the saved ones back.
+    private bool _voiceTested;
+
+    // Guards against a second click while Save is still awaiting the EBS.
+    private bool _saving;
+
     // Leaves room for the title bar and a little breathing space around the edges, so the capped
     // dialog still reads as a window rather than filling the display corner to corner.
     private const double ScreenMargin = 80;
@@ -40,6 +51,7 @@ public partial class SettingsWindow : Window
         _dashboard = dashboard;
         DashboardSection.IsVisible = dashboard is not null;
         if (dashboard is not null) CardList.ItemsSource = dashboard.Cards;
+        _crashConsentAtOpen = boot.Settings.CrashReportingEnabled;
         CrashToggle.IsChecked = boot.Settings.CrashReportingEnabled == true;
         EddnToggle.IsChecked = boot.Settings.Reporting.Eddn.Enabled;
         InaraToggle.IsChecked = boot.Settings.Reporting.Inara.Enabled;
@@ -166,17 +178,73 @@ public partial class SettingsWindow : Window
 
     private async void OnSave(object? sender, RoutedEventArgs e)
     {
+        if (_boot is null)
+        {
+            Close();
+            return;
+        }
+
+        if (_saving) return;
+
+        // Everything that can be wrong is checked before anything is applied, so a bad value cannot
+        // leave the dialog half-saved.
+        if (!CreditsInput.TryParse(MiningThresholdBox.Text, out var threshold))
+        {
+            ShowSaveError("Minimum mining value must be a whole number of credits (for example 50000), or blank to turn the highlight off.", MiningThresholdBox);
+            return;
+        }
+
+        if (TwitchOAuthOptions.ValidateEbsBaseUrl(TwitchEbsBox.Text) is { } ebsError)
+        {
+            ShowSaveError(ebsError, TwitchEbsBox);
+            return;
+        }
+
+        _saving = true;
+        SaveButton.IsEnabled = false;
+        HideSaveError();
+        try
+        {
+            await ApplyAsync(threshold);
+            Close();
+        }
+        catch (Exception ex)
+        {
+            // An async void handler that throws takes the UI thread down with it.
+            System.Diagnostics.Trace.TraceError($"Settings: save failed: {ex}");
+            ShowSaveError($"Could not save every setting: {ex.Message}", null);
+        }
+        finally
+        {
+            _saving = false;
+            SaveButton.IsEnabled = true;
+        }
+    }
+
+    private void ShowSaveError(string message, Control? offender)
+    {
+        SaveErrorLine.Text = message;
+        SaveErrorLine.IsVisible = true;
+        offender?.BringIntoView();
+        offender?.Focus();
+    }
+
+    private void HideSaveError() => SaveErrorLine.IsVisible = false;
+
+    private async Task ApplyAsync(int miningThreshold)
+    {
         if (_boot is not null)
         {
-            _boot.ApplyCrashReportingChoice(CrashToggle.IsChecked == true);
+            // Left as it was while the commander has never answered and has not opted in now: an
+            // unanswered prompt is not a refusal.
+            if (_crashConsentAtOpen is not null || CrashToggle.IsChecked == true)
+                _boot.ApplyCrashReportingChoice(CrashToggle.IsChecked == true);
             _boot.ApplyReportingChoice(
                 EddnToggle.IsChecked == true,
                 InaraToggle.IsChecked == true,
                 InaraApiKey.Text ?? string.Empty);
             _boot.ApplyAutoDownloadChoice(AutoDownloadToggle.IsChecked == true);
-            _boot.ApplyMiningThreshold(
-                int.TryParse(MiningThresholdBox.Text?.Trim(), System.Globalization.NumberStyles.Integer,
-                    System.Globalization.CultureInfo.InvariantCulture, out var threshold) ? threshold : 0);
+            _boot.ApplyMiningThreshold(miningThreshold);
             _boot.ApplyMiningSpotAnnouncements(MiningSpotAnnounceToggle.IsChecked == true);
             _boot.ApplyOverlayChoice(OverlayToggle.IsChecked == true);
             _boot.ApplyVoiceChoice(
@@ -197,7 +265,12 @@ public partial class SettingsWindow : Window
             // Awaited because leaving developer mode below rebuilds the host, disposing this
             // service and its HTTP client mid-request.
             if (takeOffAir is { } off && _dashboard?.TwitchCard is { } card)
-                _boot.TwitchCleanup.Complete(off, await card.TakeOffAirAsync(off.Endpoint, off.Token));
+            {
+                // Best-effort: the clear is already queued for retry, so a failure here must not skip
+                // the remaining settings or keep the dialog open.
+                try { _boot.TwitchCleanup.Complete(off, await card.TakeOffAirAsync(off.Endpoint, off.Token)); }
+                catch (Exception ex) { System.Diagnostics.Trace.TraceWarning($"Twitch: could not clear the card directly; it stays queued: {ex.Message}"); }
+            }
             // Switching the card on (or changing which sections show) changes what viewers should
             // see without touching the commander picture, so the publisher has nothing to react to —
             // and with the game closed no journal event is coming to nudge it. Ask directly.
@@ -214,7 +287,6 @@ public partial class SettingsWindow : Window
             UpdateVersionAndUpdateLine();
             System.Diagnostics.Trace.TraceInformation("Settings: saved by user");
         }
-        Close();
     }
 
     private void OnClose(object? sender, RoutedEventArgs e) => Close();
@@ -231,6 +303,7 @@ public partial class SettingsWindow : Window
     private void OnTestVoice(object? sender, RoutedEventArgs e)
     {
         if (_boot is null) return;
+        _voiceTested = true;
         _boot.Voice.SetVoice(VoiceNameCombo.SelectedItem as string);
         _boot.Voice.SetVolume((int)VoiceVolumeSlider.Value);
         _boot.Voice.Speak("EDNexus voice callouts are working.");
@@ -313,6 +386,12 @@ public partial class SettingsWindow : Window
     /// </summary>
     private CancellationTokenSource? _twitchLogin;
 
+    // True while a sign-in is waiting on the browser, so the button is not re-enabled under it.
+    private bool _twitchLoginRunning;
+
+    private const string TwitchEbsPendingHint =
+        "Save to switch to the new backend address, then sign in. Sign-in always goes to the saved address.";
+
     private void LoadTwitch(TwitchSettings twitch)
     {
         TwitchCardToggle.IsChecked = twitch.StreamCardEnabled;
@@ -337,6 +416,11 @@ public partial class SettingsWindow : Window
         UpdateTwitchAccountLine();
         UpdateTwitchPreview();
 
+        TwitchEbsBox.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == TextBox.TextProperty) UpdateTwitchLoginEnabled();
+        };
+
         if (_dashboard is not null)
         {
             // Publishing happens on a background pump; hop to the UI thread to report it. Through
@@ -359,6 +443,34 @@ public partial class SettingsWindow : Window
         Missions = TwitchMissionsToggle.IsChecked == true,
         Cargo = TwitchCargoToggle.IsChecked == true,
     };
+
+    /// <summary>The EBS box as it will be saved: blank means the hosted default, as in <c>ApplyTwitchChoice</c>.</summary>
+    private string TwitchEbsAsTyped()
+    {
+        var trimmed = (TwitchEbsBox.Text ?? string.Empty).Trim().TrimEnd('/');
+        return trimmed.Length > 0 ? trimmed : new TwitchSettings().EbsBaseUrl;
+    }
+
+    /// <summary>True while the box holds an address other than the saved one.</summary>
+    private bool TwitchEbsEditPending =>
+        _boot is not null
+        && !string.Equals(TwitchEbsAsTyped(), _boot.Settings.Twitch.EbsBaseUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Sign-in uses the saved backend, not whatever is half-typed in the box (Save is what switches
+    /// it, and signs the commander out). Rather than sign in somewhere other than the box says, hold
+    /// the button until the new address has been saved.
+    /// </summary>
+    private void UpdateTwitchLoginEnabled()
+    {
+        var pending = TwitchEbsEditPending;
+        TwitchLoginButton.IsEnabled = !_twitchLoginRunning && !pending;
+
+        if (pending && !_twitchLoginRunning)
+            ShowTwitchAuthStatus(TwitchEbsPendingHint);
+        else if (TwitchAuthLine.Text == TwitchEbsPendingHint)
+            TwitchAuthLine.IsVisible = false;
+    }
 
     private void UpdateTwitchAccountLine()
     {
@@ -427,9 +539,16 @@ public partial class SettingsWindow : Window
     {
         if (_boot is null) return;
 
+        if (TwitchEbsEditPending)
+        {
+            UpdateTwitchLoginEnabled();
+            return;
+        }
+
         _twitchLogin?.Cancel();
         _twitchLogin = new CancellationTokenSource();
 
+        _twitchLoginRunning = true;
         TwitchLoginButton.IsEnabled = false;
         ShowTwitchAuthStatus("Waiting for you to approve EDNexus in your browser…");
         try
@@ -458,7 +577,8 @@ public partial class SettingsWindow : Window
         }
         finally
         {
-            TwitchLoginButton.IsEnabled = true;
+            _twitchLoginRunning = false;
+            UpdateTwitchLoginEnabled();
         }
     }
 
@@ -516,6 +636,14 @@ public partial class SettingsWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        // "Test voice" applied the unsaved choice live. After a Save the saved settings are that choice;
+        // after Close they are what the commander had, which is what should be speaking.
+        if (_voiceTested && _boot is not null)
+        {
+            _boot.Voice.SetVoice(_boot.Settings.Voice.VoiceName);
+            _boot.Voice.SetVolume(_boot.Settings.Voice.Volume);
+        }
+
         _twitchLogin?.Cancel();
         _twitchLogin?.Dispose();
         if (_dashboard is not null)
