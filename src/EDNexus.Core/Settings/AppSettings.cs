@@ -39,6 +39,9 @@ public sealed class AppSettings
     /// <summary>The mining card's price threshold and learned galactic-average prices.</summary>
     public MiningSettings Mining { get; set; } = new();
 
+    /// <summary>Colonisation card options (currently the shared-project lookup opt-out).</summary>
+    public ColonisationSettings Colonisation { get; set; } = new();
+
     /// <summary>The in-game HUD overlay's on/off state.</summary>
     public OverlaySettings Overlay { get; set; } = new();
 

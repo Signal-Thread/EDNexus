@@ -132,6 +132,10 @@ public sealed class Bootstrap
     /// </summary>
     public void LearnCommodityPrices(IEnumerable<(string Symbol, int MeanPrice)> prices)
     {
+        // Developer mode feeds fabricated markets (invented MeanPrice values) through the real bus, and
+        // is documented as never persisted — so nothing observed while it is on may reach the settings file.
+        if (Dev.Enabled) return;
+
         var changed = false;
         foreach (var (symbol, mean) in prices)
         {
@@ -173,6 +177,7 @@ public sealed class Bootstrap
     /// </summary>
     public void RecordMiningRefined(DateTimeOffset when, long credits)
     {
+        if (Dev.Enabled) return;   // fabricated refining must not count toward the real daily total
         EnsureMiningSessionDate(when);
         Settings.Mining.SessionValue += Math.Max(0, credits);
         Settings.Mining.SessionUnits += 1;
@@ -185,6 +190,7 @@ public sealed class Bootstrap
     /// </summary>
     public void RecordMiningSpot(RefinedUnit unit, int averagePrice)
     {
+        if (Dev.Enabled) return;   // a fabricated spot would be announced as real once developer mode is off
         Settings.Mining.KnownSpots = MiningSpotBook.Record(Settings.Mining.KnownSpots, unit, averagePrice);
         Store.Save(Settings);
     }

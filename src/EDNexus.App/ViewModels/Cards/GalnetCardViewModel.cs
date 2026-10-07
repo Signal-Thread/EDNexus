@@ -107,7 +107,7 @@ public sealed partial class GalnetCardViewModel : CardViewModel
         if (!_loadRequested)
         {
             _loadRequested = true;
-            _ = LoadAsync();
+            LoadAsync().Forget("Galnet: load");
             return;
         }
 

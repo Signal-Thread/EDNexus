@@ -10,12 +10,6 @@
         Width="980" Height="660" MinWidth="720" MinHeight="480"
         Background="{StaticResource Surface0}">
 
-  <Window.Resources>
-    <!-- One-off banner backgrounds not part of the shared design-system palette. -->
-    <SolidColorBrush x:Key="DevModeBarBg" Color="#FF141013" />
-    <SolidColorBrush x:Key="UpdateBarBg" Color="#FF112322" />
-  </Window.Resources>
-
   <Window.Styles>
     <Style Selector="Border.card">
       <Setter Property="Background" Value="{StaticResource CardBg}" />
