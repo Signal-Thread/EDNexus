@@ -3,7 +3,7 @@
 #   cd src/EDNexus.Ebs
 #   cp .env.example .env        # then fill in the two secrets
 #   docker compose up -d
-#   curl http://localhost:8787/healthz
+#   curl http://127.0.0.1:8787/healthz
 #
 # TLS is deliberately not handled here. The service speaks plain HTTP and expects a reverse proxy in
 # front of it holding the certificate — see the commented caddy service below. Twitch requires the
@@ -36,9 +36,12 @@ services:
       # the first start, so switching to this layout does not log anyone out.
       Ebs__DataProtectionKeysDirectory: /keys
 
-    # Behind a proxy on the same network, drop this and let only the proxy reach the service.
+    # Loopback only: the service speaks plain HTTP, so it must not be reachable from the network
+    # except through the TLS proxy. Behind the Caddy service below, drop this block and let only the
+    # proxy reach ebs:8787 over the compose network. The service trusts X-Forwarded-For only from a
+    # proxy on a private/loopback address (Ebs__TrustedProxyNetworks narrows that) — see the README.
     ports:
-      - "8787:8787"
+      - "127.0.0.1:8787:8787"
 
     # Inherited from the image, repeated here so it is visible where someone is editing the deploy.
     healthcheck:

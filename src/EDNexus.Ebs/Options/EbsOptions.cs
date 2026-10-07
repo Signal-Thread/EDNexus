@@ -126,16 +126,19 @@ public sealed class EbsOptions
     /// Oldest channel snapshot <c>GET /api/initial-state</c> will serve, in hours. Snapshots are
     /// durable, so a clear the desktop never managed to send would otherwise keep a card public
     /// forever; past this age it is treated as gone and pruned. The app republishes on every change
-    /// and refreshes an unchanged card every few hours, so only a card whose app has stopped
-    /// publishing is affected. Zero or less disables the limit.
+    /// and re-sends an unchanged card every 10 minutes while the game runs (a heartbeat), and clears it
+    /// on game shutdown, app exit and launch, so only a card whose app has stopped publishing is
+    /// affected. Privacy note: this is also the longest a card can stay public if every one of those
+    /// clears is lost. Zero or less disables the limit.
     /// </summary>
     public int ChannelStateMaxAgeHours { get; set; } = 24;
 
     /// <summary>
-    /// Smallest non-zero <see cref="ChannelStateMaxAgeHours"/> the service starts with: two of the
-    /// desktop app's refresh periods (<c>TwitchStreamCardService.DefaultRefreshInterval</c>, 6 hours),
-    /// so one missed refresh does not take a live card down. The app talks to EBS instances it
-    /// cannot read the configuration of, so the constraint is enforced here, not there.
+    /// Smallest non-zero <see cref="ChannelStateMaxAgeHours"/> the service starts with. Current desktop
+    /// builds heartbeat every 10 minutes, so this is far more than they need; it is kept at 12 hours
+    /// deliberately because older builds in the wild refresh an unchanged card only every 6 hours (two
+    /// of those periods, so one missed refresh does not take a live card down). The app talks to EBS
+    /// instances it cannot read the configuration of, so the constraint is enforced here, not there.
     /// </summary>
     public const int MinChannelStateMaxAgeHours = 12;
 

@@ -64,7 +64,7 @@ public sealed class EbsOptionsValidator : IValidateOptions<EbsOptions>
         // take live cards down between refreshes. Refuse to start rather than fail silently for viewers.
         if (options.ChannelStateMaxAgeHours > 0 && options.ChannelStateMaxAgeHours < EbsOptions.MinChannelStateMaxAgeHours)
             failures.Add($"Ebs:ChannelStateMaxAgeHours must be 0 (no limit) or at least {EbsOptions.MinChannelStateMaxAgeHours}: "
-                + "the desktop app refreshes an unchanged card every 6 hours.");
+                + "a shorter limit could take down the live card of a desktop build that refreshes an unchanged card only every 6 hours.");
 
         if (options.MaxStatePayloadBytes is < 1 or > EbsOptions.TwitchPubSubMaxMessageBytes)
             failures.Add($"Ebs:MaxStatePayloadBytes must be between 1 and {EbsOptions.TwitchPubSubMaxMessageBytes} (Twitch drops a PubSub message over 5 KiB).");
