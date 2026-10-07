@@ -15,4 +15,13 @@ public sealed class EdsmClientOptions
 
     /// <summary>The EDSM API base address (no trailing slash needed). Overridable for tests.</summary>
     public string BaseUrl { get; init; } = "https://www.edsm.net";
+
+    /// <summary>
+    /// The longest <c>Retry-After</c> the client will wait out before retrying a 429/503 once. A longer
+    /// request is not waited for: the call fails promptly and the caller can try again later.
+    /// </summary>
+    public TimeSpan MaxRetryAfter { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long to wait before the single retry of a 429/503 that carried no <c>Retry-After</c>.</summary>
+    public TimeSpan TransientRetryDelay { get; init; } = TimeSpan.FromSeconds(1);
 }

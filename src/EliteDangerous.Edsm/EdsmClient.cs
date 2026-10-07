@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 
@@ -56,7 +57,9 @@ public sealed class EdsmClient : IDisposable
     public async Task<EdsmResult<IReadOnlyList<EdsmSystem>>> GetNearbySystemsAsync(
         string systemName, double radiusLy, CancellationToken ct = default)
     {
-        var radius = Math.Clamp(radiusLy, 0, 100).ToString(CultureInfo.InvariantCulture);
+        // Math.Clamp lets NaN straight through (every comparison with it is false), which would put "NaN"
+        // in the query string; an unknown radius is treated as zero.
+        var radius = (double.IsNaN(radiusLy) ? 0 : Math.Clamp(radiusLy, 0, 100)).ToString(CultureInfo.InvariantCulture);
         var url = $"{Base}/api-v1/sphere-systems?systemName={Uri.EscapeDataString(systemName)}" +
                   $"&radius={radius}&showCoordinates=1";
         return await GetAsync(url, ct, body =>
@@ -111,7 +114,7 @@ public sealed class EdsmClient : IDisposable
     {
         try
         {
-            using var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
+            using var response = await GetWithRetryAsync(url, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
                 return EdsmResult<T>.Failure($"HTTP {(int)response.StatusCode}");
 
@@ -119,14 +122,50 @@ public sealed class EdsmClient : IDisposable
             return parse(body);
         }
         catch (JsonException ex) { return EdsmResult<T>.Failure("unparseable response: " + ex.Message); }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { return EdsmResult<T>.Failure(ex.Message); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { return EdsmResult<T>.Failure(ex.Message); }   // incl. an HttpClient timeout
+    }
+
+    /// <summary>
+    /// GET with a single retry when the server says it is busy (429/503): waits the server's
+    /// <c>Retry-After</c> (or <see cref="EdsmClientOptions.TransientRetryDelay"/>) if that is within
+    /// <see cref="EdsmClientOptions.MaxRetryAfter"/>, and otherwise hands the busy response straight back.
+    /// </summary>
+    private async Task<HttpResponseMessage> GetWithRetryAsync(string url, CancellationToken ct)
+    {
+        var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
+        if (response.StatusCode is not (HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable))
+            return response;
+
+        var wait = ReadRetryAfter(response) ?? _options.TransientRetryDelay;
+        if (wait > _options.MaxRetryAfter) return response;
+
+        response.Dispose();
+        if (wait > TimeSpan.Zero) await Task.Delay(wait, ct).ConfigureAwait(false);
+        return await _http.GetAsync(url, ct).ConfigureAwait(false);
+    }
+
+    private static TimeSpan? ReadRetryAfter(HttpResponseMessage response)
+    {
+        var header = response.Headers.RetryAfter;
+        if (header?.Delta is { } delta) return delta >= TimeSpan.Zero ? delta : null;
+        if (header?.Date is { } date)
+        {
+            var wait = date - DateTimeOffset.UtcNow;
+            return wait > TimeSpan.Zero ? wait : TimeSpan.Zero;
+        }
+        return null;
     }
 
     private static EdsmCoords? ReadCoords(JsonElement e)
     {
         if (!e.TryGetProperty("coords", out var c) || c.ValueKind != JsonValueKind.Object) return null;
-        return new EdsmCoords(ReadDouble(c, "x"), ReadDouble(c, "y"), ReadDouble(c, "z"));
+
+        // All three axes or nothing: defaulting a missing one to 0 would put the system at a bogus
+        // position (a partial reply would read as Sol-adjacent and be cached for weeks).
+        return ReadNullableDouble(c, "x") is { } x && ReadNullableDouble(c, "y") is { } y && ReadNullableDouble(c, "z") is { } z
+            ? new EdsmCoords(x, y, z)
+            : null;
     }
 
     private static string? ReadString(JsonElement e, string prop)

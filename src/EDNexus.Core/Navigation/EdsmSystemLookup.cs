@@ -54,9 +54,12 @@ public sealed class EdsmSystemLookup : ISystemLookup
 
     public async Task<double?> DistanceBetweenAsync(string from, string to, CancellationToken ct = default)
     {
+        // If the first lookup came up empty (unknown system, or a failed/rate-limited call), there is no
+        // distance to compute: skip the second request instead of spending it on a certain null.
         var a = await GetSystemAsync(from, ct).ConfigureAwait(false);
+        if (a?.Coords is not { } ca) return null;
         var b = await GetSystemAsync(to, ct).ConfigureAwait(false);
-        if (a?.Coords is not { } ca || b?.Coords is not { } cb) return null;
+        if (b?.Coords is not { } cb) return null;
 
         double dx = ca.X - cb.X, dy = ca.Y - cb.Y, dz = ca.Z - cb.Z;
         return Math.Sqrt(dx * dx + dy * dy + dz * dz);

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -42,14 +43,16 @@ public sealed class SpanshClient : IDisposable
     {
         try
         {
-            using var response = await _http.PostAsJsonAsync(
-                $"{_options.BaseUrl.TrimEnd('/')}/stations/search", BuildRequest(query), Json, ct).ConfigureAwait(false);
+            var request = BuildRequest(query);
+            using var response = await SendWithRetryAsync(
+                c => _http.PostAsJsonAsync($"{_options.BaseUrl.TrimEnd('/')}/stations/search", request, Json, c), ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
                 return SpanshStationsResult.TransportError($"HTTP {(int)response.StatusCode}");
 
             var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             return Parse(text);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             return SpanshStationsResult.TransportError(ex.Message);
@@ -79,7 +82,7 @@ public sealed class SpanshClient : IDisposable
     /// </summary>
     public Task<SpanshRouteResult> PlotGalaxyRouteAsync(SpanshGalaxyRouteQuery query, CancellationToken ct = default)
     {
-        var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        FormUrlEncodedContent BuildForm() => new(new Dictionary<string, string>
         {
             ["source"] = query.From,
             ["destination"] = query.To,
@@ -97,7 +100,7 @@ public sealed class SpanshClient : IDisposable
             ["range_boost"] = Num(query.RangeBoost),
             ["cargo"] = Num(query.Cargo),
         });
-        return RunRouteJobAsync(c => _http.PostAsync($"{_options.BaseUrl.TrimEnd('/')}/generic/route", form, c), ParseShipPoll, ct);
+        return RunRouteJobAsync(c => _http.PostAsync($"{_options.BaseUrl.TrimEnd('/')}/generic/route", BuildForm(), c), ParseShipPoll, ct);
     }
 
     /// <summary>
@@ -107,14 +110,14 @@ public sealed class SpanshClient : IDisposable
     /// </summary>
     public Task<SpanshRouteResult> PlotFleetCarrierRouteAsync(SpanshFleetCarrierRouteQuery query, CancellationToken ct = default)
     {
-        var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        FormUrlEncodedContent BuildForm() => new(new Dictionary<string, string>
         {
             ["source"] = query.From,
             ["destination"] = query.To,
             ["capacity_used"] = Num(query.CapacityUsed),
             ["calculate_starting_fuel"] = query.CalculateStartingFuel ? "1" : "0",
         });
-        return RunRouteJobAsync(c => _http.PostAsync($"{_options.BaseUrl.TrimEnd('/')}/fleetcarrier/route", form, c), ParseFleetCarrierPoll, ct);
+        return RunRouteJobAsync(c => _http.PostAsync($"{_options.BaseUrl.TrimEnd('/')}/fleetcarrier/route", BuildForm(), c), ParseFleetCarrierPoll, ct);
     }
 
     /// <summary>
@@ -131,7 +134,7 @@ public sealed class SpanshClient : IDisposable
         string jobId;
         try
         {
-            using var response = await submit(ct).ConfigureAwait(false);
+            using var response = await SendWithRetryAsync(submit, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
                 return SpanshRouteResult.Failure($"HTTP {(int)response.StatusCode}");
 
@@ -142,10 +145,16 @@ public sealed class SpanshClient : IDisposable
             jobId = id;
         }
         catch (JsonException ex) { return SpanshRouteResult.Failure("unparseable submit response: " + ex.Message); }
-        catch (OperationCanceledException) { throw; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex) { return SpanshRouteResult.Failure(ex.Message); }
 
+        // The id goes into a URL path: "." / ".." survive escaping and would address another endpoint.
+        if (jobId.Trim() is "." or "..")
+            return SpanshRouteResult.Failure("invalid job id returned");
+
         // Poll the job to completion. "queued" / "running" means keep waiting; "ok" carries the route.
+        var transientFailures = 0;
+        string lastTransient = "";
         for (var attempt = 0; attempt < Math.Max(1, _options.RoutePollAttempts); attempt++)
         {
             if (attempt > 0 && _options.RoutePollInterval > TimeSpan.Zero)
@@ -156,18 +165,79 @@ public sealed class SpanshClient : IDisposable
                 using var poll = await _http.GetAsync(
                     $"{_options.BaseUrl.TrimEnd('/')}/results/{Uri.EscapeDataString(jobId)}", ct).ConfigureAwait(false);
                 if (!poll.IsSuccessStatusCode)
+                {
+                    // A 5xx or 429 on one poll says nothing about the job itself: back off and poll again
+                    // a few times rather than discarding a minutes-long route. Other statuses are final.
+                    if (IsTransient(poll.StatusCode))
+                    {
+                        lastTransient = $"HTTP {(int)poll.StatusCode}";
+                        if (++transientFailures > _options.RoutePollRetries) return SpanshRouteResult.Failure(lastTransient);
+                        await BackOffAsync(poll, ct).ConfigureAwait(false);
+                        continue;
+                    }
                     return SpanshRouteResult.Failure($"HTTP {(int)poll.StatusCode}");
+                }
 
                 var pollBody = await poll.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                transientFailures = 0;
                 var (done, result) = parsePoll(pollBody);
                 if (done) return result;
             }
             catch (JsonException ex) { return SpanshRouteResult.Failure("unparseable poll response: " + ex.Message); }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { return SpanshRouteResult.Failure(ex.Message); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                // A network error or an HttpClient timeout: transient too, up to the same budget.
+                lastTransient = ex.Message;
+                if (++transientFailures > _options.RoutePollRetries) return SpanshRouteResult.Failure(lastTransient);
+                if (_options.TransientRetryDelay > TimeSpan.Zero) await Task.Delay(_options.TransientRetryDelay, ct).ConfigureAwait(false);
+            }
         }
 
         return SpanshRouteResult.Failure("route timed out");
+    }
+
+    private static bool IsTransient(HttpStatusCode status)
+        => status == HttpStatusCode.TooManyRequests || (int)status >= 500;
+
+    /// <summary>Waits the server's <c>Retry-After</c> (bounded) or the default retry delay before the next poll.</summary>
+    private async Task BackOffAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        var wait = ReadRetryAfter(response) ?? _options.TransientRetryDelay;
+        if (wait > _options.MaxRetryAfter) wait = _options.MaxRetryAfter;
+        if (wait > TimeSpan.Zero) await Task.Delay(wait, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Sends a request, retrying once when the server answers 429/503 and its <c>Retry-After</c> (or the
+    /// default retry delay) is within <see cref="SpanshClientOptions.MaxRetryAfter"/>; a longer wait is
+    /// not honoured and the busy response is returned for the caller to report.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendWithRetryAsync(
+        Func<CancellationToken, Task<HttpResponseMessage>> send, CancellationToken ct)
+    {
+        var response = await send(ct).ConfigureAwait(false);
+        if (response.StatusCode is not (HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable))
+            return response;
+
+        var wait = ReadRetryAfter(response) ?? _options.TransientRetryDelay;
+        if (wait > _options.MaxRetryAfter) return response;
+
+        response.Dispose();
+        if (wait > TimeSpan.Zero) await Task.Delay(wait, ct).ConfigureAwait(false);
+        return await send(ct).ConfigureAwait(false);
+    }
+
+    private static TimeSpan? ReadRetryAfter(HttpResponseMessage response)
+    {
+        var header = response.Headers.RetryAfter;
+        if (header?.Delta is { } delta) return delta >= TimeSpan.Zero ? delta : null;
+        if (header?.Date is { } date)
+        {
+            var wait = date - DateTimeOffset.UtcNow;
+            return wait > TimeSpan.Zero ? wait : TimeSpan.Zero;
+        }
+        return null;
     }
 
     /// <summary>
