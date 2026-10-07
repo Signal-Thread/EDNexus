@@ -15,11 +15,14 @@ public sealed class EddnJournalTransformer
 
     public EddnJournalTransformer(EddnClientOptions options) => _options = options;
 
-    // Top-level journal fields that are commander-private and must never reach EDDN.
+    // Top-level journal fields that are commander-private and must never reach EDDN. The last four are
+    // also stripped inside Factions[] below; they stay here too, because the raw message keeps every
+    // key the game wrote, so one at the root would otherwise be uploaded as-is.
     private static readonly HashSet<string> PrivateJournalKeys = new(StringComparer.Ordinal)
     {
         "ActiveFine", "CockpitBreach", "BoostUsed", "FuelLevel", "FuelUsed", "JumpDist",
         "Latitude", "Longitude", "Altitude", "Heading", "Wanted",
+        "MyReputation", "SquadronFaction", "HappiestSystem", "HomeSystem",
     };
 
     // Commander-private fields found inside each Factions[] entry (FSDJump/Location/CarrierJump), not
