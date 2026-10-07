@@ -10,7 +10,8 @@ and each viewer's choice is remembered locally.
 EDNexus desktop app                 EDNexus.Ebs                    this extension
 ─────────────────────               ───────────                    ──────────────
 TwitchStreamCardService  ──POST──►  /api/update-state  ──PubSub──►  js/state.js ──► js/card.js
-  (StreamCardSnapshot)               (relays to Twitch)             /api/initial-state (on load)
+  (StreamCardSnapshot)               (relays to Twitch)             /api/initial-state (on load,
+                                                                      and again when quiet)
 ```
 
 ## Layout
@@ -21,7 +22,7 @@ TwitchStreamCardService  ──POST──►  /api/update-state  ──PubSub─
 | `config.html` | Broadcaster config page (which EBS this channel reads from). |
 | `css/card.css` | Overlay styling. Click-through everywhere the card is not. |
 | `css/config.css` | Config page styling. |
-| `js/state.js` | Transport: initial-state fetch + PubSub subscription. No rendering. |
+| `js/state.js` | Transport: initial-state fetch + PubSub subscription. With a card on screen and nothing heard for 5 minutes, it asks `/api/initial-state` again, so a viewer who missed the "offline" broadcast drops the card (404) or picks up a newer one. No rendering. |
 | `js/card.js` | Rendering and flyout behaviour. No network. |
 | `dev/sample-state.json` | A representative payload for local development. Not needed in the upload. |
 | `dev/serve-https.py` | Serves this folder over TLS for Twitch local testing. Not needed in the upload. |

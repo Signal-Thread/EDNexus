@@ -337,11 +337,12 @@ public partial class SettingsWindow : Window
         UpdateTwitchAccountLine();
         UpdateTwitchPreview();
 
-        if (_dashboard?.TwitchCard is { } card2)
+        if (_dashboard is not null)
         {
-            // Publishing happens on a background pump; hop to the UI thread to report it.
-            card2.PublishCompleted += OnTwitchPublishCompleted;
-            card2.ReauthRequired += OnTwitchReauthRequired;
+            // Publishing happens on a background pump; hop to the UI thread to report it. Through
+            // the dashboard, so the status line keeps reporting after an engine rebuild.
+            _dashboard.TwitchPublishCompleted += OnTwitchPublishCompleted;
+            _dashboard.TwitchReauthRequired += OnTwitchReauthRequired;
         }
     }
 
@@ -470,8 +471,10 @@ public partial class SettingsWindow : Window
         {
             await _boot.Twitch.LogoutAsync();
             // Signing out must also stop publishing, or the card would keep going on the next login.
+            // Only that: the rest of the dialog is still unsaved and stays the commander's to save
+            // or discard.
             TwitchCardToggle.IsChecked = false;
-            _boot.ApplyTwitchChoice(false, TwitchSectionsFromToggles(), TwitchEbsBox.Text);
+            _boot.DisableTwitchCard();
             ShowTwitchAuthStatus("Signed out.");
             UpdateTwitchAccountLine();
             UpdateTwitchPreview();
@@ -515,10 +518,10 @@ public partial class SettingsWindow : Window
     {
         _twitchLogin?.Cancel();
         _twitchLogin?.Dispose();
-        if (_dashboard?.TwitchCard is { } card)
+        if (_dashboard is not null)
         {
-            card.PublishCompleted -= OnTwitchPublishCompleted;
-            card.ReauthRequired -= OnTwitchReauthRequired;
+            _dashboard.TwitchPublishCompleted -= OnTwitchPublishCompleted;
+            _dashboard.TwitchReauthRequired -= OnTwitchReauthRequired;
         }
         base.OnClosed(e);
     }

@@ -54,7 +54,12 @@ builder.Services
         if (ebs.Value.StorageProvider != EbsStorageProvider.Sqlite)
             return; // in-memory state dies with the process anyway; the default key ring is fine.
 
-        var keysDirectory = Directory.CreateDirectory(ebs.Value.ResolveDataProtectionKeysDirectory(env.ContentRootPath));
+        var configured = ebs.Value.ResolveDataProtectionKeysDirectory(env.ContentRootPath);
+        DataProtectionKeyRingMove.MoveIfNeeded(
+            ebs.Value.ResolveDefaultDataProtectionKeysDirectory(env.ContentRootPath), configured,
+            loggerFactory.CreateLogger(nameof(DataProtectionKeyRingMove)));
+
+        var keysDirectory = Directory.CreateDirectory(configured);
         keys.XmlRepository = new FileSystemXmlRepository(keysDirectory, loggerFactory);
     });
 builder.Services.AddSingleton(sp =>

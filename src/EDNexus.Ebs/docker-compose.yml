@@ -31,6 +31,10 @@ services:
 
     environment:
       ASPNETCORE_URLS: http://0.0.0.0:8787
+      # The key ring that decrypts the stored Twitch grants, on its own volume: a copy or backup of
+      # ebs-data alone then cannot be decrypted. An existing ring under /data/keys is moved here on
+      # the first start, so switching to this layout does not log anyone out.
+      Ebs__DataProtectionKeysDirectory: /keys
 
     # Behind a proxy on the same network, drop this and let only the proxy reach the service.
     ports:
@@ -44,12 +48,13 @@ services:
       start_period: 15s
       retries: 3
 
-    # Everything the service writes (SQLite database + Data Protection key ring) lives on the
-    # ebs-data volume, so the rest of its filesystem stays read-only. Losing this volume logs
-    # every broadcaster out; back it up like any other credential store.
+    # Everything the service writes lives on these two volumes, so the rest of its filesystem stays
+    # read-only. Losing either logs every broadcaster out. Back them up separately, and never keep
+    # both in one place: together they are every broadcaster's Twitch grant in the clear.
     read_only: true
     volumes:
       - ebs-data:/data
+      - ebs-keys:/keys
     tmpfs:
       - /tmp
     security_opt:
@@ -86,5 +91,6 @@ services:
 
 volumes:
   ebs-data:
+  ebs-keys:
   # caddy-data:
   # caddy-config:

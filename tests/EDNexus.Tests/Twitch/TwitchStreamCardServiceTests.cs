@@ -359,6 +359,72 @@ public class TwitchStreamCardServiceTests
     }
 
     [Fact]
+    public async Task Disposing_during_a_slow_publish_neither_faults_nor_reports_afterwards()
+    {
+        var client = new BlockingStreamStateApiClient();
+        var reported = new List<StreamStatePublishResult>();
+
+        var service = new TwitchStreamCardService(
+            new CommanderState { StarSystem = "Nervi" }, StreamCardSources.Empty, client,
+            static () => Endpoint, static () => "ebs-token", null, null, FastInterval, clock: null);
+        service.PublishCompleted += r => { lock (reported) reported.Add(r); };
+        service.RequestPublish();
+        Assert.True(await client.Entered.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        // Dispose gives up waiting after two seconds with the EBS still not answering.
+        service.Dispose();
+        client.Release();
+
+        // The pump then finishes on its own: no ObjectDisposedException from the semaphores it still
+        // held, and nothing reported to a UI that has already let go of the service.
+        await service.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(service.Completion.IsFaulted);
+        lock (reported) Assert.Empty(reported);
+    }
+
+    [Fact]
+    public async Task Dispose_waits_for_a_handler_already_running()
+    {
+        var service = Create(new CommanderState { StarSystem = "Nervi" }, new FakeStreamStateApiClient());
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        service.PublishCompleted += _ => { entered.Set(); release.Wait(TimeSpan.FromSeconds(10)); };
+        service.RequestPublish();
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+
+        // Once Dispose returns, the caller may tear down whatever the handler touches, so it must not
+        // return while one is still running — including past the two seconds it gives the pump.
+        var disposing = Task.Run(service.Dispose);
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
+        Assert.False(disposing.IsCompleted);
+
+        release.Set();
+        await disposing.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>Holds every publish until the test releases it, like an EBS that is slow to answer.</summary>
+    private sealed class BlockingStreamStateApiClient : IStreamStateApiClient
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public SemaphoreSlim Entered { get; } = new(0);
+
+        public void Release() => _release.TrySetResult();
+
+        public async Task<StreamStatePublishResult> PublishAsync(
+            string updateStateEndpoint, string token, StreamCardSnapshot snapshot, CancellationToken ct = default)
+        {
+            Entered.Release();
+            // Ignores ct on purpose: a request already on the wire does not stop because we stopped caring.
+            await _release.Task.ConfigureAwait(false);
+            return StreamStatePublishResult.Ok;
+        }
+
+        public Task<StreamStatePublishResult> ClearAsync(string updateStateEndpoint, string token, CancellationToken ct = default) =>
+            Task.FromResult(StreamStatePublishResult.ClearedOk);
+    }
+
+    [Fact]
     public void Preview_can_map_against_a_visibility_the_commander_has_not_saved_yet()
     {
         var state = new CommanderState { StarSystem = "Nervi", Ship = "Krait Phantom" };

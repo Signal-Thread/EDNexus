@@ -120,6 +120,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// </summary>
     public EDNexus.Core.Twitch.TwitchStreamCardService? TwitchCard => _host.TwitchCard;
 
+    /// <summary>
+    /// <see cref="EDNexus.Core.Twitch.TwitchStreamCardService.PublishCompleted"/> from whichever
+    /// engine is current. Subscribe here rather than on <see cref="TwitchCard"/>: leaving developer
+    /// mode rebuilds the engine, and a subscription to the old card would go quiet.
+    /// </summary>
+    public event Action<EDNexus.Core.Twitch.StreamStatePublishResult>? TwitchPublishCompleted;
+
+    /// <summary><see cref="EDNexus.Core.Twitch.TwitchStreamCardService.ReauthRequired"/> from whichever engine is current.</summary>
+    public event Action? TwitchReauthRequired;
+
     // --- Dashboard layout: order, visibility, width and collapse, persisted per card. ---
 
     private IEnumerable<CardDefaults> CardDefaults() => Cards.Select(c => new CardDefaults(c.Id, c.DefaultWidth));
@@ -244,9 +254,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             {
                 if (result.IsSuccess) Trace.TraceInformation("Twitch: stream card published.");
                 else Trace.TraceWarning($"Twitch: stream card publish failed ({result.Status}) — {result.Error}");
+                TwitchPublishCompleted?.Invoke(result);
             };
             twitchCard.ReauthRequired += () =>
+            {
                 Trace.TraceWarning("Twitch: the backend rejected this machine's token; publishing stopped until re-login.");
+                TwitchReauthRequired?.Invoke();
+            };
         }
         host.VoiceCallouts.CalloutRaised += OnVoiceCalloutRaised;
 

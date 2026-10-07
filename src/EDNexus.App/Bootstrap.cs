@@ -295,6 +295,19 @@ public sealed class Bootstrap
         return takeOffAir;
     }
 
+    /// <summary>
+    /// Switch the stream card off after signing out, leaving every other Twitch choice as last saved.
+    /// Unlike <see cref="ApplyTwitchChoice"/> it takes nothing from the dialog, so edits the
+    /// commander has not saved (section toggles, a half-typed EBS URL) are not saved behind their
+    /// back. Nothing is queued to take the card down: the sign-out's revoke already clears it.
+    /// </summary>
+    public void DisableTwitchCard()
+    {
+        if (!Settings.Twitch.StreamCardEnabled) return;
+        Settings.Twitch.StreamCardEnabled = false;
+        Store.Save(Settings);
+    }
+
     private TwitchAuthService BuildTwitchAuth() =>
         new(Settings, Store, new TwitchOAuthOptions { EbsBaseUrl = Settings.Twitch.EbsBaseUrl }, cleanup: TwitchCleanup);
 }

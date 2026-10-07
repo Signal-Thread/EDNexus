@@ -11,7 +11,8 @@
 #
 # CI publishes this image to ghcr.io/signal-thread-llc/ednexus-ebs.
 #
-# Broadcaster tokens, encrypted Twitch grants and the Data Protection key ring live under /data.
+# Broadcaster tokens and encrypted Twitch grants live under /data, and so does the Data Protection
+# key ring unless Ebs__DataProtectionKeysDirectory points it elsewhere (the compose file uses /keys).
 # Mount a persistent volume there (the compose file does) or every restart logs every broadcaster out.
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
@@ -39,6 +40,10 @@ ENV Ebs__DataDirectory=/data
 # Created here, owned by the non-root user set below; a volume mounted at /data inherits the
 # ownership on first use, so the store can write without running as root.
 RUN mkdir -p /data && chown $APP_UID /data
+# Mount point for a separate key-ring volume (see docker-compose.yml). Not a VOLUME: a deployment
+# that does not set Ebs__DataProtectionKeysDirectory=/keys keeps its keys under /data as before,
+# rather than on an anonymous volume that would be lost when the container is recreated.
+RUN mkdir -p /keys && chown $APP_UID /keys
 VOLUME /data
 EXPOSE 8787
 

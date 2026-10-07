@@ -99,13 +99,17 @@ public sealed class EbsOptions
     /// </summary>
     public string? DataProtectionKeysDirectory { get; set; }
 
+    /// <summary>The default key ring location, <c>{DataDirectory}/keys</c>, whether or not it is in use.</summary>
+    public string ResolveDefaultDataProtectionKeysDirectory(string contentRootPath) =>
+        Path.Combine(ResolveDataDirectory(contentRootPath), "keys");
+
     /// <summary>Absolute path of <see cref="DataDirectory"/>, resolved against <paramref name="contentRootPath"/>.</summary>
     public string ResolveDataDirectory(string contentRootPath) => Path.GetFullPath(DataDirectory, contentRootPath);
 
     /// <summary>Absolute path of the Data Protection key ring directory, resolved against <paramref name="contentRootPath"/>.</summary>
     public string ResolveDataProtectionKeysDirectory(string contentRootPath) =>
         string.IsNullOrWhiteSpace(DataProtectionKeysDirectory)
-            ? Path.Combine(ResolveDataDirectory(contentRootPath), "keys")
+            ? ResolveDefaultDataProtectionKeysDirectory(contentRootPath)
             : Path.GetFullPath(DataProtectionKeysDirectory, contentRootPath);
 }
 

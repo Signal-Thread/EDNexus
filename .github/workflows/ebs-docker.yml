@@ -24,63 +24,44 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/ednexus-ebs
 
 jobs:
+  # Everything a pull request runs lives here, and this job's token can only read. A PR from a
+  # branch never holds a token that can write to the registry, even for steps it does not reach.
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # The EBS is deployed on its own, so its tests gate the image rather than the whole solution's.
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
 
       - name: Test the service
         run: dotnet test tests/EDNexus.Ebs.Tests/EDNexus.Ebs.Tests.csproj --configuration Release
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Derive tags
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=long
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      # Build once and load it locally so the smoke test exercises the exact image that will be
-      # pushed. buildx's docker-container driver does not populate the local image store, so a
-      # separate `docker build` here would test a different artifact — or nothing at all.
+      # Load it locally so the smoke test runs a container. buildx's docker-container driver does
+      # not populate the local image store, so a plain `docker build` here would test a different
+      # artifact — or nothing at all. The layer cache it writes is what the publish job builds from.
       - name: Build the image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: src/EDNexus.Ebs/Dockerfile
           load: true
           tags: ebs-smoke
-          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # This gates the push. The service validates its Twitch configuration at startup, so an image
-      # that builds can still be one that cannot boot — publishing first would move `latest` to a
-      # broken image and docker-compose would pull it on the next restart.
+      # This gates the publish job. The service validates its Twitch configuration at startup, so an
+      # image that builds can still be one that cannot boot — publishing first would move `latest`
+      # to a broken image and docker-compose would pull it on the next restart.
       - name: Smoke test the image
         run: |
           docker run -d --name ebs-smoke -p 8787:8787 \
@@ -98,10 +79,49 @@ jobs:
           docker logs ebs-smoke
           exit 1
 
-      # Only now, with a container proven to start, does the image become available to deploy.
+      - name: Container log on failure
+        if: failure()
+        run: docker logs ebs-smoke || true
+
+  # Only with a container proven to start does the image become available to deploy, and only this
+  # job — which never runs for a pull request — can write to the registry. It rebuilds from the same
+  # commit and the layer cache the build job just wrote, so every layer comes from that cache.
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
       - name: Push the verified image
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: src/EDNexus.Ebs/Dockerfile
@@ -109,7 +129,3 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-
-      - name: Container log on failure
-        if: failure()
-        run: docker logs ebs-smoke || true

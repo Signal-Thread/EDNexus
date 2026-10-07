@@ -52,7 +52,7 @@ extension's own frontend — so those are fine in `appsettings.json`.
 | `Ebs:OAuthCodeTtlSeconds` | `Ebs__OAuthCodeTtlSeconds` | How long the one-time authorization code handed to the desktop client is redeemable at `/oauth/token`. Default 60 seconds. |
 | `Ebs:StorageProvider` | `Ebs__StorageProvider` | `Sqlite` (default) persists state across restarts; `InMemory` is for tests and throwaway local runs only. |
 | `Ebs:DataDirectory` | `Ebs__DataDirectory` | Directory holding the SQLite database `ebs.db`. Relative paths resolve against the content root. Default `data` (`/data` in the container). |
-| `Ebs:DataProtectionKeysDirectory` | `Ebs__DataProtectionKeysDirectory` | Data Protection key ring used to encrypt Twitch tokens at rest. Default `{DataDirectory}/keys`. |
+| `Ebs:DataProtectionKeysDirectory` | `Ebs__DataProtectionKeysDirectory` | Data Protection key ring used to encrypt Twitch tokens at rest. Default `{DataDirectory}/keys`; the compose file uses a separate `/keys` volume. An existing ring in the default location is moved here on startup. |
 | `Ebs:ChannelStateMaxAgeHours` | `Ebs__ChannelStateMaxAgeHours` | Oldest snapshot `GET /api/initial-state` serves. Older ones are treated as gone and pruned, so a card whose clear never arrived does not stay public forever. The desktop app refreshes an unchanged card every 6 hours, so a live card never reaches it. Default `24`; `0` disables the limit; anything else under `12` is refused at startup. |
 | `Ebs:TwitchTokenRefreshIntervalMinutes` / `Ebs:TwitchTokenRefreshBufferMinutes` | `Ebs__TwitchTokenRefreshIntervalMinutes` / `Ebs__TwitchTokenRefreshBufferMinutes` | How often the background loop checks broadcasters' Twitch grants, and how far ahead of expiry it refreshes them. Defaults 30 / 60 minutes. |
 
@@ -147,10 +147,21 @@ State that has to survive a crash, restart, redeploy or host reboot is kept in a
 | Pending `/oauth/authorize` sessions and one-time auth codes | memory only | Minutes/seconds-lived. A restart mid-login just means clicking "Log in" again. |
 
 The Data Protection key ring (`Ebs:DataProtectionKeysDirectory`, default `{DataDirectory}/keys`)
-must persist alongside the database. If it's lost, stored grants can't be decrypted: those
-broadcasters get `401` and have to log in again, and the EBS keeps running. For real separation
-put the key ring on a different volume or secret mount than the database. The keys are **not**
-encrypted at rest on Linux, so protect that directory's permissions.
+must persist as long as the database does. If it's lost, stored grants can't be decrypted: those
+broadcasters get `401` and have to log in again, and the EBS keeps running.
+
+Keep the key ring on a **different volume** from the database. The shipped `docker-compose.yml`
+does this (`ebs-data` at `/data`, `ebs-keys` at `/keys`). With both on one volume, anyone who can
+read a copy or backup of that volume can decrypt every broadcaster's Twitch grant. EBS bearer
+tokens are stored only as hashes, so they can't be recovered either way.
+
+When `Ebs:DataProtectionKeysDirectory` points somewhere other than the default and that directory
+has no keys yet, the EBS moves an existing ring from `{DataDirectory}/keys` into it on startup. So
+switching an existing deployment to a separate key volume doesn't log anyone out. If both
+directories hold keys, it uses the configured one and leaves the old one alone, with a warning.
+
+The keys are **not** encrypted at rest on Linux, so restrict access to that volume and its backups
+as you would a password store. Back the two volumes up separately.
 
 The schema version is stamped in `PRAGMA user_version`; the EBS migrates older files on startup and
 refuses to start against a file from a newer build.

@@ -1,0 +1,12 @@
+# Workflows pin every action to a commit SHA (a tag can be moved to point at other code), so
+# something has to move the pins forward. Dependabot gathers each week's action updates into a
+# single PR (the group below) and keeps the "# vX.Y.Z" comment beside each SHA in step.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ['*']
