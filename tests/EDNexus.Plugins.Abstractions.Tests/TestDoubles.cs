@@ -24,7 +24,7 @@ internal sealed class FakeJournalEvent : IJournalEvent
     public double? GetDouble(string field) => _fields.TryGetValue(field, out var v) ? v as double? : null;
     public bool? GetBool(string field) => _fields.TryGetValue(field, out var v) ? v as bool? : null;
     public string? GetLocalised(string field) => GetString(field + "_Localised") ?? GetString(field);
-    public T? Deserialize<T>() => default;
+    public System.Text.Json.JsonElement Payload => default;
 }
 
 internal sealed class FakePluginEvents : IPluginEvents

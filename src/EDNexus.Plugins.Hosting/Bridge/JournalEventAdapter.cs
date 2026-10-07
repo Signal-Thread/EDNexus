@@ -32,16 +32,11 @@ internal sealed class JournalEventAdapter(JournalEntry entry, bool isSimulated) 
     public string? GetLocalised(string field) => field is null ? null : _entry.GetLocalised(field);
 
     /// <summary>
-    /// Deserializes the payload, returning <see langword="default"/> when it does not fit
-    /// <typeparamref name="T"/> — as the SDK contract promises — instead of throwing into the plugin.
+    /// The entry's detached payload. There is deliberately no <c>Deserialize&lt;T&gt;</c>: the
+    /// serializer would cache the plugin's type process-wide and pin its load context (see
+    /// <see cref="IJournalEvent.Payload"/>).
     /// </summary>
-    public T? Deserialize<T>()
-    {
-        try { return _entry.Deserialize<T>(); }
-        catch (JsonException) { return default; }
-        catch (NotSupportedException) { return default; }
-        catch (InvalidOperationException) { return default; }
-    }
+    public JsonElement Payload => _entry.Raw;
 
     public override string ToString() => _entry.Event;
 }

@@ -2,6 +2,8 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using EDNexus.Core.Journal;
 using EDNexus.Core.State;
 using EDNexus.Plugins.Abstractions;
@@ -13,6 +15,9 @@ namespace EDNexus.Plugins.Hosting.Tests;
 /// Loaded into a collectible <see cref="AssemblyLoadContext"/> by
 /// <see cref="PluginBridgeTests.DisposedSession_DoesNotPinACollectiblePlugin"/> to stand in for plugin code.
 /// </summary>
+[JsonSerializable(typeof(CollectibleProbe.ProbeShape))]
+public sealed partial class ProbeJsonContext : JsonSerializerContext;
+
 public static class CollectibleProbe
 {
     private static readonly AsyncLocal<object?> Ambient = new();
@@ -34,6 +39,30 @@ public static class CollectibleProbe
     }
 
     private sealed class Marker;
+
+    /// <summary>A plugin-defined payload type, as a plugin would bind with <c>System.Text.Json</c>.</summary>
+    public sealed record ProbeShape(string? StarSystem);
+
+    /// <summary>
+    /// Reads <paramref name="journalEvent"/> the way the SDK tells plugins to: by navigating the
+    /// <see cref="IJournalEvent.Payload"/> element, with no plugin type given to the serializer.
+    /// </summary>
+    public static string? ReadByNavigation(IJournalEvent journalEvent)
+        => journalEvent.Payload.GetProperty("StarSystem").GetString();
+
+    /// <summary>
+    /// Binds the payload to a type that only exists in this (collectible) copy of the assembly with
+    /// reflection-based <c>System.Text.Json</c> — the pattern the SDK warns against.
+    /// </summary>
+    public static string? ReadByReflectionBinding(IJournalEvent journalEvent)
+        => journalEvent.Payload.Deserialize<ProbeShape>()?.StarSystem;
+
+    /// <summary>
+    /// Binds the payload through a source-generated context defined in this (collectible)
+    /// assembly, the alternative the SDK documents.
+    /// </summary>
+    public static string? ReadBySourceGeneration(IJournalEvent journalEvent)
+        => journalEvent.Payload.Deserialize(ProbeJsonContext.Default.ProbeShape)?.StarSystem;
 }
 
 public sealed class PluginBridgeTests : IDisposable
@@ -448,6 +477,58 @@ public sealed class PluginBridgeTests : IDisposable
         Assert.False(context.IsAlive, "The plugin's AssemblyLoadContext was kept alive after its session was disposed.");
     }
 
+    [Theory]
+    [InlineData(nameof(CollectibleProbe.ReadByNavigation))]
+    [InlineData(nameof(CollectibleProbe.ReadBySourceGeneration))]
+    public void ReadingThePayloadInPluginCode_DoesNotPinACollectiblePlugin(string reader)
+    {
+        var (context, decoded) = ReadPayloadInProbePluginAndUnload(reader);
+
+        Assert.Equal("Sol", decoded);
+        Assert.True(IsCollected(context), $"Reading the payload with {reader} kept the plugin's AssemblyLoadContext alive.");
+    }
+
+    /// <summary>
+    /// The reason IJournalEvent has no Deserialize&lt;T&gt;: reflection-based System.Text.Json caches
+    /// every type it binds in process-wide state, so binding a plugin-defined type pins the plugin
+    /// (verified here; if a future runtime stops doing this, the SDK may offer Deserialize again).
+    /// </summary>
+    [Fact]
+    public void BindingAPluginDefinedTypeWithReflectionJson_PinsTheLoadContext_WhichIsWhyTheSdkHasNoDeserialize()
+    {
+        var (context, decoded) = ReadPayloadInProbePluginAndUnload(nameof(CollectibleProbe.ReadByReflectionBinding));
+
+        Assert.Equal("Sol", decoded);
+        Assert.False(IsCollected(context, attempts: 5), "System.Text.Json no longer pins collectible types: Deserialize<T> can be offered again.");
+        Assert.DoesNotContain(typeof(IJournalEvent).GetMethods(), m => m.Name == "Deserialize");
+    }
+
+    private static bool IsCollected(WeakReference context, int attempts = 20)
+    {
+        for (var i = 0; i < attempts && context.IsAlive; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+        return !context.IsAlive;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private (WeakReference Context, string? Decoded) ReadPayloadInProbePluginAndUnload(string reader)
+    {
+        var context = new AssemblyLoadContext("bridge-payload-probe-" + reader, isCollectible: true);
+        var assembly = context.LoadFromAssemblyPath(typeof(CollectibleProbe).Assembly.Location);
+        var probeType = assembly.GetType(typeof(CollectibleProbe).FullName!)!;
+        Assert.NotSame(typeof(CollectibleProbe), probeType);   // really the collectible copy
+
+        Assert.True(JournalEntry.TryParse(Jump, false, out var entry));
+        IJournalEvent adapted = new JournalEventAdapter(entry, isSimulated: false);
+        var decoded = (string?)probeType.GetMethod(reader)!.Invoke(null, [adapted]);
+
+        context.Unload();
+        return (new WeakReference(context), decoded);
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private WeakReference RunProbePluginAndUnload()
     {
@@ -655,7 +736,7 @@ public sealed class PluginBridgeTests : IDisposable
     // ---- Adapter ----
 
     [Fact]
-    public void Adapter_PrefersLocalised_AndDeserializeNeverThrows()
+    public void Adapter_PrefersLocalised_AndExposesTheDetachedPayload()
     {
         Assert.True(JournalEntry.TryParse(
             """{"timestamp":"2026-09-26T10:00:00Z","event":"Died","KillerShip":"python","KillerShip_Localised":"Python","Count":"nope"}""",
@@ -665,10 +746,10 @@ public sealed class PluginBridgeTests : IDisposable
         Assert.Equal("Python", adapted.GetLocalised("KillerShip"));
         Assert.Null(adapted.GetInt64("Count"));
         Assert.Null(adapted.GetString(null!));
-        Assert.Null(adapted.Deserialize<ShapeWithNumber>());
+        Assert.Equal(JsonValueKind.Object, adapted.Payload.ValueKind);
+        Assert.Equal("nope", adapted.Payload.GetProperty("Count").GetString());
+        Assert.Equal("Died", adapted.Payload.GetProperty("event").GetString());
     }
-
-    private sealed record ShapeWithNumber(int Count);
 
     // ---- Engine bus hook ----
 
