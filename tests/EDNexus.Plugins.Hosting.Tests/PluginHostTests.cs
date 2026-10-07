@@ -377,7 +377,7 @@ public class PluginHostTests
         using var dir = new TempDir();
         WriteStandard(dir.Path, "com.test.alpha", "Alpha", sdkVersion: "1.3");
         var contexts = new RecordingContexts();
-        using var host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), contexts.Factory) { HostSdkVersion = new Version(1, 3) };
+        using var host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, contexts.Factory) { HostSdkVersion = new Version(1, 3) };
 
         Assert.Equal(PluginLoadStatus.Loaded, Single(host.LoadAll(), "com.test.alpha").Status);
     }
@@ -445,7 +445,7 @@ public class PluginHostTests
     {
         using var dir = new TempDir();
         WriteStandard(dir.Path, "com.test.alpha", "Alpha");
-        using var host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), _ => throw new InvalidOperationException("no bridge"));
+        using var host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, (_, _) => throw new InvalidOperationException("no bridge"));
 
         var result = Single(host.LoadAll(), "com.test.alpha");
 
@@ -780,11 +780,11 @@ public class PluginHostTests
         WriteStandard(dir.Path, "com.test.zulu", "Zulu");
         var contexts = new RecordingContexts();
         PluginHost? host = null;
-        host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), manifest =>
+        host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, (manifest, granted) =>
         {
             if (manifest.Id == "com.test.alpha")
                 host!.LoadAll();
-            return contexts.Factory(manifest);
+            return contexts.Factory(manifest, granted);
         });
         using (host)
         {

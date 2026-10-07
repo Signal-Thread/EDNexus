@@ -98,7 +98,8 @@ internal static class TestPlugins
         string entryAssembly,
         string entryType,
         string sdkVersion = "1.0",
-        string? minAppVersion = null) => $$"""
+        string? minAppVersion = null,
+        string capabilities = "\"events\"") => $$"""
         {
           "id": "{{id}}",
           "name": "Test plugin {{id}}",
@@ -107,7 +108,7 @@ internal static class TestPlugins
           {{(minAppVersion is null ? "" : $"\"minAppVersion\": \"{minAppVersion}\",")}}
           "entryAssembly": "{{entryAssembly}}",
           "entryType": "{{entryType}}",
-          "capabilities": ["events"]
+          "capabilities": [{{capabilities}}]
         }
         """;
 
@@ -131,21 +132,41 @@ internal static class TestPlugins
     /// Installs the standard plugin in namespace <paramref name="ns"/> as id <paramref name="id"/>
     /// in folder <paramref name="folder"/> (default: the id).
     /// </summary>
-    public static string WriteStandard(string root, string id, string ns, string? folder = null, string sdkVersion = "1.0", string? minAppVersion = null)
-        => WriteFolder(root, folder ?? id, Manifest(id, ns + ".dll", ns + ".Plugin", sdkVersion, minAppVersion), (ns + ".dll", Standard(ns)));
+    public static string WriteStandard(string root, string id, string ns, string? folder = null, string sdkVersion = "1.0", string? minAppVersion = null, string capabilities = "\"events\"")
+        => WriteFolder(root, folder ?? id, Manifest(id, ns + ".dll", ns + ".Plugin", sdkVersion, minAppVersion, capabilities), (ns + ".dll", Standard(ns)));
 }
 
-/// <summary>A context factory that records every log line (per plugin id) and every dispose.</summary>
+/// <summary>
+/// Consent callbacks for tests. <see cref="AllowAll"/> exists only here: the host has no allow-all
+/// default, so production wiring must make a real decision.
+/// </summary>
+internal static class Consent
+{
+    /// <summary>Grants every capability a plugin declares.</summary>
+    public static readonly Func<PluginManifest, IReadOnlyCollection<string>?> AllowAll = manifest => manifest.Capabilities;
+
+    /// <summary>Refuses every plugin.</summary>
+    public static readonly Func<PluginManifest, IReadOnlyCollection<string>?> DenyAll = _ => null;
+}
+
+/// <summary>A context factory that records every log line (per plugin id), every dispose and each grant.</summary>
 internal sealed class RecordingContexts
 {
     public ConcurrentQueue<string> Lines { get; } = new();
 
     public ConcurrentQueue<string> Disposed { get; } = new();
 
-    public Func<PluginManifest, IPluginContext> Factory => manifest => new Context(manifest, this);
+    /// <summary>The capabilities each plugin's context was built with, by plugin id.</summary>
+    public ConcurrentDictionary<string, string[]> Granted { get; } = new();
 
-    public PluginHost Host(string root, string appVersion = "1.0.0")
-        => new(root, SemanticVersion.Parse(appVersion), Factory);
+    public Func<PluginManifest, IReadOnlySet<string>, IPluginContext> Factory => (manifest, granted) =>
+    {
+        Granted[manifest.Id] = [.. granted.Order(StringComparer.Ordinal)];
+        return new Context(manifest, this);
+    };
+
+    public PluginHost Host(string root, string appVersion = "1.0.0", Func<PluginManifest, IReadOnlyCollection<string>?>? consent = null)
+        => new(root, SemanticVersion.Parse(appVersion), consent ?? Consent.AllowAll, Factory);
 
     private sealed class Context(PluginManifest manifest, RecordingContexts owner) : IPluginContext, IDisposable
     {

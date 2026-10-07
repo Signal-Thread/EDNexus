@@ -7,6 +7,9 @@ internal static class CapabilityDenied
 {
     public static UnauthorizedAccessException For(string pluginId, string capability)
         => new($"Plugin '{pluginId}' was not granted the '{capability}' capability; declare it in plugin.json.");
+
+    public static UnauthorizedAccessException ForAnyOf(string pluginId, params string[] capabilities)
+        => new($"Plugin '{pluginId}' was not granted any of the {string.Join(", ", capabilities.Select(c => $"'{c}'"))} capabilities; declare one in plugin.json.");
 }
 
 /// <summary>
@@ -45,4 +48,28 @@ internal sealed class DeniedCommanderState(string pluginId) : IReadOnlyCommander
     public IReadOnlyCommanderState Snapshot() => throw Denied();
 
     private UnauthorizedAccessException Denied() => CapabilityDenied.For(pluginId, PluginCapabilities.State);
+}
+
+/// <summary>
+/// The <see cref="IPluginStorage"/> a plugin gets until the host has a storage backend (and, once it
+/// does, whenever the <c>storage</c> capability was not granted): every call is refused rather than
+/// silently dropping the plugin's data.
+/// </summary>
+internal sealed class DeniedPluginStorage(string pluginId) : IPluginStorage
+{
+    public string? GetString(string key) => throw Denied();
+    public void SetString(string key, string value) => throw Denied();
+    public void Remove(string key) => throw Denied();
+
+    private UnauthorizedAccessException Denied() => CapabilityDenied.For(pluginId, PluginCapabilities.Storage);
+}
+
+/// <summary>
+/// The <see cref="IUiRegistry"/> a plugin gets until the host has UI contribution points (and, once
+/// it does, whenever neither <c>ui.dashboard</c> nor <c>ui.overlay</c> was granted).
+/// </summary>
+internal sealed class DeniedUiRegistry(string pluginId) : IUiRegistry
+{
+    public void Register(string id, object descriptor)
+        => throw CapabilityDenied.ForAnyOf(pluginId, PluginCapabilities.UiDashboard, PluginCapabilities.UiOverlay);
 }

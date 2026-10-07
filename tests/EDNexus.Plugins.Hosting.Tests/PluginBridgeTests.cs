@@ -91,8 +91,9 @@ public sealed class PluginBridgeTests : IDisposable
     private static PluginManifest Manifest(string id, params string[] capabilities)
         => new(id, id, "1.0.0", PluginSdk.CurrentVersionString) { Capabilities = capabilities };
 
+    // Grants everything the manifest declares: the explicit "allow all" decision, test-only.
     private PluginBridgeSession Attach(PluginBridge bridge, string id, params string[] capabilities)
-        => Track(bridge.Attach(Manifest(id, capabilities)));
+        => Track(bridge.Attach(Manifest(id, capabilities), capabilities));
 
     private PluginBridgeSession Track(PluginBridgeSession session)
     {
@@ -303,7 +304,8 @@ public sealed class PluginBridgeTests : IDisposable
         Assert.True(errors.TryTake(out var error, Wait));
         Assert.Equal("bad.plugin", error.PluginId);
         Assert.Equal("FSDJump", error.EventName);
-        Assert.IsType<InvalidOperationException>(error.Exception);
+        Assert.Equal("System.InvalidOperationException", error.ExceptionType);
+        Assert.Equal("boom", error.Message);
 
         Assert.Equal(new[] { "FSDJump", "Cargo" }, TakeN(badSibling, 2));
         Assert.Equal(new[] { "FSDJump", "Cargo" }, TakeN(goodSeen, 2));
@@ -370,7 +372,7 @@ public sealed class PluginBridgeTests : IDisposable
         Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref seen) == 1, Wait));
 
         session.Dispose();
-        Assert.True(session.WaitForDispatchExit(Wait));
+        Assert.True(session.WaitForExit(Wait));
         Publish(Jump);
 
         Assert.Equal(1, Volatile.Read(ref seen));
@@ -392,12 +394,12 @@ public sealed class PluginBridgeTests : IDisposable
         session.Dispose();
         release.Set();
 
-        Assert.True(session.WaitForDispatchExit(Wait));
+        Assert.True(session.WaitForExit(Wait));
         Assert.Equal(0, Volatile.Read(ref laterHandlerRuns));
     }
 
     [Fact]
-    public void BlockedHandler_MakesWaitForDispatchExitReportCannotUnload()
+    public void BlockedHandler_MakesWaitForExitReportCannotUnload()
     {
         var session = Attach(Bridge(), "stuck.plugin", PluginCapabilities.Events);
         using var entered = new ManualResetEventSlim();
@@ -407,10 +409,10 @@ public sealed class PluginBridgeTests : IDisposable
         Assert.True(entered.Wait(Wait));
 
         session.Dispose();
-        Assert.False(session.WaitForDispatchExit(TimeSpan.FromMilliseconds(100)));
+        Assert.False(session.WaitForExit(TimeSpan.FromMilliseconds(100)));
 
         release.Set();
-        Assert.True(session.WaitForDispatchExit(Wait));
+        Assert.True(session.WaitForExit(Wait));
     }
 
     [Fact]
@@ -550,7 +552,7 @@ public sealed class PluginBridgeTests : IDisposable
         Assert.False(Volatile.Read(ref sawAmbient), "The dispatch thread inherited the plugin's ExecutionContext.");
 
         session.Dispose();
-        Assert.True(session.WaitForDispatchExit(Wait));
+        Assert.True(session.WaitForExit(Wait));
         context.Unload();
         return new WeakReference(context);
     }
@@ -623,8 +625,58 @@ public sealed class PluginBridgeTests : IDisposable
         Volatile.Write(ref simulated, false);
         Publish(Jump);
         Assert.True(netSeen.TryTake(out var live, Wait));
-        Assert.False(live.IsSimulated);
-        Assert.Equal("Sol", networked.State.StarSystem);
+        Assert.False(live.IsSimulated);                   // each event is stamped on its own...
+        Assert.Null(networked.State.StarSystem);          // ...but the commander is still the fabricated one (see below)
+    }
+
+    [Fact]
+    public void DeveloperMode_StateStaysSimulated_UntilTheAppRebuildsTheHostAndBridge()
+    {
+        // CommanderState is not reset when a developer-mode source goes quiet, so the fabricated
+        // balance, cargo and materials are still in it after the flag flips: a snapshot built then
+        // must not be handed to a networked plugin as live data.
+        var simulated = true;
+        var bridge = Bridge(new PluginBridgeOptions { IsSimulated = () => Volatile.Read(ref simulated) });
+        var networked = Attach(bridge, "net.plugin", PluginCapabilities.State, PluginCapabilities.Network);
+        var local = Attach(bridge, "local.plugin", PluginCapabilities.State);
+        Publish(Jump);
+        Publish(CargoOf(500));
+        Publish("""{"timestamp":"2026-09-26T10:00:03Z","event":"LoadGame","Commander":"Fabricated","Credits":123456789}""");
+
+        Volatile.Write(ref simulated, false);
+        Publish(JumpTo("Real"));                           // a genuine event after developer mode
+
+        Assert.Null(networked.State.StarSystem);
+        Assert.Equal(0, networked.State.Balance);
+        Assert.Null(networked.State.Name);
+        Assert.Empty(networked.State.Cargo);
+        Assert.Equal("Real", local.State.StarSystem);      // non-networked plugins always see the engine's state
+        Assert.Equal(500, local.State.Cargo["Gold"]);
+
+        // The app's rebuild: a fresh state and bus, and a bridge over them. That one is live.
+        var freshBus = new JournalEventBus();
+        var freshState = new CommanderState();
+        _ = new StateTracker(freshBus, freshState);
+        using var freshBridge = new PluginBridge(freshBus, freshState, new PluginBridgeOptions { IsSimulated = () => Volatile.Read(ref simulated) });
+        using var freshSession = freshBridge.Attach(
+            Manifest("net.plugin", PluginCapabilities.State, PluginCapabilities.Network),
+            [PluginCapabilities.State, PluginCapabilities.Network]);
+        Assert.True(JournalEntry.TryParse(JumpTo("Fresh"), false, out var entry));
+        freshBus.Publish(entry);
+        Assert.Equal("Fresh", freshSession.State.StarSystem);
+    }
+
+    [Fact]
+    public void DeveloperMode_StateSimulatedFlag_IsStickyEvenWhenDeveloperModeWasAlreadyOnAtConstruction()
+    {
+        var simulated = true;
+        var bridge = Bridge(new PluginBridgeOptions { IsSimulated = () => Volatile.Read(ref simulated) });   // dev mode already on
+        var networked = Attach(bridge, "net.plugin", PluginCapabilities.State, PluginCapabilities.Network);
+        Volatile.Write(ref simulated, false);
+
+        Publish(Jump);
+
+        Assert.Null(networked.State.StarSystem);
     }
 
     [Fact]
@@ -724,13 +776,160 @@ public sealed class PluginBridgeTests : IDisposable
         var state = new CommanderState();
         _ = new StateTracker(bus, state);
         var bridge = new PluginBridge(bus, state);
-        var session = bridge.Attach(Manifest("leaky.plugin", PluginCapabilities.State));
+        var session = bridge.Attach(Manifest("leaky.plugin", PluginCapabilities.State), [PluginCapabilities.State]);
 
         Assert.True(JournalEntry.TryParse(Jump, false, out var entry));
         bus.Publish(entry);
 
         bridge.Dispose();   // the session is deliberately left undisposed
         return (session.State, new WeakReference(state));
+    }
+
+    // ---- Consent: Attach has no "grant everything" default ----
+
+    [Fact]
+    public void Attach_RequiresTheGrantedSet_AndAnEmptyOneGrantsNothing()
+    {
+        var bridge = Bridge();
+        var manifest = Manifest("nothing.granted", PluginCapabilities.Events, PluginCapabilities.State);
+
+        Assert.Throws<ArgumentNullException>(() => bridge.Attach(manifest, null!));
+
+        var session = Track(bridge.Attach(manifest, []));
+        Assert.Throws<UnauthorizedAccessException>(() => session.Events.SubscribeAny(_ => { }));
+        Assert.Throws<UnauthorizedAccessException>(() => session.State.Name);
+    }
+
+    [Fact]
+    public void Attach_DoesNotHaveAnOptionalGrantedParameter()
+    {
+        var attach = typeof(PluginBridge).GetMethod(nameof(PluginBridge.Attach))!;
+
+        Assert.All(attach.GetParameters(), parameter => Assert.False(parameter.IsOptional, parameter.Name));
+    }
+
+    [Fact]
+    public void Storage_AndUi_FailClosedUntilTheBridgeHasBackendsForThem()
+    {
+        var session = Attach(Bridge(), "greedy.plugin", PluginCapabilities.Storage, PluginCapabilities.UiDashboard, PluginCapabilities.UiOverlay);
+
+        var storage = Assert.Throws<UnauthorizedAccessException>(() => session.Storage.SetString("k", "v"));
+        Assert.Contains("greedy.plugin", storage.Message);
+        Assert.Contains(PluginCapabilities.Storage, storage.Message);
+        Assert.Throws<UnauthorizedAccessException>(() => session.Storage.GetString("k"));
+        Assert.Throws<UnauthorizedAccessException>(() => session.Storage.Remove("k"));
+        var ui = Assert.Throws<UnauthorizedAccessException>(() => session.Ui.Register("card", new object()));
+        Assert.Contains(PluginCapabilities.UiDashboard, ui.Message);
+        Assert.Contains(PluginCapabilities.UiOverlay, ui.Message);
+    }
+
+    // ---- Handler errors carry text, never the plugin's exception ----
+
+    [Fact]
+    public void HandlerError_IsPlainText_EvenForAnExceptionWhoseMessageThrows()
+    {
+        Assert.DoesNotContain(typeof(PluginHandlerError).GetProperties(), p => typeof(Exception).IsAssignableFrom(p.PropertyType));
+        var errors = new BlockingCollection<PluginHandlerError>();
+        var session = Attach(Bridge(new PluginBridgeOptions { HandlerError = errors.Add }), "evil.plugin", PluginCapabilities.Events);
+        session.Events.SubscribeAny(_ => throw new HostileException());
+
+        Publish(Jump);
+
+        Assert.True(errors.TryTake(out var error, Wait));
+        Assert.Equal("evil.plugin", error.PluginId);
+        Assert.Equal("FSDJump", error.EventName);
+        Assert.Equal(typeof(HostileException).FullName, error.ExceptionType);
+        Assert.Equal($"<message unavailable: {typeof(HostileException).FullName}>", error.Message);
+        Assert.Equal(1, session.HandlerErrorCount);
+    }
+
+    private sealed class HostileException : Exception
+    {
+        public override string Message => throw new InvalidOperationException("Message getter");
+        public override string? StackTrace => throw new InvalidOperationException("StackTrace getter");
+        public override string ToString() => throw new InvalidOperationException("ToString");
+    }
+
+    // ---- Queue bounds: count and bytes ----
+
+    private static string Padded(int padding, string seq)
+        => $$"""{"timestamp":"2026-09-26T10:00:00Z","event":"Shipyard","Seq":"{{seq}}","Pad":"{{new string('x', padding)}}"}""";
+
+    [Fact]
+    public void QueueByteCapacity_BoundsWhatABlockedPluginRetains_AndDropsTheOldest()
+    {
+        const int Payload = 10_000;
+        var bridge = Bridge(new PluginBridgeOptions { QueueByteCapacity = 50_000 });   // room for four ~10 kB events
+        var session = Attach(bridge, "blocked.plugin", PluginCapabilities.Events);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var seen = new List<string>();
+        session.Events.SubscribeAny(e =>
+        {
+            lock (seen) seen.Add(e.GetString("Seq")!);
+            entered.Set();
+            release.Wait(Long);
+        });
+        Publish(Padded(Payload, "first"));
+        Assert.True(entered.Wait(Wait));   // the plugin is now blocked inside its handler
+
+        for (var i = 0; i < 20; i++)
+            Publish(Padded(Payload, i.ToString()));
+
+        Assert.InRange(session.PendingEventBytes, 1, 50_000);
+        Assert.InRange(session.PendingEventCount, 1, 4);
+        Assert.True(session.DroppedEventCount >= 16, $"dropped {session.DroppedEventCount}");
+        release.Set();
+        for (var i = 0; i < 250 && session.PendingEventCount > 0; i++) Thread.Sleep(20);
+        Assert.Equal(0, session.PendingEventBytes);
+        lock (seen)
+        {
+            Assert.Equal("first", seen[0]);
+            Assert.Equal("19", seen[^1]);   // the newest survived
+        }
+    }
+
+    [Fact]
+    public void QueueByteCapacity_AnEventLargerThanTheWholeBudget_IsDroppedWithoutLosingTheBacklog()
+    {
+        var bridge = Bridge(new PluginBridgeOptions { QueueByteCapacity = 5_000 });
+        var session = Attach(bridge, "huge.plugin", PluginCapabilities.Events);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        session.Events.SubscribeAny(_ => { entered.Set(); release.Wait(Long); });
+        Publish(Jump);
+        Assert.True(entered.Wait(Wait));
+        Publish(Cargo);                       // small: queued
+        var pending = session.PendingEventBytes;
+
+        Publish(Padded(10_000, "huge"));      // can never fit
+
+        Assert.Equal(1, session.DroppedEventCount);
+        Assert.Equal(1, session.PendingEventCount);
+        Assert.Equal(pending, session.PendingEventBytes);
+        release.Set();
+    }
+
+    [Fact]
+    public void QueueByteCapacity_MustBePositive()
+        => Assert.Throws<ArgumentOutOfRangeException>(() => new PluginBridge(_bus, _state, new PluginBridgeOptions { QueueByteCapacity = 0 }));
+
+    [Fact]
+    public void QueueCapacity_StillBoundsTheCountOfSmallEvents()
+    {
+        var bridge = Bridge(new PluginBridgeOptions { QueueCapacity = 3 });
+        var session = Attach(bridge, "chatty.plugin", PluginCapabilities.Events);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        session.Events.SubscribeAny(_ => { entered.Set(); release.Wait(Long); });
+        Publish(Jump);
+        Assert.True(entered.Wait(Wait));
+
+        for (var i = 0; i < 10; i++) Publish(Cargo);
+
+        Assert.Equal(3, session.PendingEventCount);
+        Assert.Equal(7, session.DroppedEventCount);
+        release.Set();
     }
 
     // ---- Adapter ----

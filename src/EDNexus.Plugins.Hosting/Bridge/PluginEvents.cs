@@ -20,9 +20,20 @@ namespace EDNexus.Plugins.Hosting.Bridge;
 /// the first subscription, so a plugin that never subscribes costs nothing.
 /// </para>
 /// <para>
-/// Only events some handler matches are queued, so the queue — bounded at
-/// <see cref="PluginBridgeOptions.QueueCapacity"/>, dropping the oldest when full — and
-/// <see cref="DroppedEventCount"/> reflect events the plugin actually asked for.
+/// Only events some handler matches are queued, so the queue — bounded both by count
+/// (<see cref="PluginBridgeOptions.QueueCapacity"/>) and by approximate memory
+/// (<see cref="PluginBridgeOptions.QueueByteCapacity"/>), dropping the oldest when either is
+/// exceeded — and <see cref="DroppedEventCount"/> reflect events the plugin actually asked for.
+/// The byte bound is what stops a plugin that blocks in a handler, with a catch-all subscription,
+/// from retaining thousands of large (shipyard, outfitting) payloads.
+/// </para>
+/// <para>
+/// <b>Developer-mode stamping.</b> An event is stamped <see cref="IJournalEvent.IsSimulated"/> from
+/// the developer-mode predicate sampled as the event reaches the completed stage, not from a
+/// property of the event itself (the engine's entries carry no provenance). So an event a
+/// developer-mode source publishes while another thread is turning developer mode off can be
+/// stamped live. The app must therefore stop (dispose) its developer-mode sources before it flips
+/// the predicate, which is the order its host rebuild already uses.
 /// </para>
 /// </remarks>
 internal sealed class PluginEvents : IPluginEvents, IDisposable
@@ -33,12 +44,14 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
     private readonly Func<bool> _isSimulated;
     private readonly Action<PluginHandlerError> _onError;
     private readonly int _capacity;
+    private readonly long _byteCapacity;
 
     private readonly object _gate = new();
     private readonly List<Registration> _registrations = [];
     private readonly Dictionary<string, int> _namedCounts = new(StringComparer.Ordinal);
     private int _anyCount;
-    private readonly Queue<IJournalEvent> _queue = new();
+    private readonly Queue<(IJournalEvent Event, long Bytes)> _queue = new();
+    private long _queuedBytes;
     private IDisposable? _busHook;
     private Thread? _worker;
     private volatile bool _disposed;
@@ -51,7 +64,8 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
         bool withholdSimulated,
         Func<bool> isSimulated,
         Action<PluginHandlerError> onError,
-        int capacity)
+        int capacity,
+        long byteCapacity)
     {
         _bus = bus;
         _pluginId = pluginId;
@@ -59,9 +73,10 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
         _isSimulated = isSimulated;
         _onError = onError;
         _capacity = capacity;
+        _byteCapacity = byteCapacity;
     }
 
-    /// <summary>Wanted events dropped because this plugin's queue was full.</summary>
+    /// <summary>Wanted events dropped because this plugin's queue was full (by count or by bytes).</summary>
     public long DroppedEventCount => Interlocked.Read(ref _dropped);
 
     /// <summary>Handler invocations that threw.</summary>
@@ -69,6 +84,9 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
 
     /// <summary>Events queued but not yet handed to the plugin.</summary>
     public int PendingCount { get { lock (_gate) return _queue.Count; } }
+
+    /// <summary>Approximate memory held by the events queued but not yet handed to the plugin.</summary>
+    public long PendingBytes { get { lock (_gate) return _queuedBytes; } }
 
     public void Subscribe(string eventName, Action<IJournalEvent> handler) => On(eventName, handler);
 
@@ -141,12 +159,20 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
         lock (_gate)
         {
             if (_disposed) return;
-            if (_queue.Count >= _capacity)
+            var bytes = journalEvent.EstimatedBytes;
+            if (bytes > _byteCapacity)
             {
-                _queue.Dequeue();
+                // Could never fit, even in an empty queue: dropping the backlog for it would only lose more.
+                Interlocked.Increment(ref _dropped);
+                return;
+            }
+            while (_queue.Count > 0 && (_queue.Count >= _capacity || _queuedBytes + bytes > _byteCapacity))
+            {
+                _queuedBytes -= _queue.Dequeue().Bytes;
                 Interlocked.Increment(ref _dropped);
             }
-            _queue.Enqueue(journalEvent);
+            _queue.Enqueue((journalEvent, bytes));
+            _queuedBytes += bytes;
             Monitor.Pulse(_gate);
         }
     }
@@ -161,7 +187,9 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
             {
                 while (_queue.Count == 0 && !_disposed) Monitor.Wait(_gate);
                 if (_disposed) return;
-                next = _queue.Dequeue();
+                var dequeued = _queue.Dequeue();
+                _queuedBytes -= dequeued.Bytes;
+                next = dequeued.Event;
                 handlers = _registrations.ToArray();
             }
 
@@ -181,7 +209,13 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
     private void Report(IJournalEvent journalEvent, Exception exception)
     {
         Interlocked.Increment(ref _handlerErrors);
-        try { _onError(new PluginHandlerError(_pluginId, journalEvent.Event, exception)); }
+        try
+        {
+            // Text only: the exception object belongs to the plugin, and a sink that kept it would
+            // pin the plugin's load context.
+            var (typeName, message) = PluginHost.Summarise(exception);
+            _onError(new PluginHandlerError(_pluginId, journalEvent.Event, typeName, message));
+        }
         catch { /* a faulty error sink must not kill the plugin's pump */ }
     }
 
@@ -204,6 +238,7 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
             _namedCounts.Clear();
             _anyCount = 0;
             _queue.Clear();
+            _queuedBytes = 0;
             hook = _busHook;
             _busHook = null;
             Monitor.PulseAll(_gate);

@@ -27,11 +27,15 @@ namespace EDNexus.Plugins.Hosting.Bridge;
 /// handful of scalar reads.
 /// </para>
 /// <para>
-/// Each snapshot also records whether it was built while the bus was carrying developer-mode
-/// (fabricated) events (<see cref="CommanderStateSnapshot.Simulated"/>). The developer-mode predicate
-/// is evaluated once, when the snapshot is built, so a snapshot of a fabricated commander stays
-/// marked as such even after the predicate flips back — whatever order the app tears the old host,
-/// the predicate and this bridge's sessions down in.
+/// Each snapshot also records whether the commander it describes may be fabricated
+/// (<see cref="CommanderStateSnapshot.Simulated"/>). That flag is <b>sticky</b>: once the
+/// developer-mode predicate has been true (or has thrown) when any snapshot was built, every later
+/// snapshot from this publisher stays marked, because <c>CommanderState</c> is never reset by a
+/// developer-mode source going quiet, so the fabricated balance, cargo and materials it holds
+/// remain in it. Clearing the flag takes a new <c>CommanderState</c>: the app rebuilds its
+/// <c>EngineHost</c> (state, bus) and this bridge when it leaves developer mode, so a bridge never
+/// has to un-stick. It also means a snapshot of a fabricated commander stays marked whatever order
+/// the app tears the old host, the predicate and this bridge's sessions down in.
 /// </para>
 /// <para>
 /// <see cref="Publish"/> is serialised, so when two threads publish on the same bus (developer
@@ -60,6 +64,7 @@ internal sealed class CommanderStatePublisher : IDisposable
     private IReadOnlyDictionary<string, int> _encoded;
     private int _cargoDirty;
     private int _materialsDirty;
+    private bool _everSimulated;   // sticky; only touched under _gate (or in the constructor)
 
     /// <param name="bus">The engine bus; the publisher hooks its completed-event stage.</param>
     /// <param name="state">The engine's commander state, only ever read.</param>
@@ -122,7 +127,7 @@ internal sealed class CommanderStatePublisher : IDisposable
         RawMaterials = _raw,
         ManufacturedMaterials = _manufactured,
         EncodedMaterials = _encoded,
-        Simulated = _isSimulated(),
+        Simulated = _everSimulated |= _isSimulated(),
     };
 
     /// <summary>

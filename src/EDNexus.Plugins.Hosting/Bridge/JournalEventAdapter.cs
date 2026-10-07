@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using EDNexus.Core.Journal;
 using EDNexus.Plugins.Abstractions;
@@ -20,6 +21,20 @@ internal sealed class JournalEventAdapter(JournalEntry entry, bool isSimulated) 
     public bool IsHistorical => _entry.IsHistorical;
 
     public bool IsSimulated { get; } = isSimulated;
+
+    /// <summary>
+    /// Roughly how much memory the queued event retains: the payload's UTF-8 length (the detached
+    /// element owns a copy of the line) plus a fixed allowance for the wrapper objects. Cheap: no
+    /// allocation, so it can be taken on the journal thread.
+    /// </summary>
+    public long EstimatedBytes { get; } = EstimateBytes(entry);
+
+    private static long EstimateBytes(JournalEntry entry)
+    {
+        const int Overhead = 256;
+        try { return Overhead + JsonMarshal.GetRawUtf8Value(entry.Raw).Length; }
+        catch (InvalidOperationException) { return Overhead; }   // default (undefined) element
+    }
 
     public string? GetString(string field) => field is null ? null : _entry.GetString(field);
 
