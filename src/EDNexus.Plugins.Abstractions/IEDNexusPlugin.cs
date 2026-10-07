@@ -19,5 +19,12 @@ public interface IEDNexusPlugin
     /// Release any resources and stop using the <see cref="IPluginContext"/> passed to
     /// <see cref="Initialize"/> after this returns.
     /// </summary>
+    /// <remarks>
+    /// Event handlers run on the plugin's own delivery thread, which the host only stops after
+    /// <c>Shutdown</c> returns. A handler can therefore be running <b>concurrently with</b>
+    /// <c>Shutdown</c> (and a handler that was already running may still be finishing a moment
+    /// after it): guard shared state, and do not assume handlers are quiet while you tear down. A
+    /// handler that never returns makes the host report the plugin as stuck rather than unloaded.
+    /// </remarks>
     void Shutdown();
 }

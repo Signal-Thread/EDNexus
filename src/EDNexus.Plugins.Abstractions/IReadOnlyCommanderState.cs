@@ -19,10 +19,13 @@ namespace EDNexus.Plugins.Abstractions;
 /// </remarks>
 public interface IReadOnlyCommanderState
 {
-    /// <summary>The commander's name, or <see langword="null"/> until known.</summary>
+    /// <summary>
+    /// The commander's in-game name, or <see langword="null"/> until known. Personally identifying,
+    /// and covered by the same <c>state</c> grant as everything else here (there is no narrower one).
+    /// </summary>
     string? Name { get; }
 
-    /// <summary>Current credit balance.</summary>
+    /// <summary>Current credit balance. Sensitive, and covered by the same <c>state</c> grant as everything else here.</summary>
     long Balance { get; }
 
     /// <summary>The current ship type (internal symbol), or <see langword="null"/> until known.</summary>
