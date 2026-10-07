@@ -28,4 +28,19 @@ public sealed class SpanshClientOptions
     /// 2 s interval this is roughly a three-minute ceiling — long routes genuinely take a while.
     /// </summary>
     public int RoutePollAttempts { get; init; } = 90;
+
+    /// <summary>
+    /// How many consecutive transient poll failures (a 5xx, 429, network error or timeout) a route job
+    /// survives before the plot is abandoned. A single hiccup must not discard a minutes-long job.
+    /// </summary>
+    public int RoutePollRetries { get; init; } = 3;
+
+    /// <summary>
+    /// The longest <c>Retry-After</c> the client will wait out before retrying a 429/503. A longer
+    /// request is not waited for: the call fails promptly and the caller can try again later.
+    /// </summary>
+    public TimeSpan MaxRetryAfter { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long to wait before the single retry of a 429/503 that carried no <c>Retry-After</c>.</summary>
+    public TimeSpan TransientRetryDelay { get; init; } = TimeSpan.FromSeconds(1);
 }

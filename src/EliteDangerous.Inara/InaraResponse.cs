@@ -25,9 +25,18 @@ public sealed class InaraResponse
     /// </summary>
     public bool IsHardError => Status is 400 or 401 or 403;
 
+    /// <summary>
+    /// True when the request never got a usable answer from Inara (network failure, timeout, HTTP 5xx or
+    /// 429, unparseable body): the batch was not recorded and is worth retrying later.
+    /// </summary>
+    public bool IsTransient => Status == 0;
+
+    /// <summary>How long the server asked us to wait before retrying (<c>Retry-After</c> on 429/503), if it said.</summary>
+    public TimeSpan? RetryAfter { get; init; }
+
     /// <summary>Convenience for a purely transport-level failure (never reached Inara).</summary>
-    public static InaraResponse TransportError(string message)
-        => new() { Status = 0, StatusText = message };
+    public static InaraResponse TransportError(string message, TimeSpan? retryAfter = null)
+        => new() { Status = 0, StatusText = message, RetryAfter = retryAfter };
 }
 
 /// <summary>The status Inara returned for a single submitted event.</summary>

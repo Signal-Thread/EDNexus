@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -39,7 +40,7 @@ public sealed class RavenColonialClient : IDisposable
     /// </summary>
     public async Task<RavenResult<RavenProject>> GetProjectAsync(string buildId, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(buildId)) return RavenResult<RavenProject>.Ok(null);
+        if (!IsSafeSegment(buildId)) return RavenResult<RavenProject>.Ok(null);
 
         return await GetAsync($"{Base}/api/project/{Uri.EscapeDataString(buildId.Trim())}", ct, body =>
         {
@@ -69,7 +70,7 @@ public sealed class RavenColonialClient : IDisposable
     public async Task<RavenResult<IReadOnlyList<RavenProjectRef>>> GetSystemProjectsAsync(
         string systemNameOrId64, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(systemNameOrId64))
+        if (!IsSafeSegment(systemNameOrId64))
             return RavenResult<IReadOnlyList<RavenProjectRef>>.Ok(Array.Empty<RavenProjectRef>());
 
         var url = $"{Base}/api/System/{Uri.EscapeDataString(systemNameOrId64.Trim())}";
@@ -106,7 +107,7 @@ public sealed class RavenColonialClient : IDisposable
     {
         try
         {
-            using var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
+            using var response = await GetWithRetryAsync(url, ct).ConfigureAwait(false);
 
             // "No project here" is an ordinary answer for a depot nobody is tracking, not a fault.
             if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent)
@@ -119,8 +120,50 @@ public sealed class RavenColonialClient : IDisposable
             return string.IsNullOrWhiteSpace(body) ? RavenResult<T>.Ok(null) : parse(body);
         }
         catch (JsonException ex) { return RavenResult<T>.Failure("unparseable response: " + ex.Message); }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { return RavenResult<T>.Failure(ex.Message); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { return RavenResult<T>.Failure(ex.Message); }   // incl. an HttpClient timeout
+    }
+
+    /// <summary>
+    /// GET with a single retry when the server says it is busy (429/503): waits the server's
+    /// <c>Retry-After</c> (or <see cref="RavenColonialClientOptions.TransientRetryDelay"/>) if that is within
+    /// <see cref="RavenColonialClientOptions.MaxRetryAfter"/>, and otherwise hands the busy response straight back.
+    /// </summary>
+    private async Task<HttpResponseMessage> GetWithRetryAsync(string url, CancellationToken ct)
+    {
+        var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
+        if (response.StatusCode is not (HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable))
+            return response;
+
+        var wait = ReadRetryAfter(response) ?? _options.TransientRetryDelay;
+        if (wait > _options.MaxRetryAfter) return response;
+
+        response.Dispose();
+        if (wait > TimeSpan.Zero) await Task.Delay(wait, ct).ConfigureAwait(false);
+        return await _http.GetAsync(url, ct).ConfigureAwait(false);
+    }
+
+    private static TimeSpan? ReadRetryAfter(HttpResponseMessage response)
+    {
+        var header = response.Headers.RetryAfter;
+        if (header?.Delta is { } delta) return delta >= TimeSpan.Zero ? delta : null;
+        if (header?.Date is { } date)
+        {
+            var wait = date - DateTimeOffset.UtcNow;
+            return wait > TimeSpan.Zero ? wait : TimeSpan.Zero;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// A value is only usable as a URL path segment if it is non-blank and not a dot-segment:
+    /// <c>Uri.EscapeDataString("..")</c> leaves <c>..</c> untouched, and the HTTP stack would then
+    /// collapse it and address a different endpoint.
+    /// </summary>
+    private static bool IsSafeSegment(string value)
+    {
+        var trimmed = value?.Trim();
+        return !string.IsNullOrEmpty(trimmed) && trimmed is not ("." or "..");
     }
 
     private static RavenProject? ReadProject(JsonElement root)
@@ -175,7 +218,7 @@ public sealed class RavenColonialClient : IDisposable
     private static long? AsLong(JsonElement v) => v.ValueKind switch
     {
         JsonValueKind.Number when v.TryGetInt64(out var n) => n,
-        JsonValueKind.String when long.TryParse(v.GetString(), out var s) => s,
+        JsonValueKind.String when long.TryParse(v.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var s) => s,
         _ => null,
     };
 
