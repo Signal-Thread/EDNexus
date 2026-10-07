@@ -19,6 +19,17 @@ public class PluginSdkTests
     }
 
     [Fact]
+    public void AssemblyVersion_TracksTheSdkVersion()
+    {
+        // The host reads the version of a plugin's EDNexus.Plugins.Abstractions reference from its
+        // metadata and treats major.minor as the SDK version it was built against.
+        var assemblyVersion = typeof(PluginSdk).Assembly.GetName().Version!;
+
+        Assert.Equal(PluginSdk.CurrentVersion.Major, assemblyVersion.Major);
+        Assert.Equal(PluginSdk.CurrentVersion.Minor, assemblyVersion.Minor);
+    }
+
+    [Fact]
     public void GetDeclaredVersion_ReturnsNull_WhenAssemblyHasNoAttribute()
     {
         // This test assembly itself doesn't carry a PluginSdkVersionAttribute.

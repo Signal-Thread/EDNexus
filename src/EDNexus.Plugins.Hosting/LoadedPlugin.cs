@@ -66,10 +66,12 @@ public sealed class LoadedPlugin
     /// Calls <see cref="IEDNexusPlugin.Shutdown"/> (contained), disposes the plugin's context when
     /// it is <see cref="IDisposable"/>, drops every reference to plugin code and unloads the load
     /// context. Idempotent, and never throws for plugin misbehaviour: problems are returned in
-    /// <see cref="PluginUnloadResult.Errors"/>.
+    /// <see cref="PluginUnloadResult.Errors"/>. When the context is an
+    /// <see cref="IPluginSessionControl"/>, waits up to <paramref name="handlerExitTimeout"/> after
+    /// disposing it for in-flight handlers, and reports a stuck one instead of claiming a clean unload.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    internal PluginUnloadResult Unload()
+    internal PluginUnloadResult Unload(TimeSpan handlerExitTimeout)
     {
         IEDNexusPlugin? instance;
         IPluginContext? context;
@@ -85,6 +87,7 @@ public sealed class LoadedPlugin
         }
 
         var errors = new List<string>();
+        var stuck = false;
         var weak = new WeakReference(loadContext);
         try
         {
@@ -100,7 +103,7 @@ public sealed class LoadedPlugin
             // Whatever Shutdown did, the context and load context are always released.
             try
             {
-                PluginHost.DisposeContext(context, errors);
+                stuck = PluginHost.DisposeContext(context, handlerExitTimeout, errors);
             }
             catch (Exception ex)
             {
@@ -111,6 +114,6 @@ public sealed class LoadedPlugin
                 PluginHost.TryUnloadContext(loadContext, errors);
             }
         }
-        return new PluginUnloadResult(Id, errors, weak);
+        return new PluginUnloadResult(Id, errors, weak, stuck);
     }
 }

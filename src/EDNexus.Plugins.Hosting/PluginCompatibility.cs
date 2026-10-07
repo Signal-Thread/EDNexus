@@ -45,6 +45,24 @@ public static class PluginCompatibility
         return null;
     }
 
+    /// <summary>
+    /// Checks the SDK version the entry assembly was actually compiled against (the version of its
+    /// <c>EDNexus.Plugins.Abstractions</c> reference, read from metadata) against the host's, so a
+    /// manifest that understates its <c>sdkVersion</c> cannot get a plugin that needs newer members
+    /// than the host has past <see cref="Check(PluginManifest, SemanticVersion, Version)"/>. Same rule
+    /// as <see cref="PluginSdk.IsCompatible"/>: major equal, plugin's minor not above the host's.
+    /// Returns <see langword="null"/> when compatible, otherwise a reason.
+    /// </summary>
+    public static string? CheckBuiltAgainst(Version referencedSdkAssemblyVersion, Version hostSdkVersion)
+    {
+        ArgumentNullException.ThrowIfNull(referencedSdkAssemblyVersion);
+        ArgumentNullException.ThrowIfNull(hostSdkVersion);
+        if (referencedSdkAssemblyVersion.Major == hostSdkVersion.Major && referencedSdkAssemblyVersion.Minor <= hostSdkVersion.Minor)
+            return null;
+        return $"the entry assembly was built against SDK {referencedSdkAssemblyVersion.Major}.{referencedSdkAssemblyVersion.Minor} "
+            + $"(whatever its manifest declares), but this EDNexus provides SDK {hostSdkVersion.Major}.{hostSdkVersion.Minor}";
+    }
+
     private static bool TryParseSdkVersion(string? text, out Version version)
     {
         version = new Version(0, 0);

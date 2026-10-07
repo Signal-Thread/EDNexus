@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using EDNexus.Core.Journal;
 using EDNexus.Plugins.Abstractions;
@@ -21,6 +22,20 @@ internal sealed class JournalEventAdapter(JournalEntry entry, bool isSimulated) 
 
     public bool IsSimulated { get; } = isSimulated;
 
+    /// <summary>
+    /// Roughly how much memory the queued event retains: the payload's UTF-8 length (the detached
+    /// element owns a copy of the line) plus a fixed allowance for the wrapper objects. Cheap: no
+    /// allocation, so it can be taken on the journal thread.
+    /// </summary>
+    public long EstimatedBytes { get; } = EstimateBytes(entry);
+
+    private static long EstimateBytes(JournalEntry entry)
+    {
+        const int Overhead = 256;
+        try { return Overhead + JsonMarshal.GetRawUtf8Value(entry.Raw).Length; }
+        catch (InvalidOperationException) { return Overhead; }   // default (undefined) element
+    }
+
     public string? GetString(string field) => field is null ? null : _entry.GetString(field);
 
     public long? GetInt64(string field) => field is null ? null : _entry.GetInt64(field);
@@ -32,16 +47,11 @@ internal sealed class JournalEventAdapter(JournalEntry entry, bool isSimulated) 
     public string? GetLocalised(string field) => field is null ? null : _entry.GetLocalised(field);
 
     /// <summary>
-    /// Deserializes the payload, returning <see langword="default"/> when it does not fit
-    /// <typeparamref name="T"/> — as the SDK contract promises — instead of throwing into the plugin.
+    /// The entry's detached payload. There is deliberately no <c>Deserialize&lt;T&gt;</c>: the
+    /// serializer would cache the plugin's type process-wide and pin its load context (see
+    /// <see cref="IJournalEvent.Payload"/>).
     /// </summary>
-    public T? Deserialize<T>()
-    {
-        try { return _entry.Deserialize<T>(); }
-        catch (JsonException) { return default; }
-        catch (NotSupportedException) { return default; }
-        catch (InvalidOperationException) { return default; }
-    }
+    public JsonElement Payload => _entry.Raw;
 
     public override string ToString() => _entry.Event;
 }
