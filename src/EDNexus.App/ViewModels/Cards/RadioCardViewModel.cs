@@ -87,7 +87,7 @@ public sealed partial class RadioCardViewModel : CardViewModel
     partial void OnSelectedStationChanged(RadioStation? value)
     {
         if (_syncing || value is null) return;
-        _ = Player.PlayAsync(value.Id);
+        Player.PlayAsync(value.Id).Forget("Radio: tune station");
     }
 
     /// <summary>
@@ -101,7 +101,7 @@ public sealed partial class RadioCardViewModel : CardViewModel
 
         var level = (int)Math.Round(Math.Clamp(value, 0, 100));
         VolumeText = level.ToString();
-        _ = Player.SetVolumeAsync(level);
+        Player.SetVolumeAsync(level).Forget("Radio: set volume");
     }
 
     /// <summary>Same entry point as the title-bar button and the Play/Pause media key.</summary>
