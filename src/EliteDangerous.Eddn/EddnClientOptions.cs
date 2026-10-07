@@ -24,4 +24,26 @@ public sealed class EddnClientOptions
     /// EDDN-recommended minimum of one minute; tests can shorten it.
     /// </summary>
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// The most uploads held in memory waiting to be sent. When the relay is unreachable the queue
+    /// would otherwise grow without bound and deliver hours-stale data; once full, the oldest queued
+    /// message is dropped (and reported through <see cref="EddnUploader.Completed"/>).
+    /// </summary>
+    public int MaxQueueLength { get; init; } = 200;
+
+    /// <summary>
+    /// A queued message older than this when its turn comes is dropped instead of sent — EDDN data is
+    /// only valuable while it is fresh, so a message that waited out an outage is not worth uploading.
+    /// </summary>
+    public TimeSpan MaxMessageAge { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>The longest wait honoured from a relay <c>Retry-After</c> header on a 429/503.</summary>
+    public TimeSpan MaxRetryAfter { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// On dispose, how long the uploader lets already-queued messages drain before cancelling any
+    /// in-flight send or retry wait. Keeps shutdown prompt even during an outage.
+    /// </summary>
+    public TimeSpan DisposeGrace { get; init; } = TimeSpan.FromSeconds(1.5);
 }
