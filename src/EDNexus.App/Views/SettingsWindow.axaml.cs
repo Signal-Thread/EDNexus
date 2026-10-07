@@ -61,6 +61,7 @@ public partial class SettingsWindow : Window
             ? boot.Settings.Mining.MinValueThreshold.ToString(System.Globalization.CultureInfo.InvariantCulture)
             : "";
 
+        RavenLookupToggle.IsChecked = boot.Settings.Colonisation.SharedProjectLookup;
         MiningSpotAnnounceToggle.IsChecked = boot.Settings.Mining.AnnounceKnownSpots;
         if (boot.Settings.Mining.KnownSpots.Count > 0)
             MiningSpotsSummary.Text += $" {boot.Settings.Mining.KnownSpots.Count:N0} spots recorded so far.";
@@ -244,6 +245,7 @@ public partial class SettingsWindow : Window
                 InaraToggle.IsChecked == true,
                 InaraApiKey.Text ?? string.Empty);
             _boot.ApplyAutoDownloadChoice(AutoDownloadToggle.IsChecked == true);
+            _boot.ApplySharedProjectLookup(RavenLookupToggle.IsChecked == true);
             _boot.ApplyMiningThreshold(miningThreshold);
             _boot.ApplyMiningSpotAnnouncements(MiningSpotAnnounceToggle.IsChecked == true);
             _boot.ApplyOverlayChoice(OverlayToggle.IsChecked == true);

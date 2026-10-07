@@ -254,6 +254,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             reportingSuppressed: () => _boot.Dev.Enabled,
             twitchCleanup: _boot.TwitchCleanup);
         _boot.Crash.Attach(host.Bus, host.State); // report journal handler errors; redact the CMDR name
+        host.WatcherError += ex => _boot.Crash.Capture(ex, "journal-watcher"); // throttled per fault; a dead watcher is not silent
 
         // The stream card talks to a network service and can fail in several distinct ways. Without
         // this the only feedback is a label in the settings dialog, so a commander whose card never

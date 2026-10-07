@@ -195,6 +195,13 @@ public sealed class Bootstrap
         Store.Save(Settings);
     }
 
+    /// <summary>Persist whether docking at a construction site looks up a shared project on Raven Colonial.</summary>
+    public void ApplySharedProjectLookup(bool enabled)
+    {
+        Settings.Colonisation.SharedProjectLookup = enabled;
+        Store.Save(Settings);
+    }
+
     /// <summary>Persist the Mining option that announces known spots on arriving in a system.</summary>
     public void ApplyMiningSpotAnnouncements(bool enabled)
     {
