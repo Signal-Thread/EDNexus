@@ -151,11 +151,11 @@ public partial class SettingsWindow : Window
             var updatePath = EDNexus.App.Services.AutoUpdateService.LastDownloadedPath;
             if (!string.IsNullOrEmpty(updatePath))
             {
-                UpdateLine.Text = "Downloaded: " + Path.GetFileName(updatePath);
+                UpdateLine.Text = "Downloaded and verified: " + Path.GetFileName(updatePath);
             }
             else
             {
-                UpdateLine.Text = "No update downloaded.";
+                UpdateLine.Text = EDNexus.App.Services.AutoUpdateService.LastMessage ?? "No update downloaded.";
             }
         }
         catch
@@ -281,18 +281,9 @@ public partial class SettingsWindow : Window
             System.Diagnostics.Trace.TraceInformation("Settings: user initiated update check");
             var res = await EDNexus.App.Services.AutoUpdateService.CheckForUpdatesAsync();
             System.Diagnostics.Trace.TraceInformation($"Settings: update check result Found={res.Found}, Message={res.Message}, Verified={res.Verified}");
-            if (res.Found)
-            {
-                if (res.Path is not null)
-                    UpdateLine.Text = res.Verified ? $"Downloaded & verified" : $"Downloaded (unverified)";
-                else
-                    UpdateLine.Text = res.Message;
-            }
-            else
-            {
-                UpdateLine.Text = $"No update: {res.Message}";
-            }
-            UpdateVersionAndUpdateLine();
+            // The message is self-describing: "Update v1 downloaded and verified", "Already up to date",
+            // "Update v1 could not be verified ... It was not installed.", "Update v1 is available: update through Flatpak".
+            UpdateLine.Text = res.Message;
         }
         catch (Exception ex)
         {

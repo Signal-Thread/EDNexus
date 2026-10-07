@@ -429,9 +429,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private async Task InstallUpdate()
     {
         if (string.IsNullOrEmpty(UpdatePath)) return;
+
+        // Only a download the updater verified against its published checksum is ever offered.
+        var verifiedSha = EDNexus.App.Services.AutoUpdateService.LastVerifiedSha256;
+        var installerPath = UpdatePath;
+        if (string.IsNullOrEmpty(verifiedSha))
+        {
+            Trace.TraceWarning("Update: no verified checksum for the downloaded installer; not installing");
+            return;
+        }
+
         var owner = (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
         var dlg = new EDNexus.App.Views.ConfirmInstallWindow();
-        dlg.SetFilePath(UpdatePath);
+        dlg.SetDetails(installerPath, verifiedSha);
         if (owner is null)
         {
             // No owner (rare in tests). Show non-modal confirmation and abort install — safer than auto-running.
@@ -441,6 +451,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         var result = await dlg.ShowDialog<bool>(owner);
         if (!result) return;
+
+        // Re-hash right before running it, so a file swapped on disk since the check (or while the dialog
+        // was open) is refused rather than launched elevated.
+        if (!await Task.Run(() => EDNexus.Core.Updates.UpdateChecker.HashMatches(installerPath, verifiedSha)))
+        {
+            Trace.TraceWarning($"Update: {installerPath} failed re-verification; not installing");
+            UpdateAvailable = false;
+            UpdatePath = "";
+            return;
+        }
 
         try
         {
