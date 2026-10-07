@@ -233,7 +233,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         var host = new EngineHost(
             settings: _boot.Settings,
             reportingSuppressed: () => _boot.Dev.Enabled);
-        _boot.Crash.Attach(host.Bus); // report journal handler errors
+        _boot.Crash.Attach(host.Bus, host.State); // report journal handler errors; redact the CMDR name
 
         // The stream card talks to a network service and can fail in several distinct ways. Without
         // this the only feedback is a label in the settings dialog, so a commander whose card never

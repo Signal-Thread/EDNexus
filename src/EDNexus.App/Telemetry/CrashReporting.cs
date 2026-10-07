@@ -1,6 +1,7 @@
 using System.Reflection;
 using EDNexus.Core.Journal;
 using EDNexus.Core.Settings;
+using EDNexus.Core.State;
 using EDNexus.Core.Telemetry;
 using Sentry;
 
@@ -18,13 +19,19 @@ public sealed class CrashReporting : IDisposable
     private PiiScrubber _scrubber = new();
     private string _installId = "";
 
+    // Where the scrubber reads the Inara API key and CMDR name from each time it runs. Set on the UI
+    // thread but read on whichever thread Sentry scrubs from, hence volatile.
+    private volatile AppSettings? _settings;
+    private volatile CommanderState? _commander;
+
     public bool IsActive { get; private set; }
 
     /// <summary>
     /// Start reporting if consent is granted and a DSN is available; otherwise no-op and return false.
-    /// <paramref name="extraSensitive"/> adds literals to redact (e.g. the CMDR name once known).
+    /// The Inara API key is read from <paramref name="settings"/> whenever a report is scrubbed, so a
+    /// key saved after reporting starts is still redacted.
     /// </summary>
-    public bool TryStart(AppSettings settings, IEnumerable<string>? extraSensitive = null)
+    public bool TryStart(AppSettings settings)
     {
         if (IsActive) return true;
         if (settings.CrashReportingEnabled != true) return false;
@@ -33,7 +40,8 @@ public sealed class CrashReporting : IDisposable
         if (string.IsNullOrWhiteSpace(dsn)) return false;
 
         _installId = settings.InstallId;
-        _scrubber = BuildScrubber(settings, extraSensitive);
+        _settings = settings;
+        _scrubber = BuildScrubber();
 
         _sentry = SentrySdk.Init(o =>
         {
@@ -92,24 +100,39 @@ public sealed class CrashReporting : IDisposable
         if (IsActive) SentrySdk.CaptureException(ex);
     }
 
-    /// <summary>Forward journal-event handler errors to the reporter.</summary>
-    public void Attach(JournalEventBus bus) => bus.HandlerError += (_, ex) => Capture(ex);
+    /// <summary>
+    /// Forward journal-event handler errors to the reporter, and redact <paramref name="commander"/>'s
+    /// name from every report. Called for each engine the app builds; the most recent one wins.
+    /// </summary>
+    public void Attach(JournalEventBus bus, CommanderState commander)
+    {
+        bus.HandlerError += (_, ex) => Capture(ex);
+        _commander = commander;
+    }
 
     public void Dispose() => Stop();
 
-    private static PiiScrubber BuildScrubber(AppSettings settings, IEnumerable<string>? extra)
+    private PiiScrubber BuildScrubber()
     {
         var sensitive = new List<string>
         {
             Environment.UserName,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             JournalPaths.Resolve() ?? "",
-            // The Inara key could ride out inside an HTTP-failure message; never let it.
-            settings.Reporting.Inara.ApiKey,
         };
-        if (extra is not null) sensitive.AddRange(extra);
-        return new PiiScrubber(sensitive);
+        return new PiiScrubber(sensitive, CurrentSensitive);
     }
+
+    /// <summary>
+    /// Values that change or only become known while the app runs. Re-read on every scrub, so it
+    /// doesn't matter whether the key is saved before or after consent, or when the commander loads.
+    /// </summary>
+    private IEnumerable<string?> CurrentSensitive() => new[]
+    {
+        // The Inara key could ride out inside an HTTP-failure message; never let it.
+        _settings?.Reporting.Inara.ApiKey,
+        _commander?.Name,
+    };
 
     private SentryEvent ScrubEvent(SentryEvent e, SentryHint hint)
     {
@@ -133,6 +156,13 @@ public sealed class CrashReporting : IDisposable
             }
         }
 
+        foreach (var (key, value) in e.Tags.ToArray())
+            e.SetTag(key, _scrubber.Scrub(value) ?? string.Empty);
+
+        // Extras can hold any object; only text values can be scrubbed in place.
+        foreach (var (key, value) in e.Extra.ToArray())
+            if (value is string text) e.SetExtra(key, _scrubber.Scrub(text));
+
         // Keep only the anonymous correlation id on the user.
         e.User.Id = _installId;
         e.User.Username = null;
@@ -141,11 +171,19 @@ public sealed class CrashReporting : IDisposable
         return e;
     }
 
+    /// <summary>
+    /// Runs as each breadcrumb is recorded (an event's breadcrumbs are read-only by the time it's sent),
+    /// so it redacts whatever is sensitive at that moment.
+    /// </summary>
     private Breadcrumb ScrubBreadcrumb(Breadcrumb b, SentryHint hint)
     {
-        var scrubbed = _scrubber.Scrub(b.Message);
-        if (scrubbed == b.Message) return b; // common case: nothing sensitive, keep as-is
-        return new Breadcrumb(scrubbed ?? string.Empty, b.Type ?? string.Empty, b.Data, b.Category, b.Level);
+        var message = _scrubber.Scrub(b.Message);
+        var data = b.Data?.ToDictionary(kv => kv.Key, kv => _scrubber.Scrub(kv.Value) ?? string.Empty);
+        var dataChanged = b.Data is not null && b.Data.Any(kv => data![kv.Key] != kv.Value);
+        if (message == b.Message && !dataChanged) return b; // common case: nothing sensitive, keep as-is
+        // The timestamped constructor is internal to Sentry; this hook runs as the breadcrumb is recorded,
+        // so the new breadcrumb's default "now" timestamp matches the original.
+        return new Breadcrumb(message ?? string.Empty, b.Type ?? string.Empty, data, b.Category, b.Level);
     }
 
     private static string AppVersion()
