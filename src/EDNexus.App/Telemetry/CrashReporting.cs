@@ -59,17 +59,8 @@ public sealed class CrashReporting : IDisposable
         SentrySdk.ConfigureScope(s => s.User = new SentryUser { Id = _installId });
         IsActive = true;
 
-        // Also register global unhandled exception handlers so the local log file records crashes
-        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
-        {
-            if (e.ExceptionObject is Exception ex)
-                Capture(ex);
-        };
-        TaskScheduler.UnobservedTaskException += (_, e) =>
-        {
-            Capture(e.Exception);
-            e.SetObserved();
-        };
+        // Also register global unhandled exception handlers so the local log file records crashes.
+        RegisterGlobalHandlers();
 
         return true;
     }
@@ -77,23 +68,64 @@ public sealed class CrashReporting : IDisposable
     /// <summary>Stop reporting and flush. Called on opt-out and on shutdown.</summary>
     public void Stop()
     {
+        // Unhook first, so an opt-out/opt-in cycle leaves exactly one set of handlers registered.
+        UnregisterGlobalHandlers();
         _sentry?.Dispose();
         _sentry = null;
         IsActive = false;
     }
 
-    /// <summary>Report a handled exception (only when active).</summary>
-    public void Capture(Exception ex)
+    // Named handlers (not lambdas) so they can be removed again; guarded so registering twice is a no-op.
+    private bool _globalHandlersRegistered;
+    private readonly UnhandledExceptionEventHandler _onUnhandled;
+    private readonly EventHandler<UnobservedTaskExceptionEventArgs> _onUnobserved;
+
+    // A handler that fails on every line of a journal replay would otherwise log, write a file and send
+    // a Sentry event per line. One report per distinct failure per window is plenty.
+    private readonly ErrorThrottle _throttle = new(TimeSpan.FromMinutes(5), maxKeys: 128);
+
+    public CrashReporting()
     {
-        // Always write crash details to the local log file for diagnostics.
+        _onUnhandled = (_, e) =>
+        {
+            if (e.ExceptionObject is Exception ex) CaptureCrash(ex, e.IsTerminating);
+        };
+        _onUnobserved = (_, e) =>
+        {
+            Capture(e.Exception);
+            e.SetObserved();
+        };
+    }
+
+    private void RegisterGlobalHandlers()
+    {
+        if (_globalHandlersRegistered) return;
+        AppDomain.CurrentDomain.UnhandledException += _onUnhandled;
+        TaskScheduler.UnobservedTaskException += _onUnobserved;
+        _globalHandlersRegistered = true;
+    }
+
+    private void UnregisterGlobalHandlers()
+    {
+        if (!_globalHandlersRegistered) return;
+        AppDomain.CurrentDomain.UnhandledException -= _onUnhandled;
+        TaskScheduler.UnobservedTaskException -= _onUnobserved;
+        _globalHandlersRegistered = false;
+    }
+
+    /// <summary>
+    /// Report a handled (non-fatal) exception: logged locally and, when active, sent to Sentry.
+    /// Repeats of the same failure within a few minutes are dropped. Does NOT write the crash marker.
+    /// </summary>
+    /// <param name="scope">Optional context that is part of the dedupe key, such as the journal event being handled.</param>
+    public void Capture(Exception ex, string? scope = null)
+    {
+        if (!_throttle.ShouldReport(ErrorThrottle.KeyFor(ex, scope), out var suppressed)) return;
+
         try
         {
-            System.Diagnostics.Trace.TraceError("Captured exception: " + ex);
-            // Write a simple crash marker so the UI can expose logs only after a crash.
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EDNexus");
-            Directory.CreateDirectory(dir);
-            var marker = Path.Combine(dir, "last_crash.txt");
-            File.WriteAllText(marker, DateTime.UtcNow.ToString("o") + "\n" + ex.ToString());
+            var repeats = suppressed > 0 ? $" (+{suppressed} similar suppressed)" : "";
+            System.Diagnostics.Trace.TraceError("Captured exception" + repeats + ": " + ex);
         }
         catch { }
 
@@ -101,12 +133,41 @@ public sealed class CrashReporting : IDisposable
     }
 
     /// <summary>
+    /// Report an unhandled exception. When the runtime is terminating because of it, also leaves a
+    /// crash marker file so the UI can offer the logs after a real crash (and only then).
+    /// </summary>
+    private void CaptureCrash(Exception ex, bool terminating)
+    {
+        try
+        {
+            System.Diagnostics.Trace.TraceError("Unhandled exception: " + ex);
+            if (terminating)
+            {
+                var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EDNexus");
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, "last_crash.txt"), DateTime.UtcNow.ToString("o") + "\n" + ex);
+            }
+        }
+        catch { }
+
+        if (IsActive) SentrySdk.CaptureException(ex);
+    }
+
+    private JournalEventBus? _attachedBus;
+    private Action<JournalEntry, Exception>? _attachedHandler;
+
+    /// <summary>
     /// Forward journal-event handler errors to the reporter, and redact <paramref name="commander"/>'s
     /// name from every report. Called for each engine the app builds; the most recent one wins.
     /// </summary>
     public void Attach(JournalEventBus bus, CommanderState commander)
     {
-        bus.HandlerError += (_, ex) => Capture(ex);
+        if (_attachedBus is not null && _attachedHandler is not null)
+            _attachedBus.HandlerError -= _attachedHandler;
+
+        _attachedHandler = (entry, ex) => Capture(ex, entry.Event);
+        _attachedBus = bus;
+        bus.HandlerError += _attachedHandler;
         _commander = commander;
     }
 

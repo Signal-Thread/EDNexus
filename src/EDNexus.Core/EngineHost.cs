@@ -260,13 +260,45 @@ public sealed class EngineHost : IDisposable
     {
         if (_watcher is null) return;
         _watcher.Replay();
+        BeginWatching(_watcher);
+    }
 
+    /// <summary>
+    /// Like <see cref="Start"/>, but runs the (potentially long) journal replay on a worker thread so
+    /// a UI-thread caller isn't blocked while a large journal is parsed.
+    /// </summary>
+    public async Task StartAsync()
+    {
+        if (_watcher is null) return;
+        await Task.Run(_watcher.Replay).ConfigureAwait(false);
+        BeginWatching(_watcher);
+    }
+
+    private void BeginWatching(JournalWatcher watcher)
+    {
         // Now that the commander picture is warm, put it in front of viewers. The card service is
         // built in the constructor, before any of this has happened, so it deliberately publishes
         // nothing until asked.
         _twitchCard?.RequestPublish();
 
-        _runTask = Task.Run(() => _watcher.RunAsync(_cts.Token));
+        watcher.Error += OnWatcherError;
+        // The watcher catches its own per-tick failures, so this fires only if the loop itself dies.
+        // Observing the task keeps that from being swallowed silently while the UI says "Watching".
+        _runTask = Task.Run(() => watcher.RunAsync(_cts.Token));
+        _runTask.ContinueWith(
+            t => OnWatcherError(t.Exception!.GetBaseException()),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>Raised when the journal watcher hits an unexpected error (the loop keeps running unless it died).</summary>
+    public event Action<Exception>? WatcherError;
+
+    private void OnWatcherError(Exception ex)
+    {
+        System.Diagnostics.Trace.TraceError("Journal watcher error: " + ex);
+        WatcherError?.Invoke(ex);
     }
 
     public void Dispose()

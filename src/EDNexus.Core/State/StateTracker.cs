@@ -45,11 +45,40 @@ public sealed class StateTracker
         });
     }
 
-    private void OnCommander(JournalEntry e) => _state.Name = e.GetString("Name") ?? _state.Name;
+    private void OnCommander(JournalEntry e) => SetCommanderName(e.GetString("Name"));
+
+    /// <summary>
+    /// Adopts the commander name from <c>Commander</c>/<c>LoadGame</c>. A different commander than the one
+    /// already loaded (the same session, or a replayed journal, can switch accounts) must not inherit the
+    /// previous one's carrier or suit, so those are cleared first. Logging back in as the same commander
+    /// keeps them — a scheduled carrier jump, say, outlives a relog.
+    /// </summary>
+    private void SetCommanderName(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return;
+        if (_state.Name is { Length: > 0 } previous
+            && !string.Equals(previous, name, StringComparison.OrdinalIgnoreCase))
+            ResetPerCommanderState();
+        _state.Name = name;
+    }
+
+    private void ResetPerCommanderState()
+    {
+        _state.CarrierName = null;
+        _state.CarrierCallsign = null;
+        _state.CarrierFuel = 0;
+        _state.CarrierJumpRange = 0;
+        _state.CarrierUsedCapacity = 0;
+        _state.CarrierPendingSystem = null;
+        _state.CarrierPendingDeparture = null;
+        _state.SuitName = null;
+        _state.SuitSymbol = null;
+        _state.SuitClass = 0;
+    }
 
     private void OnLoadGame(JournalEntry e)
     {
-        _state.Name = e.GetString("Commander") ?? _state.Name;
+        SetCommanderName(e.GetString("Commander"));
         _state.Ship = e.GetLocalised("Ship") ?? _state.Ship;
         _state.ShipName = e.GetString("ShipName") ?? _state.ShipName;
         _state.ShipIdent = e.GetString("ShipIdent") ?? _state.ShipIdent;
@@ -105,7 +134,8 @@ public sealed class StateTracker
     {
         _state.CarrierPendingSystem = e.GetString("SystemName");
         _state.CarrierPendingDeparture =
-            e.Raw.TryGetProperty("DepartureTime", out var d) && d.TryGetDateTimeOffset(out var t) ? t : null;
+            e.Raw.TryGetProperty("DepartureTime", out var d) && d.ValueKind == JsonValueKind.String
+            && d.TryGetDateTimeOffset(out var t) ? t : null;
     }
 
     private void OnCarrierJumpCancelled(JournalEntry e)

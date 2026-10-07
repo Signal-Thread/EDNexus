@@ -43,6 +43,7 @@ public sealed class ExobiologyTracker
         bus.Subscribe("ApproachBody", OnApproachBody);
         bus.Subscribe("Touchdown", OnApproachBody);
         bus.Subscribe("LeaveBody", OnLeaveBody);
+        bus.Subscribe("Died", OnDied);
     }
 
     /// <summary>Every body known to carry biological signals, richest estimate first.</summary>
@@ -330,6 +331,23 @@ public sealed class ExobiologyTracker
     private void OnLeaveBody(JournalEntry e)
     {
         lock (_gate) _currentBody = null;
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// The commander died. Biological samples are carried on the suit, and (per the game's rules as
+    /// documented by Frontier and the community) dying forfeits everything unsold: runs part-way through
+    /// and finished-but-unsold data alike. Without this they would sit in the pending list, and in the
+    /// "carrying" total on the stream card, until the next sale that could never happen. The sold
+    /// tally is untouched: that money was already banked.
+    /// </summary>
+    private void OnDied(JournalEntry e)
+    {
+        lock (_gate)
+        {
+            _scans.Clear();
+            _currentBody = null;
+        }
         Changed?.Invoke();
     }
 
