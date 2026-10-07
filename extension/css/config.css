@@ -3,9 +3,9 @@
 @import url("tokens.css");
 
 :root {
-  --ednx-bg: #0e0f12;
-  --ednx-raised: rgba(255, 255, 255, 0.04);
-  --ednx-line: rgba(255, 255, 255, 0.12);
+  --ednx-bg: var(--ednx-page-bg);
+  --ednx-raised: var(--ednx-page-raised);
+  --ednx-line: var(--ednx-page-line);
 }
 
 * { box-sizing: border-box; }
@@ -16,14 +16,14 @@ body {
   background: var(--ednx-bg);
   color: var(--ednx-ink);
   font-family: var(--ednx-font);
-  font-size: 14px;
+  font-size: var(--ednx-text-body);
   line-height: 1.5;
 }
 
 .wrap { max-width: 520px; margin: 0 auto; }
 
 h1 { margin: 0 0 4px; font-size: 18px; }
-h2 { margin: 0 0 6px; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ednx-ink-soft); }
+h2 { margin: 0 0 6px; font-size: var(--ednx-text-label); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ednx-ink-soft); }
 
 .lede { margin: 0 0 18px; color: var(--ednx-ink-soft); }
 
@@ -36,25 +36,32 @@ h2 { margin: 0 0 6px; font-size: 13px; letter-spacing: 0.04em; text-transform: u
   background: var(--ednx-raised);
 }
 
-.hint { margin: 0 0 10px; font-size: 12.5px; color: var(--ednx-ink-soft); }
+.steps { margin: 0 0 10px; padding-left: 20px; }
+.steps li { margin-bottom: 6px; }
+.steps li::marker { color: var(--ednx-orange); font-weight: 600; }
+
+/* `display: block` on .panel would otherwise beat the user agent's [hidden] rule (dev form). */
+.panel[hidden] { display: none; }
+
+.hint { margin: 0 0 10px; font-size: var(--ednx-text-label); color: var(--ednx-ink-soft); }
 
 code {
   padding: 1px 4px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
-  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  font-size: 12px;
+  background: var(--ednx-page-code-bg);
+  font-family: var(--ednx-mono);
+  font-size: var(--ednx-text-label);
 }
 
 .field { display: block; }
-.field__label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--ednx-ink-soft); }
+.field__label { display: block; margin-bottom: 4px; font-size: var(--ednx-text-label); color: var(--ednx-ink-soft); }
 
 input[type="url"] {
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--ednx-line);
   border-radius: 5px;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--ednx-page-field-bg);
   color: var(--ednx-ink);
   font: inherit;
 }
@@ -77,6 +84,6 @@ input[type="url"]:focus { outline: 2px solid var(--ednx-orange); outline-offset:
 .button:hover { filter: brightness(1.08); }
 .button:focus-visible { outline: 2px solid var(--ednx-ink); outline-offset: 2px; }
 
-.status { font-size: 12.5px; }
+.status { font-size: var(--ednx-text-label); }
 .status--ok { color: var(--ednx-good); }
 .status--error { color: var(--ednx-bad); }

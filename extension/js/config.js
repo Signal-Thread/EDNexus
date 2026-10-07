@@ -1,15 +1,27 @@
 /*
- * Broadcaster config page. Writes a single { "ebsBaseUrl": "..." } document to the extension
- * configuration service, which js/state.js reads back on the viewer side.
+ * Broadcaster config page. In production it only shows setup guidance (see config.html) and writes
+ * nothing.
+ *
+ * The one exception is a development aid: when the page is served from localhost, a small form lets
+ * a local test choose a local EBS. It writes a { "ebsBaseUrl": "..." } document to the extension
+ * configuration service, which js/state.js reads back, again only on a localhost page, and only for
+ * a loopback URL. A production viewer's fetch target is never taken from configuration, because the
+ * channel controls that document and the viewer's browser would otherwise be pointed at whatever
+ * host it names.
  */
 (function (global) {
   'use strict';
 
   var doc = global.document;
+  var state = global.EDNexusState;
+  var form = doc.getElementById('dev-form');
   var input = doc.getElementById('ebs');
-  var saveButton = doc.getElementById('save');
   var status = doc.getElementById('status');
   var helper = global.Twitch && global.Twitch.ext;
+
+  // Not a development page: nothing to do, and the form stays hidden.
+  if (!form || !state || !state.isDevHost()) return;
+  form.hidden = false;
 
   function say(message, isError) {
     status.textContent = message;
@@ -27,19 +39,11 @@
     }
   }
 
-  /** Same rule the viewer side enforces: https, or a loopback host for local development. */
+  /** Empty clears the override; anything else must be a loopback URL. Returns null when invalid. */
   function normalizeUrl(raw) {
     var value = (raw || '').trim();
     if (!value) return '';
-    var url;
-    try {
-      url = new URL(value);
-    } catch (err) {
-      return null;
-    }
-    var loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
-    if (url.protocol !== 'https:' && !loopback) return null;
-    return url.origin;
+    return state.loopbackOrigin(value);
   }
 
   // onAuthorized does not mean the configuration has arrived — Twitch delivers that through
@@ -49,7 +53,7 @@
     var loaded = false;
 
     /** @param {boolean} fromConfig True only when Twitch has actually delivered the configuration. */
-    function showSavedUrl(fromConfig) {
+    var showSavedUrl = function (fromConfig) {
       // Never clobber an edit in progress: onChanged also fires on a token refresh, and on the
       // broadcaster's own save.
       if (loaded) return;
@@ -59,7 +63,7 @@
       if (fromConfig) loaded = true;
       if (input.value.trim() !== '') return;
       input.value = currentConfig().ebsBaseUrl || '';
-    }
+    };
 
     if (helper.configuration && typeof helper.configuration.onChanged === 'function') {
       helper.configuration.onChanged(function () { showSavedUrl(true); });
@@ -69,10 +73,13 @@
     helper.onAuthorized(function () { showSavedUrl(false); });
   }
 
-  saveButton.addEventListener('click', function () {
+  // A real <form>, so Enter in the field saves as well as the button.
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+
     var normalized = normalizeUrl(input.value);
     if (normalized === null) {
-      say('That is not a valid https URL.', true);
+      say('That is not a localhost URL.', true);
       return;
     }
 
