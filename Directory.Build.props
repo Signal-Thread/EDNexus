@@ -1,0 +1,16 @@
+<Project>
+
+  <!--
+    Repo-wide build defaults (every project already opted into these individually; this keeps new
+    projects from forgetting). Warnings are errors so a regression fails the build instead of piling up.
+    NuGet vulnerability-audit warnings are excluded: a newly published advisory must not suddenly break
+    restore/CI for an unrelated change (Dependabot handles those).
+  -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+  </PropertyGroup>
+
+</Project>
