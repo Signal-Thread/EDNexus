@@ -30,14 +30,15 @@ public sealed class EdsmSystemLookup : ISystemLookup
         if (string.IsNullOrWhiteSpace(systemName)) return null;
 
         var key = "edsm|system|" + systemName.Trim().ToLowerInvariant();
-        if (_cache?.Get(key) is string cached)
-            return JsonSerializer.Deserialize<SystemInfo>(cached, Json);
+        if (_cache.GetTyped<SystemInfo>(key, Json) is { } cached)
+            return cached;
 
         var result = await _client.GetSystemAsync(systemName, ct).ConfigureAwait(false);
         if (!result.IsOk || result.Value is null) return null;
 
         var info = Map(result.Value);
-        _cache?.Put(key, JsonSerializer.Serialize(info, Json));
+        // A system EDSM knows without coordinates may gain them later: do not pin that for the whole TTL.
+        if (info.Coords is not null) _cache?.Put(key, JsonSerializer.Serialize(info, Json));
         return info;
     }
 

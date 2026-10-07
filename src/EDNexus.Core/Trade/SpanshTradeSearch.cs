@@ -29,8 +29,8 @@ public sealed class SpanshTradeSearch : ITradeSearch
     public async Task<IReadOnlyList<TradeStationQuote>> SearchAsync(TradeQuery query, CancellationToken ct = default)
     {
         var key = CacheKey(query);
-        if (_cache?.Get(key) is string cached)
-            return Deserialize(cached);
+        if (_cache.GetTyped<List<TradeStationQuote>>(key, Json) is { } cached)
+            return cached;
 
         var result = await _client.SearchStationsAsync(new SpanshStationQuery
         {
@@ -70,9 +70,6 @@ public sealed class SpanshTradeSearch : ITradeSearch
 
         return quotes;
     }
-
-    private static IReadOnlyList<TradeStationQuote> Deserialize(string json)
-        => JsonSerializer.Deserialize<List<TradeStationQuote>>(json, Json) ?? new List<TradeStationQuote>();
 
     private static string CacheKey(TradeQuery q) =>
         $"spansh|stations|{q.Mode}|{q.ReferenceSystem}|{CommodityName.Canonicalize(q.Commodity)}|{q.MaxResults}";

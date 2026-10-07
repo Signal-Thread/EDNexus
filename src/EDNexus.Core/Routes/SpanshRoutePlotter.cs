@@ -36,8 +36,8 @@ public sealed class SpanshRoutePlotter : IRoutePlotter
         if (request.Mode == RouteMode.NeutronHighway && request.JumpRangeLy <= 0) return null;
 
         var key = CacheKey(request);
-        if (_cache?.Get(key) is string cached && Deserialize(cached, request) is { } hit)
-            return hit;
+        if (_cache.GetTyped<List<RouteHop>>(key, Json) is { Count: > 0 } cachedHops)
+            return new RoutePlan(request.From, request.To, cachedHops, request.Mode);
 
         var result = await PlotWithSpanshAsync(request, ct).ConfigureAwait(false);
 
@@ -87,12 +87,6 @@ public sealed class SpanshRoutePlotter : IRoutePlotter
     private static RouteHop ToHop(SpanshRouteWaypoint w) => new(
         w.System, w.Jumps, w.IsNeutron, w.DistanceJumpedLy, w.DistanceRemainingLy,
         w.FuelUsed, w.FuelInTank, w.IsScoopable, w.MustRestock, w.RestockAmount, w.HasIcyRing);
-
-    private static RoutePlan? Deserialize(string json, RoutePlotRequest request)
-    {
-        var hops = JsonSerializer.Deserialize<List<RouteHop>>(json, Json);
-        return hops is { Count: > 0 } ? new RoutePlan(request.From, request.To, hops, request.Mode) : null;
-    }
 
     private static string CacheKey(RoutePlotRequest r) =>
         "spansh|route|" + string.Join("|", new[]
