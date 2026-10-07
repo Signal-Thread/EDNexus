@@ -13,6 +13,10 @@ on:
 # never committed. Configure at Settings → Secrets and variables → Actions:
 #   SENTRY_DSN         (required to enable crash reporting in released builds)
 #   SENTRY_AUTH_TOKEN  (optional; enables debug-symbol upload for readable stack traces)
+# Least privilege by default; only the job that publishes the release is granted write access.
+permissions:
+  contents: read
+
 jobs:
   version:
     runs-on: ubuntu-latest
@@ -21,15 +25,33 @@ jobs:
     steps:
       - id: v
         shell: bash
+        # The dispatch input is attacker-influenced text: it is passed through env (never interpolated
+        # into the script) and validated before it can reach any later step that holds secrets.
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          VERSION="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          if ! [[ "$VERSION" =~ ^[0-9][0-9A-Za-z.+-]*$ ]]; then
+            echo "::error::Invalid version '$VERSION' (expected e.g. 0.1.0 or 0.1.0-beta.1)"
+            exit 1
           fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  # Releases only ship from a commit whose tests pass.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test
+        run: dotnet test EDNexus.slnx --configuration Release
 
   windows:
-    needs: version
+    needs: [version, test]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -39,20 +61,41 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - name: Install Inno Setup
-        run: choco install innosetup -y --no-progress
+        run: choco install innosetup --version=6.4.3 -y --no-progress
       - name: Build installer (Inno Setup)
         shell: pwsh
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: ./installer/windows/build.ps1 -Version ${{ needs.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: ./installer/windows/build.ps1 -Version $env:VERSION
+      # OPTIONAL Authenticode signing (not yet exercised; skipped unless the secrets below exist).
+      # A checksum published beside the installer proves integrity only; a signature from a code-signing
+      # certificate is what lets users (and a future updater check) trust who built it.
+      #   WINDOWS_SIGNING_CERT_PFX_BASE64  base64 of the .pfx   WINDOWS_SIGNING_CERT_PASSWORD  its password
+      - name: Sign installer (optional)
+        shell: pwsh
+        env:
+          SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT_PFX_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          if (-not $env:SIGNING_CERT) { Write-Host "No signing certificate configured; installer left unsigned."; exit 0 }
+          $pfx = Join-Path $env:RUNNER_TEMP 'sign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERT))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          try {
+            Get-ChildItem installer/windows/out/*.exe | ForEach-Object {
+              & $signtool.FullName sign /f $pfx /p $env:SIGNING_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed" }
+            }
+          } finally { Remove-Item $pfx -Force -ErrorAction SilentlyContinue }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-installer
           path: installer/windows/out/*.exe
 
   linux:
-    needs: version
+    needs: [version, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -72,9 +115,10 @@ jobs:
       - name: Build Flatpak bundle + payload
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           chmod +x packaging/flatpak/build-flatpak.sh
-          ./packaging/flatpak/build-flatpak.sh ${{ needs.version.outputs.version }}
+          ./packaging/flatpak/build-flatpak.sh "$VERSION"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-flatpak
