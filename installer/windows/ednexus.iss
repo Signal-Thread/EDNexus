@@ -2,8 +2,9 @@
 ;
 ; Installs a self-contained build to:
 ;     C:\Program Files\Signal & Thread\EDNexus\
-; User preferences are NOT stored here — they live in Documents\EDNexus (see SettingsStore),
-; which stays writable without admin rights.
+; User data is NOT stored here: settings, logs and downloaded updates live in
+; %LOCALAPPDATA%\EDNexus (see SettingsStore), which stays writable without admin rights. Uninstall
+; removes the update cache and, only if the user opts in (default: keep), the settings and logs.
 ;
 ; Build (version and the published-app dir are supplied on the command line):
 ;     ISCC.exe /DAppVersion=1.2.3 /DPublishDir=...\publish /Oout ednexus.iss
@@ -36,6 +37,8 @@ SolidCompression=yes
 WizardStyle=modern
 ; Program Files install requires elevation; 64-bit only.
 PrivilegesRequired=admin
+; Windows 10 1607 (build 14393) is the floor for the .NET 10 runtime the self-contained build ships.
+MinVersion=10.0.14393
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
@@ -52,3 +55,22 @@ Name: "{autodesktop}\EDNexus"; Filename: "{app}\EDNexus.App.exe"; Tasks: desktop
 
 [Run]
 Filename: "{app}\EDNexus.App.exe"; Description: "Launch EDNexus"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+; Downloaded update installers are a cache; never leave them behind.
+Type: filesandordirs; Name: "{localappdata}\EDNexus\updates"
+
+[Code]
+// Offer to remove settings (which can hold an Inara API key) and logs. The default button is No
+// (keep), so a reinstall does not lose configuration; silent uninstalls always keep.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if (CurUninstallStep = usPostUninstall) and (not UninstallSilent()) then
+  begin
+    if MsgBox('Also delete your EDNexus settings and logs?' + #13#10 + #13#10 +
+              ExpandConstant('{localappdata}\EDNexus') + #13#10 + #13#10 +
+              'Choose No to keep them (recommended if you plan to reinstall).',
+              mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+      DelTree(ExpandConstant('{localappdata}\EDNexus'), True, True, True);
+  end;
+end;

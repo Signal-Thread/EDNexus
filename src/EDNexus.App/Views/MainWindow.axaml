@@ -210,9 +210,8 @@
     <Border DockPanel.Dock="Bottom" Background="{StaticResource UpdateBarBg}" BorderBrush="{StaticResource CardBorder}"
             BorderThickness="0,0,0,1" Padding="12" IsVisible="{Binding UpdateAvailable}">
       <Grid ColumnDefinitions="*,Auto">
-        <TextBlock Text="An update was downloaded" Foreground="{StaticResource Ink}" VerticalAlignment="Center" />
+        <TextBlock Text="An update was downloaded and verified. It is ready to install." Foreground="{StaticResource Ink}" VerticalAlignment="Center" />
         <StackPanel Orientation="Horizontal" Grid.Column="1" Spacing="8" VerticalAlignment="Center">
-          <TextBlock Text="An update is ready to install" Foreground="{StaticResource Ink}" VerticalAlignment="Center" />
           <Button Content="Install" Command="{Binding InstallUpdateCommand}" Classes="action" Margin="8,0,0,0"/>
         </StackPanel>
       </Grid>
