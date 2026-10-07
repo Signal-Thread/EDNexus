@@ -31,6 +31,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check the transport logic
+        run: node extension/dev/test-state.js
+
       - name: Stage the files Twitch serves
         run: |
           mkdir -p bundle
@@ -45,7 +48,7 @@ jobs:
           fail=0
 
           # Paths configured in the developer console, resolved against the Base URI.
-          for required in video_overlay.html config.html js/state.js js/card.js css/card.css css/config.css; do
+          for required in video_overlay.html config.html js/state.js js/card.js js/config.js css/tokens.css css/card.css css/config.css; do
             if [ ! -f "bundle/$required" ]; then
               echo "::error::missing from the bundle: $required"
               fail=1
@@ -65,6 +68,13 @@ jobs:
               fail=1
             fi
           done
+
+          # Twitch's extension CSP rejects inline script and style, and a review flags links out of
+          # an overlay. Both are cheap to catch here and slow to catch in review.
+          if grep -nP '<script(?![^>]*\bsrc=)|<style|\sstyle=|\starget=' bundle/*.html; then
+            echo "::error::inline script/style or a target= link in a view (see the lines above)"
+            fail=1
+          fi
 
           exit $fail
 
