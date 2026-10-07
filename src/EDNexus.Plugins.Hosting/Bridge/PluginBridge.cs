@@ -43,6 +43,7 @@ public sealed class PluginBridge : IDisposable
     private readonly JournalEventBus _bus;
     private readonly CommanderStatePublisher _snapshots;
     private readonly PluginBridgeOptions _options;
+    private readonly Func<bool> _isSimulated;
 
     /// <param name="bus">The engine bus to observe. The bridge only ever subscribes to it.</param>
     /// <param name="state">
@@ -58,7 +59,10 @@ public sealed class PluginBridge : IDisposable
             throw new ArgumentOutOfRangeException(nameof(options), "QueueCapacity must be at least 1.");
         _bus = bus;
         _options = options ?? new PluginBridgeOptions();
-        _snapshots = new CommanderStatePublisher(bus, state);
+        _isSimulated = SafePredicate(_options.IsSimulated);
+        // Must be registered here, before any session's completed hook, so each event's snapshot
+        // is published before that event is queued to plugins.
+        _snapshots = new CommanderStatePublisher(bus, state, _isSimulated);
     }
 
     /// <summary>
@@ -93,15 +97,17 @@ public sealed class PluginBridge : IDisposable
         // enforced in-process, so revoking the grant does not stop a plugin phoning home, and the
         // fabricated data must stay withheld (fail closed).
         var networked = manifest.Declares(PluginCapabilities.Network);
-        var isSimulated = SafePredicate(_options.IsSimulated);
+        // State is withheld per snapshot: each records whether it was built from developer-mode
+        // events, so a fabricated commander stays hidden even if the predicate flips back before
+        // this session is disposed (e.g. the app tears the dev-mode host down first).
         var onError = _options.HandlerError ?? (static _ => { });
 
         var events = granted.Contains(PluginCapabilities.Events)
-            ? new PluginEvents(_bus, manifest.Id, networked, isSimulated, onError, _options.QueueCapacity)
+            ? new PluginEvents(_bus, manifest.Id, networked, _isSimulated, onError, _options.QueueCapacity)
             : null;
 
         var view = granted.Contains(PluginCapabilities.State)
-            ? new CommanderStateView(_snapshots, networked ? isSimulated : static () => false)
+            ? new CommanderStateView(_snapshots, networked, _isSimulated)
             : null;
 
         return new PluginBridgeSession(
@@ -113,8 +119,10 @@ public sealed class PluginBridge : IDisposable
     }
 
     /// <summary>
-    /// Stops refreshing the state snapshot and unhooks from the bus and state. Dispose the sessions
-    /// first; a view left attached keeps returning the last snapshot taken.
+    /// Stops refreshing the state snapshot, unhooks from the bus and state, and drops the bridge's
+    /// references into the engine, so a state view a plugin kept hold of no longer pins the
+    /// <see cref="CommanderState"/>. Dispose the sessions first; a view left attached keeps
+    /// returning the last snapshot taken (still withheld from networked plugins if it was simulated).
     /// </summary>
     public void Dispose() => _snapshots.Dispose();
 
@@ -138,8 +146,9 @@ public sealed class PluginBridgeOptions
 {
     /// <summary>
     /// Live predicate: true while the bus is carrying developer-mode (fabricated) events. Evaluated on
-    /// the journal thread as each event is published, and on plugin threads as network-declaring
-    /// plugins read state, so keep it cheap. The app passes the same predicate it gives
+    /// the journal thread as each event is published (and stamped onto that event's state
+    /// snapshot), and on plugin threads as network-declaring plugins read state, so keep it cheap.
+    /// A predicate that throws is treated as true. The app passes the same predicate it gives
     /// <c>EngineHost</c> as <c>reportingSuppressed</c>.
     /// </summary>
     public Func<bool>? IsSimulated { get; init; }

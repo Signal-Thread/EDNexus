@@ -27,14 +27,32 @@ namespace EDNexus.Plugins.Hosting.Bridge;
 /// handful of scalar reads.
 /// </para>
 /// <para>
+/// Each snapshot also records whether it was built while the bus was carrying developer-mode
+/// (fabricated) events (<see cref="CommanderStateSnapshot.Simulated"/>). The developer-mode predicate
+/// is evaluated once, when the snapshot is built, so a snapshot of a fabricated commander stays
+/// marked as such even after the predicate flips back — whatever order the app tears the old host,
+/// the predicate and this bridge's sessions down in.
+/// </para>
+/// <para>
+/// <see cref="Publish"/> is serialised, so when two threads publish on the same bus (developer
+/// mode's Randomize on the UI thread, the journal watcher on the thread pool) the last snapshot
+/// written is the one built last, after the latest completed event. That only orders the
+/// snapshots: <c>StateTracker</c> itself is not synchronised across publishers, so two events
+/// applied concurrently can still interleave in <see cref="CommanderState"/>, and a snapshot taken
+/// then reflects that interleaving.
+/// </para>
+/// <para>
 /// The first snapshot is taken at construction. Build the bridge before the engine starts pumping
-/// (or accept that it is corrected by the next event).
+/// (or accept that it is corrected by the next event). After <see cref="Dispose"/> the publisher
+/// drops every reference into the engine; <see cref="Current"/> keeps returning the last snapshot.
 /// </para>
 /// </remarks>
 internal sealed class CommanderStatePublisher : IDisposable
 {
-    private readonly CommanderState _state;
-    private readonly IDisposable _hook;
+    private readonly object _gate = new();
+    private readonly Func<bool> _isSimulated;
+    private CommanderState? _state;
+    private IDisposable? _hook;
     private CommanderStateSnapshot _current;
     private IReadOnlyDictionary<string, int> _cargo;
     private IReadOnlyDictionary<string, int> _raw;
@@ -43,14 +61,21 @@ internal sealed class CommanderStatePublisher : IDisposable
     private int _cargoDirty;
     private int _materialsDirty;
 
-    public CommanderStatePublisher(JournalEventBus bus, CommanderState state)
+    /// <param name="bus">The engine bus; the publisher hooks its completed-event stage.</param>
+    /// <param name="state">The engine's commander state, only ever read.</param>
+    /// <param name="isSimulated">
+    /// The developer-mode predicate, stamped onto each snapshot as it is built. Must not throw
+    /// (the bridge wraps it to fail closed).
+    /// </param>
+    public CommanderStatePublisher(JournalEventBus bus, CommanderState state, Func<bool> isSimulated)
     {
         _state = state;
+        _isSimulated = isSimulated;
         _cargo = CommanderStateSnapshot.Freeze(state.Cargo);
         _raw = CommanderStateSnapshot.Freeze(state.Materials.Raw);
         _manufactured = CommanderStateSnapshot.Freeze(state.Materials.Manufactured);
         _encoded = CommanderStateSnapshot.Freeze(state.Materials.Encoded);
-        _current = Build();
+        _current = Build(state);
 
         state.CargoChanged += MarkCargoDirty;
         state.MaterialsChanged += MarkMaterialsDirty;
@@ -64,42 +89,61 @@ internal sealed class CommanderStatePublisher : IDisposable
 
     private void MarkMaterialsDirty() => Volatile.Write(ref _materialsDirty, 1);
 
-    /// <summary>Runs on the journal thread after every engine handler has seen the entry.</summary>
+    /// <summary>Runs on the publishing thread after every engine handler has seen the entry.</summary>
     private void Publish()
     {
-        if (Interlocked.Exchange(ref _cargoDirty, 0) == 1)
-            _cargo = CommanderStateSnapshot.Freeze(_state.Cargo);
-        if (Interlocked.Exchange(ref _materialsDirty, 0) == 1)
+        lock (_gate)
         {
-            _raw = CommanderStateSnapshot.Freeze(_state.Materials.Raw);
-            _manufactured = CommanderStateSnapshot.Freeze(_state.Materials.Manufactured);
-            _encoded = CommanderStateSnapshot.Freeze(_state.Materials.Encoded);
+            if (_state is not { } state) return;   // disposed
+            if (Interlocked.Exchange(ref _cargoDirty, 0) == 1)
+                _cargo = CommanderStateSnapshot.Freeze(state.Cargo);
+            if (Interlocked.Exchange(ref _materialsDirty, 0) == 1)
+            {
+                _raw = CommanderStateSnapshot.Freeze(state.Materials.Raw);
+                _manufactured = CommanderStateSnapshot.Freeze(state.Materials.Manufactured);
+                _encoded = CommanderStateSnapshot.Freeze(state.Materials.Encoded);
+            }
+            Volatile.Write(ref _current, Build(state));
         }
-        Volatile.Write(ref _current, Build());
     }
 
-    private CommanderStateSnapshot Build() => new()
+    private CommanderStateSnapshot Build(CommanderState state) => new()
     {
-        Name = _state.Name,
-        Balance = _state.Balance,
-        Ship = _state.Ship,
-        ShipName = _state.ShipName,
-        StarSystem = _state.StarSystem,
-        Body = _state.Body,
-        Docked = _state.Docked,
-        StationDisplayName = _state.StationDisplayName,
-        LastUpdated = _state.LastUpdated,
+        Name = state.Name,
+        Balance = state.Balance,
+        Ship = state.Ship,
+        ShipName = state.ShipName,
+        StarSystem = state.StarSystem,
+        Body = state.Body,
+        Docked = state.Docked,
+        StationDisplayName = state.StationDisplayName,
+        LastUpdated = state.LastUpdated,
         Cargo = _cargo,
         RawMaterials = _raw,
         ManufacturedMaterials = _manufactured,
         EncodedMaterials = _encoded,
+        Simulated = _isSimulated(),
     };
 
+    /// <summary>
+    /// Unhooks from the bus and state and drops both references, so a view that outlives the
+    /// bridge pins only immutable snapshots, not the engine.
+    /// </summary>
     public void Dispose()
     {
-        _hook.Dispose();
-        _state.CargoChanged -= MarkCargoDirty;
-        _state.MaterialsChanged -= MarkMaterialsDirty;
+        CommanderState? state;
+        IDisposable? hook;
+        lock (_gate)
+        {
+            state = _state;
+            hook = _hook;
+            _state = null;
+            _hook = null;
+        }
+        hook?.Dispose();
+        if (state is null) return;
+        state.CargoChanged -= MarkCargoDirty;
+        state.MaterialsChanged -= MarkMaterialsDirty;
     }
 }
 
@@ -111,11 +155,17 @@ internal sealed class CommanderStatePublisher : IDisposable
 /// reads may straddle an event; <see cref="Snapshot"/> returns one consistent snapshot.
 /// </summary>
 /// <param name="publisher">The bridge's snapshot source. Dropped on <see cref="Revoke"/>.</param>
-/// <param name="hidden">
-/// While this returns true the view reads as an unknown commander (see
-/// <see cref="PluginBridgeOptions.IsSimulated"/>).
+/// <param name="networked">
+/// Whether the plugin declares <c>network</c>. A networked view reads as an unknown commander
+/// whenever the snapshot was built from developer-mode events
+/// (<see cref="CommanderStateSnapshot.Simulated"/>) or <paramref name="isSimulated"/> is true now
+/// (see <see cref="PluginBridgeOptions.IsSimulated"/>). Either is enough: the snapshot flag keeps a
+/// fabricated commander hidden after the predicate flips back, and the live check hides the last
+/// live snapshot as soon as developer mode turns on.
 /// </param>
-internal sealed class CommanderStateView(CommanderStatePublisher publisher, Func<bool> hidden) : IReadOnlyCommanderState
+/// <param name="isSimulated">The developer-mode predicate. Must not throw.</param>
+internal sealed class CommanderStateView(CommanderStatePublisher publisher, bool networked, Func<bool> isSimulated)
+    : IReadOnlyCommanderState
 {
     private CommanderStatePublisher? _publisher = publisher;
 
@@ -123,8 +173,9 @@ internal sealed class CommanderStateView(CommanderStatePublisher publisher, Func
     {
         get
         {
-            var source = Volatile.Read(ref _publisher);
-            return source is null || hidden() ? CommanderStateSnapshot.Unknown : source.Current;
+            if (Volatile.Read(ref _publisher) is not { } source) return CommanderStateSnapshot.Unknown;
+            var snapshot = source.Current;
+            return networked && (snapshot.Simulated || isSimulated()) ? CommanderStateSnapshot.Unknown : snapshot;
         }
     }
 
@@ -177,6 +228,12 @@ internal sealed class CommanderStateSnapshot : IReadOnlyCommanderState
     public IReadOnlyDictionary<string, int> RawMaterials { get; internal init; } = Empty;
     public IReadOnlyDictionary<string, int> ManufacturedMaterials { get; internal init; } = Empty;
     public IReadOnlyDictionary<string, int> EncodedMaterials { get; internal init; } = Empty;
+
+    /// <summary>
+    /// Whether the bus was carrying developer-mode (fabricated) events when this snapshot was built.
+    /// Not part of the plugin-facing interface; networked views use it to withhold the snapshot.
+    /// </summary>
+    internal bool Simulated { get; init; }
 
     public IReadOnlyCommanderState Snapshot() => this;
 

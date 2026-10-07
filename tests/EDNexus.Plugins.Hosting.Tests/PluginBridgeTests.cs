@@ -15,7 +15,25 @@ namespace EDNexus.Plugins.Hosting.Tests;
 /// </summary>
 public static class CollectibleProbe
 {
-    public static void Hook(IPluginEvents events, Action onEvent) => events.SubscribeAny(_ => onEvent());
+    private static readonly AsyncLocal<object?> Ambient = new();
+
+    /// <summary>
+    /// Subscribes with an <see cref="AsyncLocal{T}"/> holding an instance of a collectible type, as
+    /// plugin code easily might (logging scopes, ambient contexts). The first subscription starts
+    /// the dispatch thread; a plain <see cref="Thread.Start()"/> would capture this
+    /// <see cref="ExecutionContext"/> and the thread would hold the plugin's objects for its whole
+    /// life. <paramref name="onEvent"/> is told whether the handler saw the value, so the test
+    /// fails if the thread inherited it. Cleared before returning so the caller's own context
+    /// doesn't keep it.
+    /// </summary>
+    public static void Hook(IPluginEvents events, Action<bool> onEvent)
+    {
+        Ambient.Value = new Marker();
+        try { events.SubscribeAny(_ => onEvent(Ambient.Value is not null)); }
+        finally { Ambient.Value = null; }
+    }
+
+    private sealed class Marker;
 }
 
 public sealed class PluginBridgeTests : IDisposable
@@ -440,9 +458,15 @@ public sealed class PluginBridgeTests : IDisposable
 
         var session = Attach(Bridge(), "probe.plugin", PluginCapabilities.Events);
         using var seen = new ManualResetEventSlim();
-        probeType.GetMethod(nameof(CollectibleProbe.Hook))!.Invoke(null, [session.Events, (Action)seen.Set]);
+        var sawAmbient = true;
+        probeType.GetMethod(nameof(CollectibleProbe.Hook))!.Invoke(null,
+        [
+            session.Events,
+            (Action<bool>)(saw => { Volatile.Write(ref sawAmbient, saw); seen.Set(); }),
+        ]);
         Publish(Jump);
         Assert.True(seen.Wait(Wait));
+        Assert.False(Volatile.Read(ref sawAmbient), "The dispatch thread inherited the plugin's ExecutionContext.");
 
         session.Dispose();
         Assert.True(session.WaitForDispatchExit(Wait));
@@ -552,6 +576,80 @@ public sealed class PluginBridgeTests : IDisposable
         DrainAndAssertIdle(networked, withheld: true);
         Assert.Empty(seen);
         Assert.Null(networked.State.StarSystem);
+    }
+
+    [Fact]
+    public void DeveloperMode_FabricatedStateStaysHidden_WhenThePredicateFlipsBeforeTeardown()
+    {
+        // MainWindowViewModel.RebuildHost disposes the dev-mode host, then flips the predicate
+        // false, then builds the new host — the loader may dispose the old sessions only after that.
+        var simulated = true;
+        var bridge = Bridge(new PluginBridgeOptions { IsSimulated = () => Volatile.Read(ref simulated) });
+        var local = Attach(bridge, "local.plugin", PluginCapabilities.State);
+        var networked = Attach(bridge, "net.plugin", PluginCapabilities.State, PluginCapabilities.Network);
+
+        Publish(Jump);
+        Publish(Cargo);
+
+        // No further events reach the old bus; the predicate flips while the sessions are still live.
+        Volatile.Write(ref simulated, false);
+        Assert.Null(networked.State.StarSystem);
+        Assert.Empty(networked.State.Cargo);
+        Assert.Null(networked.State.Snapshot().StarSystem);
+        Assert.Equal("Sol", local.State.StarSystem);
+
+        // Nor does disposing the bridge ahead of the sessions reveal it.
+        bridge.Dispose();
+        Assert.Null(networked.State.StarSystem);
+        Assert.Equal("Sol", local.State.StarSystem);
+    }
+
+    [Fact]
+    public void DeveloperMode_SnapshotBuiltWhileThePredicateThrew_StaysHidden()
+    {
+        var throwing = true;
+        var bridge = Bridge(new PluginBridgeOptions
+        {
+            IsSimulated = () => Volatile.Read(ref throwing) ? throw new InvalidOperationException() : false,
+        });
+        var networked = Attach(bridge, "net.plugin", PluginCapabilities.State, PluginCapabilities.Network);
+
+        Publish(Jump);
+        Volatile.Write(ref throwing, false);
+
+        Assert.Null(networked.State.StarSystem);
+    }
+
+    [Fact]
+    public void DisposedBridge_DoesNotLetALeftoverViewPinTheEngineState()
+    {
+        var (view, state) = LeaveAViewBehind();
+
+        for (var i = 0; i < 20 && state.IsAlive; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+
+        Assert.False(state.IsAlive, "A state view that outlived its bridge kept the CommanderState alive.");
+        Assert.Equal("Sol", view.StarSystem);   // still reads the last snapshot
+        GC.KeepAlive(view);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (IReadOnlyCommanderState View, WeakReference State) LeaveAViewBehind()
+    {
+        var bus = new JournalEventBus();
+        var state = new CommanderState();
+        _ = new StateTracker(bus, state);
+        var bridge = new PluginBridge(bus, state);
+        var session = bridge.Attach(Manifest("leaky.plugin", PluginCapabilities.State));
+
+        Assert.True(JournalEntry.TryParse(Jump, false, out var entry));
+        bus.Publish(entry);
+
+        bridge.Dispose();   // the session is deliberately left undisposed
+        return (session.State, new WeakReference(state));
     }
 
     // ---- Adapter ----

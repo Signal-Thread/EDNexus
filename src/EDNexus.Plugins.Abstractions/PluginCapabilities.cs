@@ -13,7 +13,10 @@ public static class PluginCapabilities
     /// </summary>
     public const string Events = "events";
 
-    /// <summary>Read the live commander state (<see cref="IPluginContext.State"/>).</summary>
+    /// <summary>
+    /// Read the commander state (<see cref="IPluginContext.State"/>). This is not live: it is the
+    /// state as of the last completed journal event.
+    /// </summary>
     public const string State = "state";
 
     /// <summary>Contribute widgets to the dashboard (<see cref="IPluginContext.Ui"/>).</summary>

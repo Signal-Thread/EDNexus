@@ -167,8 +167,9 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
 
             foreach (var registration in handlers)
             {
-                // Re-checked per handler: once Dispose returns, no further handler starts (one
-                // already running cannot be interrupted).
+                // Re-checked per handler, but not under the lock: after Dispose returns, at most one
+                // handler that had already passed this check (and Matches) may still start, and one
+                // already running cannot be interrupted. WaitForExit is the real guarantee.
                 if (_disposed) return;
                 if (!registration.Matches(next)) continue;
                 try { registration.Handler(next); }
@@ -186,8 +187,10 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
 
     /// <summary>
     /// Unhooks from the bus, drops every handler and anything still queued, and lets the worker exit.
-    /// No handler starts after this returns. It does not wait for a handler that is mid-flight: that
-    /// would hand plugin code a way to hang whoever is unloading it (see <see cref="WaitForExit"/>).
+    /// After this returns, at most one handler that had already passed the worker's disposed check
+    /// may still run; nothing else is delivered. It does not wait for that handler: that would hand
+    /// plugin code a way to hang whoever is unloading it. <see cref="WaitForExit"/> is the real
+    /// guarantee that no plugin code is still running.
     /// </summary>
     public void Dispose()
     {
