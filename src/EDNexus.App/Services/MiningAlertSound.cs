@@ -18,6 +18,13 @@ public static class MiningAlertSound
     private static byte[]? _bytes;
     private static string? _tempPath;   // the external-player path needs a real file on disk
 
+    // Windows plays asynchronously from memory, so the buffer has to stay at a fixed address for as
+    // long as winmm might be reading it — a managed byte[] is only pinned for the duration of the
+    // P/Invoke call, and the GC may move it while the chime is still playing. One small unmanaged
+    // copy, allocated once and kept for the life of the process, sidesteps that entirely.
+    private static IntPtr _nativeBuffer;
+    private static readonly object NativeGate = new();
+
     /// <summary>Play the chime on a background thread; returns immediately.</summary>
     public static void Play()
     {
@@ -41,9 +48,25 @@ public static class MiningAlertSound
     /// </summary>
     private static void PlayViaWinmm()
     {
-        var bytes = LoadBytes();
-        if (bytes is null) return;
-        PlaySound(bytes, IntPtr.Zero, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+        var buffer = EnsureNativeBuffer();
+        if (buffer == IntPtr.Zero) return;
+        PlaySound(buffer, IntPtr.Zero, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+    }
+
+    private static IntPtr EnsureNativeBuffer()
+    {
+        lock (NativeGate)
+        {
+            if (_nativeBuffer != IntPtr.Zero) return _nativeBuffer;
+
+            var bytes = LoadBytes();
+            if (bytes is null) return IntPtr.Zero;
+
+            var buffer = Marshal.AllocHGlobal(bytes.Length);
+            Marshal.Copy(bytes, 0, buffer, bytes.Length);
+            _nativeBuffer = buffer;
+            return buffer;
+        }
     }
 
     /// <summary>
@@ -103,8 +126,15 @@ public static class MiningAlertSound
         if (bytes is null) return null;
         try
         {
-            var path = Path.Combine(Path.GetTempPath(), "ednexus-mining-alert.wav");
-            File.WriteAllBytes(path, bytes);
+            // Under the user's own app-data folder, not the shared system temp directory: a fixed,
+            // guessable name in a world-writable /tmp lets another local user plant a symlink there
+            // and have this write follow it.
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EDNexus", "sounds");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "mining-alert.wav");
+            if (!File.Exists(path) || new FileInfo(path).Length != bytes.Length)
+                File.WriteAllBytes(path, bytes);
             _tempPath = path;
             return path;
         }
@@ -123,5 +153,5 @@ public static class MiningAlertSound
     private const uint SND_MEMORY = 0x0004;
 
     [DllImport("winmm.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    private static extern bool PlaySound(byte[] pszSound, IntPtr hmod, uint fdwSound);
+    private static extern bool PlaySound(IntPtr pszSound, IntPtr hmod, uint fdwSound);
 }
