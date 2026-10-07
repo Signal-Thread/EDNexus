@@ -16,12 +16,19 @@ public sealed class InaraBridge : IAsyncDisposable
 {
     private static readonly TimeSpan SessionStartDebounce = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan MinInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RetryBackoff = TimeSpan.FromMinutes(1);
+
+    // A batch that hits transport/5xx errors is re-queued with exponential backoff up to this many times,
+    // then dropped; the pending list is also capped so a long outage cannot grow it without bound.
+    private const int MaxRetries = 3;
+    private const int MaxPending = 200;
 
     private readonly AppSettings _settings;
     private readonly InaraClient _client;
     private readonly Func<bool> _isSuppressed;
     private readonly TimeSpan _debounceDelay;
     private readonly TimeSpan _minInterval;
+    private readonly TimeSpan _retryBackoff;
     private readonly IReportingLog? _log;
     private readonly object _gate = new();
 
@@ -45,13 +52,16 @@ public sealed class InaraBridge : IAsyncDisposable
     private CancellationTokenSource? _debounce;
     private DateTimeOffset _lastFlush = DateTimeOffset.MinValue;
     private bool _stopped;   // set on a hard error (e.g. bad API key); cleared when disabled again
+    private bool _disposing; // final flush in progress: no throttle wait, no re-queue
+    private int _failures;   // consecutive transient send failures of the current batch
 
     public InaraBridge(JournalEventBus bus, AppSettings settings, InaraClient client, Func<bool>? isSuppressed = null, IReportingLog? log = null)
         : this(bus, settings, client, SessionStartDebounce, MinInterval, isSuppressed, log) { }
 
     /// <summary>Test-only constructor allowing the debounce/throttle windows to be shortened.</summary>
-    internal InaraBridge(JournalEventBus bus, AppSettings settings, InaraClient client, TimeSpan debounceDelay, TimeSpan minInterval, Func<bool>? isSuppressed = null, IReportingLog? log = null)
+    internal InaraBridge(JournalEventBus bus, AppSettings settings, InaraClient client, TimeSpan debounceDelay, TimeSpan minInterval, Func<bool>? isSuppressed = null, IReportingLog? log = null, TimeSpan? retryBackoff = null)
     {
+        _retryBackoff = retryBackoff ?? RetryBackoff;
         _settings = settings;
         _client = client;
         _isSuppressed = isSuppressed ?? (static () => false);
@@ -69,7 +79,9 @@ public sealed class InaraBridge : IAsyncDisposable
         bus.Subscribe("CarrierJump", e => Capture(() => TrackLocation(e)));
         bus.Subscribe("Docked", OnDocked);
         bus.Subscribe("FSDJump", OnFsdJump);
-        bus.Subscribe("Shutdown", _ => FlushImmediate());
+        // Only a live Shutdown ends a session worth reporting. A replayed one (EDNexus opened after the game
+        // was closed) must not push the last session snapshot to Inara.
+        bus.Subscribe("Shutdown", e => { if (!e.IsHistorical) FlushImmediate(urgent: true); });
     }
 
     private bool Enabled => _settings.Reporting.Inara.Enabled
@@ -82,12 +94,13 @@ public sealed class InaraBridge : IAsyncDisposable
         _commander = e.GetString("Commander") ?? _commander;
         _frontierId = e.GetString("FID") ?? _frontierId;
         TrackLocation(e);
+        if (e.IsHistorical) return;   // identity only: replayed history is never reported
         if (e.GetInt64("Credits") is long credits)
             AddOrReplaceSet(InaraEvent.SetCommanderCredits(e.Timestamp, credits, e.GetInt64("Loan")));
 
         // Session start: give the immediately-following Rank/Reputation/Loadout events a moment to
         // land, then send the assembled snapshot.
-        if (!e.IsHistorical) ScheduleFlush(_debounceDelay);
+        ScheduleFlush(_debounceDelay);
     });
 
     private void OnLoadout(JournalEntry e) => Capture(() =>
@@ -96,7 +109,7 @@ public sealed class InaraBridge : IAsyncDisposable
         _shipId = e.GetInt64("ShipID") ?? _shipId;
         _shipName = e.GetString("ShipName") ?? _shipName;
         _shipIdent = e.GetString("ShipIdent") ?? _shipIdent;
-        if (_shipType is not null)
+        if (_shipType is not null && !e.IsHistorical)
             AddOrReplaceSet(InaraEvent.SetCommanderShip(e.Timestamp, _shipType, _shipId, _shipName, _shipIdent));
     });
 
@@ -104,18 +117,19 @@ public sealed class InaraBridge : IAsyncDisposable
     {
         foreach (var name in RankNames)
             if (e.GetInt64(name) is long v) _rankValues[name.ToLowerInvariant()] = (int)v;
-        AddRanks(e.Timestamp);
+        if (!e.IsHistorical) AddRanks(e.Timestamp);
     });
 
     private void OnProgress(JournalEntry e) => Capture(() =>
     {
         foreach (var name in RankNames)
             if (e.GetInt64(name) is long p) _rankProgress[name.ToLowerInvariant()] = p / 100.0;
-        AddRanks(e.Timestamp);
+        if (!e.IsHistorical) AddRanks(e.Timestamp);
     });
 
     private void OnReputation(JournalEntry e) => Capture(() =>
     {
+        if (e.IsHistorical) return;
         var factions = new List<(string, double)>();
         foreach (var f in new[] { "Empire", "Federation", "Alliance", "Independent" })
             if (e.GetDouble(f) is double rep) factions.Add((f.ToLowerInvariant(), rep));
@@ -186,14 +200,14 @@ public sealed class InaraBridge : IAsyncDisposable
         });
     }
 
-    private void FlushImmediate()
+    private void FlushImmediate(bool urgent = false)
     {
         _debounce?.Cancel();
-        FlushNow();
+        FlushNow(urgent);
     }
 
     /// <summary>Snapshots the batch and chains an async send. Runs whatever thread triggered it.</summary>
-    private void FlushNow()
+    private void FlushNow(bool urgent = false)
     {
         if (_isSuppressed()) return;   // dev mode active — the Shutdown/debounce paths must not send either
 
@@ -214,17 +228,18 @@ public sealed class InaraBridge : IAsyncDisposable
             _pending.Clear();
 
             var prev = _tail;
-            _tail = SendAsync(prev, identity, batch);
+            _tail = SendAsync(prev, identity, batch, urgent);
         }
     }
 
-    private async Task SendAsync(Task previous, InaraIdentity identity, List<InaraEvent> batch)
+    private async Task SendAsync(Task previous, InaraIdentity identity, List<InaraEvent> batch, bool urgent)
     {
         try { await previous.ConfigureAwait(false); } catch { }
 
-        // "As requested by the site": never exceed the minimum interval between sends.
+        // "As requested by the site": never exceed the minimum interval between sends. A session-end
+        // flush skips the wait: there may be no later chance to send, and shutdown must not stall on it.
         var since = DateTimeOffset.UtcNow - _lastFlush;
-        if (since < _minInterval)
+        if (since < _minInterval && !urgent && !_disposing)
         {
             try { await Task.Delay(_minInterval - since).ConfigureAwait(false); }
             catch { }
@@ -236,7 +251,54 @@ public sealed class InaraBridge : IAsyncDisposable
         LogUpload(batch, response);
 
         if (response.IsHardError)
+        {
             lock (_gate) _stopped = true;   // e.g. invalid API key — stop until re-enabled
+            return;
+        }
+
+        if (response.IsTransient)
+            RequeueOrDrop(batch, response);
+        else
+            lock (_gate) _failures = 0;
+    }
+
+    /// <summary>
+    /// A transport / 5xx failure means Inara never recorded the batch. Put it back at the front of the
+    /// pending list (set-events superseded by newer ones are collapsed) and retry after a backoff, up to
+    /// <see cref="MaxRetries"/> times; after that the batch is dropped so a long outage cannot pile up.
+    /// </summary>
+    private void RequeueOrDrop(List<InaraEvent> batch, InaraResponse response)
+    {
+        TimeSpan delay;
+        lock (_gate)
+        {
+            if (_disposing || ++_failures > MaxRetries)
+            {
+                _failures = 0;
+                return;
+            }
+
+            _pending.InsertRange(0, batch);
+            CollapseAndCap();
+            delay = _retryBackoff * Math.Pow(2, _failures - 1);
+            if (response.RetryAfter is { } wait && wait > delay) delay = wait;
+            if (delay > TimeSpan.FromMinutes(10)) delay = TimeSpan.FromMinutes(10);
+        }
+        ScheduleFlush(delay);
+    }
+
+    /// <summary>Keeps only the newest of each "set" event and bounds the list. Caller holds <see cref="_gate"/>.</summary>
+    private void CollapseAndCap()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = _pending.Count - 1; i >= 0; i--)
+        {
+            var name = _pending[i].EventName;
+            if (name.StartsWith("set", StringComparison.Ordinal) && !seen.Add(name))
+                _pending.RemoveAt(i);
+        }
+        if (_pending.Count > MaxPending)
+            _pending.RemoveRange(0, _pending.Count - MaxPending);
     }
 
     /// <summary>Record the batch we just sent (and Inara's verdict) to the reporting log, if attached.</summary>
@@ -278,7 +340,8 @@ public sealed class InaraBridge : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        FlushImmediate();
+        _disposing = true;
+        FlushImmediate(urgent: true);
         Task tail;
         lock (_gate) tail = _tail;
         try { await tail.ConfigureAwait(false); } catch { }
