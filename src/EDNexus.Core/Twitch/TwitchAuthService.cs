@@ -74,47 +74,61 @@ public sealed class TwitchAuthService
     /// </summary>
     public async Task<TwitchAuthResult> LoginAsync(CancellationToken ct = default)
     {
+        // The code, the PKCE verifier and the token the EBS answers with would all cross in cleartext.
+        if (!TwitchOAuthOptions.IsSecureEbsUrl(_options.EbsBaseUrl))
+            return TwitchAuthResult.Failed(TwitchAuthStatus.Error, TwitchOAuthOptions.InsecureEbsUrlMessage);
+
         var verifier = PkceUtility.GenerateCodeVerifier();
         var challenge = PkceUtility.ComputeCodeChallenge(verifier);
         var state = PkceUtility.GenerateState();
-        var redirectUri = new Uri(_options.RedirectUri);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(_options.LoginTimeout);
 
-        Task<IReadOnlyDictionary<string, string>> waitTask;
+        // Listening is confirmed before the browser opens: a redirect that arrives before anything
+        // is bound is lost, and a bind failure has to be reported rather than leave the commander
+        // approving a login that can never complete.
+        IOAuthCallbackSession session;
         try
         {
-            waitTask = _listener.WaitForCallbackAsync(redirectUri, timeoutCts.Token);
+            session = _listener.Listen(new Uri(_options.RedirectUri), state, timeoutCts.Token);
         }
         catch (Exception ex)
         {
             return TwitchAuthResult.Failed(TwitchAuthStatus.Error, $"Could not start the local OAuth callback listener: {ex.Message}");
         }
 
-        try
-        {
-            _browser.Open(BuildAuthorizeUrl(challenge, state));
-        }
-        catch (Exception ex)
-        {
-            return TwitchAuthResult.Failed(TwitchAuthStatus.Error, $"Could not open the default browser: {ex.Message}");
-        }
-
+        // The redirect actually bound, which is not the configured one if its port was taken.
+        string redirectUri;
         IReadOnlyDictionary<string, string> callback;
-        try
+        // Disposed as soon as the callback is in (or the attempt fails), so the port is free again
+        // whatever went wrong — including the browser failing to open.
+        using (session)
         {
-            callback = await waitTask.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return ct.IsCancellationRequested
-                ? TwitchAuthResult.Failed(TwitchAuthStatus.Cancelled)
-                : TwitchAuthResult.Failed(TwitchAuthStatus.Timeout);
-        }
-        catch (Exception ex)
-        {
-            return TwitchAuthResult.Failed(TwitchAuthStatus.Error, ex.Message);
+            redirectUri = session.RedirectUri.ToString();
+            try
+            {
+                _browser.Open(BuildAuthorizeUrl(redirectUri, challenge, state));
+            }
+            catch (Exception ex)
+            {
+                return TwitchAuthResult.Failed(TwitchAuthStatus.Error, $"Could not open the default browser: {ex.Message}");
+            }
+
+            try
+            {
+                callback = await session.Callback.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return ct.IsCancellationRequested
+                    ? TwitchAuthResult.Failed(TwitchAuthStatus.Cancelled)
+                    : TwitchAuthResult.Failed(TwitchAuthStatus.Timeout);
+            }
+            catch (Exception ex)
+            {
+                return TwitchAuthResult.Failed(TwitchAuthStatus.Error, ex.Message);
+            }
         }
 
         if (callback.TryGetValue("error", out var error))
@@ -132,7 +146,7 @@ public sealed class TwitchAuthService
 
         try
         {
-            var token = await _api.ExchangeCodeAsync(_options.TokenEndpoint, code, verifier, _options.RedirectUri, ct).ConfigureAwait(false);
+            var token = await _api.ExchangeCodeAsync(_options.TokenEndpoint, code, verifier, redirectUri, ct).ConfigureAwait(false);
             Persist(token);
             return TwitchAuthResult.Ok(token.Username, token.ChannelId);
         }
@@ -156,8 +170,13 @@ public sealed class TwitchAuthService
         if (!string.IsNullOrWhiteSpace(Twitch.Token))
         {
             var token = Twitch.Token!;
-            try { await _api.RevokeAsync(_options.RevokeEndpoint, token, ct).ConfigureAwait(false); }
-            catch { _cleanup?.Enqueue(EbsCleanupKind.Revoke, _options.RevokeEndpoint, token); }
+            // Never sent to an insecure address in the first place, so there is nothing to revoke
+            // there and nothing worth queueing (the queue would refuse it too).
+            if (TwitchOAuthOptions.IsSecureEbsUrl(_options.RevokeEndpoint))
+            {
+                try { await _api.RevokeAsync(_options.RevokeEndpoint, token, ct).ConfigureAwait(false); }
+                catch { _cleanup?.Enqueue(EbsCleanupKind.Revoke, _options.RevokeEndpoint, token); }
+            }
         }
         ClearSession();
     }
@@ -178,9 +197,9 @@ public sealed class TwitchAuthService
         _store.Save(_settings);
     }
 
-    private string BuildAuthorizeUrl(string codeChallenge, string state) =>
+    private string BuildAuthorizeUrl(string redirectUri, string codeChallenge, string state) =>
         $"{_options.AuthorizeEndpoint}" +
-        $"?redirect_uri={Uri.EscapeDataString(_options.RedirectUri)}" +
+        $"?redirect_uri={Uri.EscapeDataString(redirectUri)}" +
         $"&response_type=code" +
         $"&state={Uri.EscapeDataString(state)}" +
         $"&code_challenge={Uri.EscapeDataString(codeChallenge)}" +

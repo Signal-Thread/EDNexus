@@ -17,10 +17,14 @@
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
         <Button Content="Open logs" Click="OnOpenLogs" Padding="16,8" />
         <Button Content="Close" Click="OnClose" Padding="16,8" />
-        <Button Content="Save" Click="OnSave" Padding="16,8"
+        <Button x:Name="SaveButton" Content="Save" Click="OnSave" Padding="16,8"
                 Background="{StaticResource AmberBrush}" Foreground="{StaticResource OnBrand}" FontWeight="SemiBold" />
       </StackPanel>
     </Border>
+
+    <!-- Why Save refused, shown above the action row so it is visible however far the body has scrolled. -->
+    <TextBlock x:Name="SaveErrorLine" DockPanel.Dock="Bottom" Margin="24,8,24,0" IsVisible="False"
+               Foreground="{StaticResource Bad}" FontSize="12" TextWrapping="Wrap" />
 
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <!-- Each section is a free-standing block: the panel packs them into however many columns the

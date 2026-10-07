@@ -1,3 +1,4 @@
+using EDNexus.Core.Settings;
 using EDNexus.Core.State;
 using EDNexus.Core.Twitch;
 using Xunit;
@@ -524,6 +525,310 @@ public class TwitchStreamCardServiceTests
 
         Assert.True(await client.WaitForPublishAsync());
         Assert.Null(client.Snapshots[^1].Ship);
+    }
+
+    [Fact]
+    public void The_heartbeat_is_well_inside_the_viewer_side_staleness_limit()
+    {
+        // The extension treats a card as stale after 25 minutes without a publish.
+        Assert.True(TwitchStreamCardService.DefaultRefreshInterval <= TimeSpan.FromMinutes(10));
+    }
+
+    [Fact]
+    public async Task A_heartbeat_carries_a_fresh_timestamp()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var client = new FakeStreamStateApiClient();
+
+        using var service = new TwitchStreamCardService(
+            state, StreamCardSources.Empty, client, static () => Endpoint, static () => "ebs-token",
+            null, null, FastInterval, clock: null, refreshInterval: TimeSpan.FromMilliseconds(150));
+        service.RequestPublish();
+        Assert.True(await client.WaitForPublishAsync());
+        Assert.True(await client.WaitForPublishAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.True(client.Snapshots[1].At > client.Snapshots[0].At);
+    }
+
+    [Fact]
+    public async Task State_changes_during_the_replay_publish_nothing_until_the_host_asks()
+    {
+        var state = new CommanderState();
+        var client = new FakeStreamStateApiClient();
+
+        using var service = Create(state, client);
+
+        // The journal replay warms the picture property by property.
+        state.Name = "CMDR Jameson";
+        state.StarSystem = "Nervi";
+        state.Docked = true;
+
+        Assert.False(await client.WaitForPublishAsync(TimeSpan.FromMilliseconds(300)));
+
+        service.RequestPublish();
+        Assert.True(await client.WaitForPublishAsync());
+    }
+
+    [Fact]
+    public async Task The_card_comes_down_when_the_game_exits_and_stays_down()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var client = new FakeStreamStateApiClient();
+
+        using var service = Create(state, client);
+        service.RequestPublish();
+        Assert.True(await client.WaitForPublishAsync());
+
+        service.GameExited();
+        await WaitUntilAsync(() => client.Clears.Count == 1);
+
+        Assert.Equal(new[] { "ebs-token" }, client.Clears.ToArray());
+
+        // Journal chatter and further state changes after the Shutdown must not put it back.
+        state.StarSystem = "Colonia";
+        await Task.Delay(FastInterval * 4);
+        Assert.Single(client.Snapshots);
+        Assert.Single(client.Clears);
+    }
+
+    [Fact]
+    public async Task A_new_session_puts_the_card_back_on_the_air()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var client = new FakeStreamStateApiClient();
+
+        using var service = Create(state, client);
+        service.RequestPublish();
+        Assert.True(await client.WaitForPublishAsync());
+        service.GameExited();
+        await WaitUntilAsync(() => client.Clears.Count == 1);
+
+        service.GameStarted();
+
+        Assert.True(await client.WaitForPublishAsync());
+        Assert.Equal(2, client.Snapshots.Count);
+    }
+
+    [Fact]
+    public async Task A_journal_that_ended_in_a_shutdown_is_never_published_only_cleared()
+    {
+        var state = new CommanderState { StarSystem = "Nervi", Docked = true, StationName = "Jameson Memorial" };
+        var client = new FakeStreamStateApiClient();
+
+        using var service = Create(state, client);
+
+        // The replay's last line was a Shutdown: the game is closed, so the last location is not news.
+        service.GameExited();
+        service.RequestPublish();
+        await WaitUntilAsync(() => client.Clears.Count == 1);
+
+        Assert.Empty(client.Snapshots);
+    }
+
+    [Fact]
+    public async Task A_closed_game_is_not_given_a_heartbeat()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var client = new FakeStreamStateApiClient();
+
+        using var service = new TwitchStreamCardService(
+            state, StreamCardSources.Empty, client, static () => Endpoint, static () => "ebs-token",
+            null, null, FastInterval, clock: null, refreshInterval: TimeSpan.FromMilliseconds(100));
+        service.RequestPublish();
+        Assert.True(await client.WaitForPublishAsync());
+        service.GameExited();
+        await WaitUntilAsync(() => client.Clears.Count == 1);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+
+        Assert.Single(client.Snapshots);
+        Assert.Single(client.Clears);
+    }
+
+    [Fact]
+    public async Task A_shutdown_during_developer_mode_does_not_touch_the_real_card()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var client = new FakeStreamStateApiClient();
+        var dev = false;
+
+        using var service = Create(state, client, isSuppressed: () => dev);
+        service.RequestPublish();
+        Assert.True(await client.WaitForPublishAsync());
+
+        dev = true;
+        service.GameExited();
+        await Task.Delay(FastInterval * 4);
+
+        Assert.Empty(client.Clears);
+    }
+
+    [Fact]
+    public async Task A_clear_for_a_closed_game_that_fails_is_queued_and_dropped_once_acknowledged()
+    {
+        using var env = new QueueEnv();
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var client = new FakeStreamStateApiClient();
+        client.RespondToClear = () => new StreamStatePublishResult(StreamStatePublishStatus.Failed, "EBS unreachable");
+
+        using var service = new TwitchStreamCardService(
+            state, StreamCardSources.Empty, client, static () => Endpoint, static () => "ebs-token",
+            null, null, FastInterval, clock: null, refreshInterval: null, cleanup: env.Queue);
+        service.RequestPublish();
+        Assert.True(await client.WaitForPublishAsync());
+
+        service.GameExited();
+        await WaitUntilAsync(() => client.Clears.Count >= 1);
+
+        // Persisted: an app restart would still take the card down.
+        var pending = Assert.Single(env.Store.Load().Twitch.PendingCleanups);
+        Assert.Equal(EbsCleanupKind.ClearCard, pending.Kind);
+        Assert.Equal("ebs-token", pending.Token);
+
+        client.RespondToClear = () => StreamStatePublishResult.ClearedOk;
+        Assert.Equal(0, await env.Queue.RetryPendingAsync());
+        Assert.Empty(env.Store.Load().Twitch.PendingCleanups);
+    }
+
+    [Fact]
+    public async Task Publishing_again_drops_a_clear_still_waiting_to_be_retried()
+    {
+        using var env = new QueueEnv();
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var client = new FakeStreamStateApiClient();
+        client.RespondToClear = () => new StreamStatePublishResult(StreamStatePublishStatus.Failed, "EBS unreachable");
+
+        using var service = new TwitchStreamCardService(
+            state, StreamCardSources.Empty, client, static () => Endpoint, static () => "ebs-token",
+            null, null, FastInterval, clock: null, refreshInterval: null, cleanup: env.Queue);
+        service.RequestPublish();
+        Assert.True(await client.WaitForPublishAsync());
+        service.GameExited();
+        await WaitUntilAsync(() => env.Queue.Pending.Count == 1);
+
+        // The game is back: a retry of the old clear would now take the live card down.
+        service.GameStarted();
+        Assert.True(await client.WaitForPublishAsync());
+        await WaitUntilAsync(() => env.Queue.Pending.Count == 0);
+
+        Assert.Empty(env.Store.Load().Twitch.PendingCleanups);
+    }
+
+    [Fact]
+    public async Task Closing_the_app_takes_the_card_off_the_air()
+    {
+        using var env = new QueueEnv();
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var client = new FakeStreamStateApiClient();
+
+        using var service = new TwitchStreamCardService(
+            state, StreamCardSources.Empty, client, static () => Endpoint, static () => "ebs-token",
+            null, null, FastInterval, clock: null, refreshInterval: null, cleanup: env.Queue);
+        service.RequestPublish();
+        Assert.True(await client.WaitForPublishAsync());
+
+        Assert.True(service.TakeOffAirForExit(TimeSpan.FromSeconds(2)));
+
+        Assert.Equal(new[] { "ebs-token" }, client.Clears.ToArray());
+        Assert.Empty(env.Store.Load().Twitch.PendingCleanups);
+    }
+
+    [Fact]
+    public async Task Closing_the_app_is_bounded_and_leaves_the_clear_queued_when_the_EBS_hangs()
+    {
+        using var env = new QueueEnv();
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var client = new HangingClearClient();
+
+        using var service = new TwitchStreamCardService(
+            state, StreamCardSources.Empty, client, static () => Endpoint, static () => "ebs-token",
+            null, null, FastInterval, clock: null, refreshInterval: null, cleanup: env.Queue);
+        service.RequestPublish();
+        await WaitUntilAsync(() => client.Published > 0);
+
+        var started = DateTime.UtcNow;
+        var done = service.TakeOffAirForExit(TimeSpan.FromMilliseconds(300));
+
+        Assert.False(done);
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(3));
+        // Still on disk, so the next launch's queue sends it.
+        Assert.Single(env.Store.Load().Twitch.PendingCleanups);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Closing_the_app_clears_even_while_developer_mode_is_on()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var client = new FakeStreamStateApiClient();
+        var dev = false;
+
+        using var service = Create(state, client, isSuppressed: () => dev);
+        service.RequestPublish();
+        Assert.True(await client.WaitForPublishAsync());
+        dev = true;
+
+        // The real card from before developer mode was switched on is still public.
+        Assert.True(service.TakeOffAirForExit(TimeSpan.FromSeconds(2)));
+        Assert.Single(client.Clears);
+    }
+
+    [Fact]
+    public void Closing_the_app_with_the_card_off_sends_nothing()
+    {
+        var client = new FakeStreamStateApiClient();
+
+        using var service = Create(new CommanderState(), client, token: static () => null);
+
+        Assert.True(service.TakeOffAirForExit(TimeSpan.FromSeconds(1)));
+        Assert.Empty(client.Clears);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(20);
+        Assert.True(condition(), "Timed out waiting for the condition.");
+    }
+
+    private sealed class QueueEnv : IDisposable
+    {
+        private readonly string _root = Directory.CreateTempSubdirectory("ednexus-card-queue-").FullName;
+
+        public SettingsStore Store { get; }
+        public EbsCleanupQueue Queue { get; }
+
+        public QueueEnv()
+        {
+            Store = new SettingsStore(Path.Combine(_root, "settings.json"));
+            Queue = new EbsCleanupQueue(Store.Load(), Store, new FakeStreamStateApiClient(), new FakeEbsAuthApiClient());
+        }
+
+        public void Dispose()
+        {
+            Queue.Dispose();
+            try { Directory.Delete(_root, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>Accepts publishes but never answers a clear until cancelled — an EBS that has gone quiet.</summary>
+    private sealed class HangingClearClient : IStreamStateApiClient
+    {
+        private int _published;
+        public int Published => Volatile.Read(ref _published);
+
+        public Task<StreamStatePublishResult> PublishAsync(
+            string updateStateEndpoint, string token, StreamCardSnapshot snapshot, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _published);
+            return Task.FromResult(StreamStatePublishResult.Ok);
+        }
+
+        public async Task<StreamStatePublishResult> ClearAsync(string updateStateEndpoint, string token, CancellationToken ct = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct).ConfigureAwait(false);
+            return StreamStatePublishResult.ClearedOk;
+        }
     }
 
     [Fact]
