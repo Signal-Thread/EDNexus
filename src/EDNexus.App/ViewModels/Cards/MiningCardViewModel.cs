@@ -102,6 +102,14 @@ public sealed partial class MiningCardViewModel : CardViewModel
             return;
         }
 
+        // Developer mode fabricates refining through the real pipeline. The count still advances so a
+        // sample unit isn't replayed, but none of it may reach the persisted daily total or spot book.
+        if (Context.DevEnabled)
+        {
+            _recordedRefinedCount = refined.Count;
+            return;
+        }
+
         var known = Context.GetMiningSettings().KnownPrices;
         var threshold = Context.GetMiningSettings().MinValueThreshold;
         for (var i = _recordedRefinedCount; i < refined.Count; i++)
@@ -189,6 +197,10 @@ public sealed partial class MiningCardViewModel : CardViewModel
     /// <summary>Absorb every commodity's galactic-average price out of the docked market, if any.</summary>
     private void LearnFromCurrentMarket()
     {
+        // The dev sample Market event carries invented MeanPrice values; learning them would write
+        // them into the real price book, which developer mode promises never to touch.
+        if (Context.DevEnabled) return;
+
         var market = Context.Host.Market.Current;
         if (market is null || market.MarketId == _lastLearnedMarketId && market.Updated == _lastLearnedMarketUpdate)
             return;
