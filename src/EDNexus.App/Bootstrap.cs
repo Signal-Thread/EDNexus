@@ -259,6 +259,9 @@ public sealed class Bootstrap
     {
         var trimmed = (ebsBaseUrl ?? string.Empty).Trim().TrimEnd('/');
         var previousBaseUrl = Settings.Twitch.EbsBaseUrl;
+        // The dialog refuses an insecure address before it gets here; this is the backstop for any
+        // other caller. Keeping the current EBS is safer than storing one the token cannot be sent to.
+        if (TwitchOAuthOptions.ValidateEbsBaseUrl(trimmed) is not null) trimmed = previousBaseUrl;
         var wasOnAir = Settings.Twitch.StreamCardEnabled && !string.IsNullOrWhiteSpace(Settings.Twitch.Token);
         var previousToken = Settings.Twitch.Token;
 

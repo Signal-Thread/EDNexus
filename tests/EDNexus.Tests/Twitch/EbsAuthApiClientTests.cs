@@ -61,6 +61,45 @@ public class EbsAuthApiClientTests
         // Reaching here without an exception is the assertion.
     }
 
+    [Theory]
+    [InlineData("http://ebs.example.com/oauth/token")]
+    [InlineData("ftp://ebs.example.com/oauth/token")]
+    [InlineData("not a url")]
+    public async Task ExchangeCodeAsync_refuses_to_send_the_code_to_a_non_https_address(string endpoint)
+    {
+        var handler = new RecordingHandler(body: """{ "token": "t", "channelId": "1", "username": "u" }""");
+        using var client = new EbsAuthApiClient(new HttpClient(handler));
+
+        await Assert.ThrowsAsync<EbsAuthApiException>(() =>
+            client.ExchangeCodeAsync(endpoint, "code", "verifier", "http://localhost:59123/callback"));
+
+        Assert.Empty(handler.Bodies);
+    }
+
+    [Fact]
+    public async Task RevokeAsync_refuses_to_send_the_token_to_a_non_https_address()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK, "{}");
+        using var client = new EbsAuthApiClient(new HttpClient(handler));
+
+        await Assert.ThrowsAsync<EbsAuthApiException>(() =>
+            client.RevokeAsync("http://ebs.example.com/oauth/revoke", "ebs-token-1"));
+
+        Assert.Empty(handler.Uris);
+    }
+
+    [Fact]
+    public async Task Both_calls_accept_https_and_loopback_http()
+    {
+        var handler = new RecordingHandler(body: """{ "token": "t", "channelId": "1", "username": "u" }""");
+        using var client = new EbsAuthApiClient(new HttpClient(handler));
+
+        await client.ExchangeCodeAsync("https://ebs.example.com/oauth/token", "code", "verifier", "http://localhost:59123/callback");
+        await client.RevokeAsync("http://127.0.0.1:8787/oauth/revoke", "ebs-token-1");
+
+        Assert.Equal(2, handler.Uris.Count);
+    }
+
     [Fact]
     public async Task RevokeAsync_throws_on_a_server_error_so_the_caller_can_retry()
     {

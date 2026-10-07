@@ -46,4 +46,19 @@ public sealed class TwitchOAuthOptions
     public static bool IsSecureEbsUrl(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri)
         && (uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback));
+
+    /// <summary>What <see cref="ValidateEbsBaseUrl"/> says about an address the token may not be sent to.</summary>
+    public const string InsecureEbsUrlMessage =
+        "The backend address must be a full https:// URL (plain http is only allowed for localhost).";
+
+    /// <summary>
+    /// Checks an EBS base URL typed into Settings. A blank value is fine — it means the hosted
+    /// default. Returns null when the address may be used, otherwise a message fit to show the user.
+    /// </summary>
+    public static string? ValidateEbsBaseUrl(string? text)
+    {
+        var trimmed = (text ?? string.Empty).Trim();
+        if (trimmed.Length == 0) return null;
+        return IsSecureEbsUrl(trimmed) ? null : InsecureEbsUrlMessage;
+    }
 }

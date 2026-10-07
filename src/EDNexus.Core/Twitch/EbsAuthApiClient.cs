@@ -61,6 +61,11 @@ public sealed class EbsAuthApiClient : IEbsAuthApiClient, IDisposable
 
     public async Task<EbsTokenResponse> ExchangeCodeAsync(string tokenEndpoint, string code, string codeVerifier, string redirectUri, CancellationToken ct = default)
     {
+        // The code and the PKCE verifier are what the token is minted from: never put them on the wire
+        // in cleartext, whatever the settings say.
+        if (!TwitchOAuthOptions.IsSecureEbsUrl(tokenEndpoint))
+            throw new EbsAuthApiException("Refusing to send the sign-in code to a non-https address.");
+
         var payload = new Dictionary<string, string>
         {
             ["code"] = code,
@@ -89,6 +94,9 @@ public sealed class EbsAuthApiClient : IEbsAuthApiClient, IDisposable
 
     public async Task RevokeAsync(string revokeEndpoint, string token, CancellationToken ct = default)
     {
+        if (!TwitchOAuthOptions.IsSecureEbsUrl(revokeEndpoint))
+            throw new EbsAuthApiException("Refusing to send the Twitch token to a non-https address.");
+
         using var request = new HttpRequestMessage(HttpMethod.Post, revokeEndpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);

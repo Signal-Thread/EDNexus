@@ -74,6 +74,10 @@ public sealed class TwitchAuthService
     /// </summary>
     public async Task<TwitchAuthResult> LoginAsync(CancellationToken ct = default)
     {
+        // The code, the PKCE verifier and the token the EBS answers with would all cross in cleartext.
+        if (!TwitchOAuthOptions.IsSecureEbsUrl(_options.EbsBaseUrl))
+            return TwitchAuthResult.Failed(TwitchAuthStatus.Error, TwitchOAuthOptions.InsecureEbsUrlMessage);
+
         var verifier = PkceUtility.GenerateCodeVerifier();
         var challenge = PkceUtility.ComputeCodeChallenge(verifier);
         var state = PkceUtility.GenerateState();
@@ -156,8 +160,13 @@ public sealed class TwitchAuthService
         if (!string.IsNullOrWhiteSpace(Twitch.Token))
         {
             var token = Twitch.Token!;
-            try { await _api.RevokeAsync(_options.RevokeEndpoint, token, ct).ConfigureAwait(false); }
-            catch { _cleanup?.Enqueue(EbsCleanupKind.Revoke, _options.RevokeEndpoint, token); }
+            // Never sent to an insecure address in the first place, so there is nothing to revoke
+            // there and nothing worth queueing (the queue would refuse it too).
+            if (TwitchOAuthOptions.IsSecureEbsUrl(_options.RevokeEndpoint))
+            {
+                try { await _api.RevokeAsync(_options.RevokeEndpoint, token, ct).ConfigureAwait(false); }
+                catch { _cleanup?.Enqueue(EbsCleanupKind.Revoke, _options.RevokeEndpoint, token); }
+            }
         }
         ClearSession();
     }
