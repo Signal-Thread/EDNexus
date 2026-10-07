@@ -152,6 +152,27 @@ public class EddnTransformerTests
         Assert.Equal(JsonNode.Parse(UploadableFactions)!.ToJsonString(), factions.ToJsonString());
     }
 
+    [Theory]
+    [InlineData("MyReputation", "8.3")]
+    [InlineData("SquadronFaction", "\"Eravate Network\"")]
+    [InlineData("HappiestSystem", "\"Eravate\"")]
+    [InlineData("HomeSystem", "\"Sol\"")]
+    public void Per_commander_fields_are_also_stripped_at_the_event_root(string key, string value)
+    {
+        var (t, state) = NewPair();
+        var raw = Json($$"""
+            { "timestamp": "2026-09-10T18:22:04Z", "event": "FSDJump", "Taxi": false, "Multicrew": false,
+              "StarSystem": "Eravate", "SystemAddress": 3932277478106, "StarPos": [-42.4375, -3.15625, 59.65625],
+              "{{key}}": {{value}} }
+            """);
+        state.Observe(raw);
+
+        var msg = t.Transform(raw, state);
+
+        Assert.NotNull(msg);
+        Assert.DoesNotContain($"\"{key}\"", msg!.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Event_without_factions_passes_through_unchanged()
     {
