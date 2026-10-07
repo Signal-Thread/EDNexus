@@ -177,6 +177,161 @@ public class TwitchExtensionJwtServiceTests
         Assert.Equal("Signature verification failed.", result.Error);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(12345)] // present, but not a string
+    public void Validate_RejectsTokenWithoutChannelId(object? channelId)
+    {
+        var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var timeProvider = new FakeTimeProvider(now);
+        var service = CreateService(timeProvider);
+        var key = Convert.FromBase64String(SecretBase64);
+
+        var payload = new Dictionary<string, object>
+        {
+            ["exp"] = now.AddMinutes(5).ToUnixTimeSeconds(),
+            ["role"] = "broadcaster",
+        };
+        if (channelId is not null)
+        {
+            payload["channel_id"] = channelId;
+        }
+
+        var result = service.Validate(EncodeToken(new { alg = "HS256", typ = "JWT" }, payload, key));
+
+        Assert.False(result.IsValid);
+        Assert.Equal("Token is missing the 'channel_id' claim.", result.Error);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("admin")]
+    [InlineData("Broadcaster")] // roles are matched exactly
+    [InlineData(1)]
+    public void Validate_RejectsTokenWithMissingOrUnknownRole(object? role)
+    {
+        var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var timeProvider = new FakeTimeProvider(now);
+        var service = CreateService(timeProvider);
+        var key = Convert.FromBase64String(SecretBase64);
+
+        var payload = new Dictionary<string, object>
+        {
+            ["exp"] = now.AddMinutes(5).ToUnixTimeSeconds(),
+            ["channel_id"] = "12345",
+        };
+        if (role is not null)
+        {
+            payload["role"] = role;
+        }
+
+        var result = service.Validate(EncodeToken(new { alg = "HS256", typ = "JWT" }, payload, key));
+
+        Assert.False(result.IsValid);
+        Assert.Equal(
+            "Unsupported or missing 'role' claim; only broadcaster, moderator, viewer, and external are accepted.",
+            result.Error);
+    }
+
+    [Fact]
+    public void Validate_RejectsTokenThatIsNotYetValid()
+    {
+        var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var timeProvider = new FakeTimeProvider(now);
+        var options = new EbsOptions { ExtensionSecret = SecretBase64, ClockSkewSeconds = 30 };
+        var service = CreateService(timeProvider, options);
+        var key = Convert.FromBase64String(SecretBase64);
+
+        // Not valid for another 31 seconds: one second beyond the 30 second clock skew.
+        var token = EncodeToken(
+            new { alg = "HS256", typ = "JWT" },
+            new
+            {
+                exp = now.AddMinutes(5).ToUnixTimeSeconds(),
+                nbf = now.AddSeconds(31).ToUnixTimeSeconds(),
+                channel_id = "12345",
+                role = "broadcaster",
+            },
+            key);
+
+        var result = service.Validate(token);
+
+        Assert.False(result.IsValid);
+        Assert.Equal("Token is not yet valid.", result.Error);
+    }
+
+    [Fact]
+    public void Validate_HonoursClockSkewGraceWindowForNotBefore()
+    {
+        var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var timeProvider = new FakeTimeProvider(now);
+        var options = new EbsOptions { ExtensionSecret = SecretBase64, ClockSkewSeconds = 30 };
+        var service = CreateService(timeProvider, options);
+        var key = Convert.FromBase64String(SecretBase64);
+
+        // Not valid for another 30 seconds, which is exactly at the edge of the clock skew grace window.
+        var token = EncodeToken(
+            new { alg = "HS256", typ = "JWT" },
+            new
+            {
+                exp = now.AddMinutes(5).ToUnixTimeSeconds(),
+                nbf = now.AddSeconds(30).ToUnixTimeSeconds(),
+                channel_id = "12345",
+                role = "broadcaster",
+            },
+            key);
+
+        var result = service.Validate(token);
+
+        Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_RejectsTokenWithNonNumericNotBefore()
+    {
+        var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var timeProvider = new FakeTimeProvider(now);
+        var service = CreateService(timeProvider);
+        var key = Convert.FromBase64String(SecretBase64);
+
+        var token = EncodeToken(
+            new { alg = "HS256", typ = "JWT" },
+            new { exp = now.AddMinutes(5).ToUnixTimeSeconds(), nbf = "soon", channel_id = "12345", role = "broadcaster" },
+            key);
+
+        var result = service.Validate(token);
+
+        Assert.False(result.IsValid);
+        Assert.Equal("Token has a malformed 'nbf' claim.", result.Error);
+    }
+
+    [Fact]
+    public void Validate_EnforcesAllowedRolesWhenSupplied()
+    {
+        var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var timeProvider = new FakeTimeProvider(now);
+        var service = CreateService(timeProvider);
+        var key = Convert.FromBase64String(SecretBase64);
+
+        var token = EncodeToken(
+            new { alg = "HS256", typ = "JWT" },
+            new { exp = now.AddMinutes(5).ToUnixTimeSeconds(), channel_id = "12345", role = "viewer" },
+            key);
+
+        Assert.True(service.Validate(token).IsValid);
+        Assert.True(service.Validate(token, allowedRoles: ["broadcaster", "viewer"]).IsValid);
+
+        var rejected = service.Validate(token, allowedRoles: ["broadcaster", "moderator"]);
+        Assert.False(rejected.IsValid);
+        Assert.Equal("Token role 'viewer' is not one of the allowed roles.", rejected.Error);
+
+        // An empty allow-list admits no one rather than everyone.
+        Assert.False(service.Validate(token, allowedRoles: []).IsValid);
+    }
+
     [Fact]
     public void CreateExternalServiceToken_ProducesTokenValidatableByTwitchShapedVerifier()
     {
@@ -193,6 +348,23 @@ public class TwitchExtensionJwtServiceTests
         Assert.True(result.IsValid);
         Assert.Equal("54321", result.Claims!.ChannelId);
         Assert.Equal("external", result.Claims.Role);
+    }
+
+    [Fact]
+    public void CreateExternalServiceToken_RoundTripsThroughValidate()
+    {
+        var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var timeProvider = new FakeTimeProvider(now);
+        var service = CreateService(timeProvider);
+
+        var token = service.CreateExternalServiceToken("54321");
+        var result = service.Validate(token, allowedRoles: ["external"]);
+
+        Assert.True(result.IsValid, result.Error);
+        Assert.Equal("54321", result.Claims!.ChannelId);
+        Assert.Equal("external", result.Claims.Role);
+        Assert.Equal("ednexus_ebs", result.Claims.UserId);
+        Assert.Null(result.Claims.OpaqueUserId);
     }
 
     [Fact]
