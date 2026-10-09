@@ -4,7 +4,7 @@
 ;     C:\Program Files\Signal & Thread\EDNexus\
 ; User data is NOT stored here: settings, logs and downloaded updates live in
 ; %LOCALAPPDATA%\EDNexus (see SettingsStore), which stays writable without admin rights. Uninstall
-; removes the update cache and, only if the user opts in (default: keep), the settings and logs.
+; removes them only if the user opts in (default: keep): settings, logs and the update cache.
 ;
 ; Build (version and the published-app dir are supplied on the command line):
 ;     ISCC.exe /DAppVersion=1.2.3 /DPublishDir=...\publish /Oout ednexus.iss
@@ -56,18 +56,18 @@ Name: "{autodesktop}\EDNexus"; Filename: "{app}\EDNexus.App.exe"; Tasks: desktop
 [Run]
 Filename: "{app}\EDNexus.App.exe"; Description: "Launch EDNexus"; Flags: nowait postinstall skipifsilent
 
-[UninstallDelete]
-; Downloaded update installers are a cache; never leave them behind.
-Type: filesandordirs; Name: "{localappdata}\EDNexus\updates"
-
 [Code]
-// Offer to remove settings (which can hold an Inara API key) and logs. The default button is No
-// (keep), so a reinstall does not lose configuration; silent uninstalls always keep.
+// Offer to remove settings (which can hold an Inara API key), logs and the downloaded-update cache.
+// The default button is No (keep), so a reinstall does not lose configuration; silent uninstalls
+// always keep. This is a prompt rather than an unconditional [UninstallDelete] on purpose: the
+// installer runs elevated, and when a different admin account approved the UAC prompt
+// {localappdata} is that admin's profile, not the commander's, so nothing under it is deleted
+// without the user seeing (and confirming) the exact path.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if (CurUninstallStep = usPostUninstall) and (not UninstallSilent()) then
   begin
-    if MsgBox('Also delete your EDNexus settings and logs?' + #13#10 + #13#10 +
+    if MsgBox('Also delete your EDNexus settings, logs and downloaded updates?' + #13#10 + #13#10 +
               ExpandConstant('{localappdata}\EDNexus') + #13#10 + #13#10 +
               'Choose No to keep them (recommended if you plan to reinstall).',
               mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
