@@ -20,9 +20,20 @@ finish-args:
   - --share=network
   # Radio card audio (LibVLC output) goes through PulseAudio / PipeWire-Pulse.
   - --socket=pulseaudio
-  # Discord Rich Presence talks to the Discord client over a Unix socket in $XDG_RUNTIME_DIR. This is the
-  # standard grant; it also covers the sandboxed Discord Flatpak's socket (xdg-run/app/com.discordapp.Discord).
-  - --filesystem=xdg-run/discord-ipc-*
+  # Discord Rich Presence talks to the Discord client over a Unix socket in $XDG_RUNTIME_DIR. Flatpak
+  # filesystem permissions are literal paths (no wildcards), so grant each socket Discord can pick
+  # (discord-ipc-0 .. -9), plus the sandboxed Discord Flatpak's own directory.
+  - --filesystem=xdg-run/discord-ipc-0
+  - --filesystem=xdg-run/discord-ipc-1
+  - --filesystem=xdg-run/discord-ipc-2
+  - --filesystem=xdg-run/discord-ipc-3
+  - --filesystem=xdg-run/discord-ipc-4
+  - --filesystem=xdg-run/discord-ipc-5
+  - --filesystem=xdg-run/discord-ipc-6
+  - --filesystem=xdg-run/discord-ipc-7
+  - --filesystem=xdg-run/discord-ipc-8
+  - --filesystem=xdg-run/discord-ipc-9
+  - --filesystem=xdg-run/app/com.discordapp.Discord
   # Read-only access to the Elite Dangerous journals the game writes under Proton.
   # Steam Deck: the internal library lives under ~/.local/share/Steam; games moved to a
   # microSD card are mounted under /run/media. These are the host paths — see the README
@@ -51,7 +62,7 @@ modules:
       #     dest: app-payload
       # after running build-flatpak.sh — no upload or checksum needed.)
       - type: archive
-        url: https://github.com/Signal-Thread-LLC/EDNexus/releases/download/v0.1.0/ednexus-0.1.0-linux-x64.tar.gz
+        url: https://github.com/Signal-Thread/EDNexus/releases/download/v0.1.0/ednexus-0.1.0-linux-x64.tar.gz
         sha256: REPLACE_WITH_TARBALL_SHA256
         dest: app-payload
       - type: file

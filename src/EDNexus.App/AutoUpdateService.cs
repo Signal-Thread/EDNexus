@@ -53,6 +53,10 @@ namespace EDNexus.App.Services
                 return new AutoUpdateResult(true, res.Message, res.Path, true);
             }
 
+            // A later check that finds nothing usable (up to date, unverified, failed) may have pruned the
+            // earlier installer; drop the stale state so the UI does not offer a file that is gone.
+            LastDownloadedPath = null;
+            LastVerifiedSha256 = null;
             return new AutoUpdateResult(false, res.Message, null, false);
         }
 

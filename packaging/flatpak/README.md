@@ -83,7 +83,7 @@ appstreamcli validate io.github.Signal_Thread_LLC.EDNexus.metainfo.xml
 
 Besides the Steam/Proton journal paths below, the manifest grants `--share=network` (EDDN, Inara,
 EDSM, Spansh, Galnet, RavenColonial, Twitch), `--socket=pulseaudio` (radio audio) and
-`--filesystem=xdg-run/discord-ipc-*` (Discord Rich Presence). Note the radio card needs LibVLC,
+`--filesystem=xdg-run/discord-ipc-0` … `-9` and `xdg-run/app/com.discordapp.Discord` (Discord Rich Presence; Flatpak permissions do not accept wildcards). Note the radio card needs LibVLC,
 which is not part of `org.freedesktop.Platform`; without it the radio reports an error state
 rather than crashing.
 
