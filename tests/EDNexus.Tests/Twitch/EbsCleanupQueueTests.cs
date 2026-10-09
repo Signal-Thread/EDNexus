@@ -218,6 +218,35 @@ public class EbsCleanupQueueTests : IDisposable
     }
 
     [Fact]
+    public void Discard_up_to_a_mark_keeps_a_clear_queued_after_the_mark()
+    {
+        var (_, queue) = NewQueue();
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "old-token");
+        var mark = queue.Mark();                                   // a publish begins here
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token"); // asked for while it is in flight
+
+        queue.Discard(EbsCleanupKind.ClearCard, ClearEndpoint, "old-token", mark);   // the publish succeeded
+        queue.Discard(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token", mark);
+
+        Assert.Single(queue.Pending);
+        Assert.Equal("ebs-token", queue.Pending[0].Token);
+        Assert.Single(Store.Load().Twitch.PendingCleanups);
+    }
+
+    [Fact]
+    public void A_clear_asked_for_again_after_the_mark_is_not_discarded_by_it()
+    {
+        var (_, queue) = NewQueue();
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token");   // left over from earlier
+        var mark = queue.Mark();
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token");   // the same card, asked again mid-publish
+
+        queue.Discard(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token", mark);
+
+        Assert.Single(queue.Pending);
+    }
+
+    [Fact]
     public async Task A_save_that_failed_is_retried_on_the_next_round()
     {
         // The settings directory cannot be created while a file sits where it should be, so every

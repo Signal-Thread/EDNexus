@@ -31,6 +31,14 @@ public sealed class PendingEbsCleanup
     public DateTimeOffset QueuedAt { get; set; }
 
     /// <summary>
+    /// Position in this run's queueing order (0 for an entry loaded from a previous run). Not
+    /// persisted: it only lets <see cref="EbsCleanupQueue.Discard"/> tell a clear queued before a
+    /// publish started from one queued while it was in flight.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public long Sequence { get; set; }
+
+    /// <summary>
     /// When the EBS confirmed the snapshot was removed but could not tell viewers already watching,
     /// for <see cref="EbsCleanupQueue.MaxOfflineNotifyRetry"/>. Null until then.
     /// </summary>
@@ -119,6 +127,11 @@ public sealed class EbsCleanupQueue : IDisposable
         _loop = Task.Run(() => LoopAsync(_cts.Token));
     }
 
+    private long _sequence;
+
+    /// <summary>The queueing position so far; pass it to <see cref="Discard"/> to leave later entries alone.</summary>
+    public long Mark() => Interlocked.Read(ref _sequence);
+
     /// <summary>Records a request and persists it before anything is sent, so a crash cannot lose it.</summary>
     public PendingEbsCleanup Enqueue(EbsCleanupKind kind, string endpoint, string token)
     {
@@ -127,9 +140,18 @@ public sealed class EbsCleanupQueue : IDisposable
         {
             var existing = _settings.Twitch.PendingCleanups
                 .FirstOrDefault(p => p.Kind == kind && p.Endpoint == endpoint && p.Token == token);
-            if (existing is not null) return existing;
+            if (existing is not null)
+            {
+                // Asked for again: it counts as queued now, so a publish already in flight cannot discard it.
+                existing.Sequence = Interlocked.Increment(ref _sequence);
+                return existing;
+            }
 
-            entry = new PendingEbsCleanup { Kind = kind, Endpoint = endpoint, Token = token, QueuedAt = _time.GetUtcNow() };
+            entry = new PendingEbsCleanup
+            {
+                Kind = kind, Endpoint = endpoint, Token = token, QueuedAt = _time.GetUtcNow(),
+                Sequence = Interlocked.Increment(ref _sequence),
+            };
             _settings.Twitch.PendingCleanups = [.. _settings.Twitch.PendingCleanups, entry];
             Persist();
         }
@@ -145,14 +167,20 @@ public sealed class EbsCleanupQueue : IDisposable
     /// on purpose, since a clear that is still waiting to be retried would otherwise take the new card
     /// down. Revokes are never dropped this way.
     /// </summary>
-    public void Discard(EbsCleanupKind kind, string endpoint, string token)
+    /// <param name="upToSequence">
+    /// When given (a <see cref="Mark"/> taken before the publish began), only clears queued up to then
+    /// are dropped: one queued while the publish was in flight asks for the card to come down after it,
+    /// and must keep its persisted retry.
+    /// </param>
+    public void Discard(EbsCleanupKind kind, string endpoint, string token, long? upToSequence = null)
     {
         if (kind == EbsCleanupKind.Revoke) return;
 
         lock (_gate)
         {
             var remaining = _settings.Twitch.PendingCleanups
-                .Where(p => !(p.Kind == kind && p.Endpoint == endpoint && p.Token == token))
+                .Where(p => !(p.Kind == kind && p.Endpoint == endpoint && p.Token == token
+                              && (upToSequence is null || p.Sequence <= upToSequence)))
                 .ToList();
             if (remaining.Count == _settings.Twitch.PendingCleanups.Count) return;
             _settings.Twitch.PendingCleanups = remaining;

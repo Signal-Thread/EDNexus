@@ -365,12 +365,15 @@ public sealed class TwitchStreamCardService : IDisposable
         if (key == _lastPublishedKey && _clock() - _lastPublishedAt < _refreshInterval) return null;
 
         StreamStatePublishResult result;
+        long queueMark = 0;
         await _sendGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             // The card may have been switched off while the snapshot was being built; publishing
             // now would put it back on the air straight after the clear.
             if (_token() != token) return null;
+            // A clear queued from here on was asked for after this publish began and must outlive it.
+            queueMark = _cleanup?.Mark() ?? 0;
             result = await _client.PublishAsync(endpoint, token!, snapshot, ct).ConfigureAwait(false);
             if (result.IsSuccess)
             {
@@ -383,7 +386,7 @@ public sealed class TwitchStreamCardService : IDisposable
 
         // A clear still queued for retry (the game exited, the card was switched off) is moot now that
         // the card is on the air again on purpose; left alone it would take the new card down.
-        if (result.IsSuccess) _cleanup?.Discard(EbsCleanupKind.ClearCard, endpoint, token!);
+        if (result.IsSuccess) _cleanup?.Discard(EbsCleanupKind.ClearCard, endpoint, token!, queueMark);
 
         if (result.RequiresReauth)
         {
