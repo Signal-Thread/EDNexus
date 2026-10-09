@@ -15,7 +15,9 @@ public sealed class ReporterHost : IAsyncDisposable
 {
     private const string AppName = "EDNexus";
 
-    private readonly HttpClient _http = new();
+    // A bounded timeout (the default is 100 s) so one hung request can't hold the upload queues, and an
+    // identifying User-Agent so the services can attribute (and contact) us.
+    private readonly HttpClient _http;
     private readonly EddnBridge _eddn;
     private readonly InaraBridge _inara;
 
@@ -26,11 +28,21 @@ public sealed class ReporterHost : IAsyncDisposable
     public ReporterHost(JournalEventBus bus, AppSettings settings, string appVersion, bool isBeingDeveloped,
         Func<bool>? isSuppressed = null, IReportingLog? log = null)
     {
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd($"{AppName}/{SafeProductVersion(appVersion)}");
+
         var eddnOptions = new EddnClientOptions { SoftwareName = AppName, SoftwareVersion = appVersion };
         _eddn = new EddnBridge(bus, settings, new EddnUploader(eddnOptions, _http), new EddnJournalTransformer(eddnOptions), isSuppressed, log);
 
         var inaraOptions = new InaraClientOptions { AppName = AppName, AppVersion = appVersion, IsBeingDeveloped = isBeingDeveloped };
         _inara = new InaraBridge(bus, settings, new InaraClient(inaraOptions, _http), isSuppressed, log);
+    }
+
+    // A User-Agent product version must be a single token; fall back rather than throw on an odd build string.
+    private static string SafeProductVersion(string version)
+    {
+        var token = new string((version ?? "").Where(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '+' or '_').ToArray());
+        return token.Length == 0 ? "0" : token;
     }
 
     public async ValueTask DisposeAsync()

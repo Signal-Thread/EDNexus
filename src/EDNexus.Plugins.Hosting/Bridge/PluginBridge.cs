@@ -33,9 +33,24 @@ namespace EDNexus.Plugins.Hosting.Bridge;
 /// its handler for an event runs the snapshot already includes that event.
 /// </para>
 /// <para>
-/// A bridge is bound to one bus. The app rebuilds its <c>EngineHost</c> (and so its bus) when
-/// leaving developer mode or resetting to live, so the loader must dispose its sessions and this
-/// bridge, and attach new sessions to a bridge over the new host.
+/// A bridge is bound to one bus. The app rebuilds its <c>EngineHost</c> (and so its bus and
+/// <c>CommanderState</c>) when leaving developer mode or resetting to live, so the loader must
+/// dispose its sessions and this bridge, and attach new sessions to a bridge over the new host.
+/// That rebuild is a requirement, not a nicety: once a snapshot has been built while developer
+/// mode was on, this bridge keeps marking the commander as simulated (and keeps withholding it from
+/// network-declaring plugins) for the rest of its life, because the fabricated state is still in
+/// <c>CommanderState</c>. Dispose the developer-mode sources before turning
+/// <see cref="PluginBridgeOptions.IsSimulated"/> off, too: the flag is sampled as each event is
+/// queued, so an event published concurrently with the flip can be stamped live.
+/// </para>
+/// <para>
+/// <b>What <c>state</c> and <c>events</c> reveal.</b> They are not anonymous telemetry. The
+/// commander's in-game name and credit balance are readable through <c>state</c>
+/// (<see cref="IReadOnlyCommanderState.Name"/>, <see cref="IReadOnlyCommanderState.Balance"/>) and
+/// are also in the <c>LoadGame</c>, <c>Commander</c> and <c>Statistics</c> events; location, ship,
+/// cargo and materials likewise. There is no finer-grained grant: a plugin granted <c>state</c> or
+/// <c>events</c> together with <c>network</c> can send all of that off the machine (network access
+/// cannot be enforced in-process). The consent screen must say so in those words.
 /// </para>
 /// </remarks>
 public sealed class PluginBridge : IDisposable
@@ -57,6 +72,8 @@ public sealed class PluginBridge : IDisposable
         ArgumentNullException.ThrowIfNull(state);
         if (options is not null && options.QueueCapacity < 1)
             throw new ArgumentOutOfRangeException(nameof(options), "QueueCapacity must be at least 1.");
+        if (options is not null && options.QueueByteCapacity < 1)
+            throw new ArgumentOutOfRangeException(nameof(options), "QueueByteCapacity must be at least 1.");
         _bus = bus;
         _options = options ?? new PluginBridgeOptions();
         _isSimulated = SafePredicate(_options.IsSimulated);
@@ -79,15 +96,16 @@ public sealed class PluginBridge : IDisposable
     /// </remarks>
     /// <param name="manifest">The plugin's validated manifest; its id attributes errors.</param>
     /// <param name="grantedCapabilities">
-    /// The capabilities the user has granted, or null to grant exactly what the manifest declares.
-    /// Capabilities not declared by the manifest are ignored even if granted.
+    /// Required: the capabilities the user has granted (what <c>PluginHost</c>'s consent callback
+    /// returned). There is no "grant everything declared" default — an empty collection grants
+    /// nothing. Capabilities not declared by the manifest are ignored even if granted.
     /// </param>
-    public PluginBridgeSession Attach(PluginManifest manifest, IEnumerable<string>? grantedCapabilities = null)
+    public PluginBridgeSession Attach(PluginManifest manifest, IEnumerable<string> grantedCapabilities)
     {
         ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(grantedCapabilities);
         var granted = new HashSet<string>(manifest.Capabilities, StringComparer.Ordinal);
-        if (grantedCapabilities is not null)
-            granted.IntersectWith(grantedCapabilities);
+        granted.IntersectWith(grantedCapabilities);
 
         // Developer mode feeds the bus fabricated events. EDDN, Inara, Discord and the Twitch card all
         // go silent while it is on, so a plugin that can phone home is held to the same rule: it sees
@@ -103,7 +121,7 @@ public sealed class PluginBridge : IDisposable
         var onError = _options.HandlerError ?? (static _ => { });
 
         var events = granted.Contains(PluginCapabilities.Events)
-            ? new PluginEvents(_bus, manifest.Id, networked, _isSimulated, onError, _options.QueueCapacity)
+            ? new PluginEvents(_bus, manifest.Id, networked, _isSimulated, onError, _options.QueueCapacity, _options.QueueByteCapacity)
             : null;
 
         var view = granted.Contains(PluginCapabilities.State)
@@ -115,7 +133,9 @@ public sealed class PluginBridge : IDisposable
             events,
             events ?? (IPluginEvents)new DeniedPluginEvents(manifest.Id),
             view,
-            view ?? (IReadOnlyCommanderState)new DeniedCommanderState(manifest.Id));
+            view ?? (IReadOnlyCommanderState)new DeniedCommanderState(manifest.Id),
+            new DeniedPluginStorage(manifest.Id),
+            new DeniedUiRegistry(manifest.Id));
     }
 
     /// <summary>
@@ -162,16 +182,32 @@ public sealed class PluginBridgeOptions
 
     /// <summary>
     /// How many undelivered (subscribed-to) events a plugin may fall behind before the oldest are
-    /// dropped. The default comfortably holds a startup replay of a long session's journal.
+    /// dropped. The default comfortably holds a startup replay of a long session's journal. Bounds
+    /// the count only; <see cref="QueueByteCapacity"/> bounds the memory.
     /// </summary>
     public int QueueCapacity { get; init; } = 8192;
+
+    /// <summary>
+    /// Approximately how many bytes of undelivered event payload a plugin may have queued before
+    /// the oldest are dropped, whichever of this and <see cref="QueueCapacity"/> is reached first.
+    /// Without it a plugin blocked in a handler, with a catch-all subscription, would retain up to
+    /// <see cref="QueueCapacity"/> payloads, which for shipyard or outfitting dumps is hundreds of
+    /// megabytes. An event larger than the whole budget is dropped on arrival. Default 16 MiB.
+    /// </summary>
+    public long QueueByteCapacity { get; init; } = 16L * 1024 * 1024;
 }
 
 /// <summary>A plugin event handler threw.</summary>
+/// <remarks>
+/// Text only, never the exception object: the exception belongs to the plugin, so a sink that kept
+/// it (a log ring buffer, a "recent errors" list) would pin the plugin's load context and stop it
+/// from ever unloading.
+/// </remarks>
 /// <param name="PluginId">The owning plugin's manifest id.</param>
 /// <param name="EventName">The journal event being delivered.</param>
-/// <param name="Exception">What the handler threw.</param>
-public sealed record PluginHandlerError(string PluginId, string EventName, Exception Exception);
+/// <param name="ExceptionType">The full name of the exception type the handler threw.</param>
+/// <param name="Message">The exception's message, sanitised for display; never throws, even if the plugin's exception does.</param>
+public sealed record PluginHandlerError(string PluginId, string EventName, string ExceptionType, string Message);
 
 /// <summary>
 /// One plugin's attachment to a <see cref="PluginBridge"/>: the <see cref="IPluginEvents"/> and
@@ -179,9 +215,11 @@ public sealed record PluginHandlerError(string PluginId, string EventName, Excep
 /// diagnostics. Dispose it when the plugin unloads: that removes every handler the plugin
 /// registered (so the bus holds no references into its <c>AssemblyLoadContext</c>), discards any
 /// queued events, stops its dispatch thread, and cuts its state view off from the engine (it reads
-/// as an unknown commander from then on).
+/// as an unknown commander from then on). Handlers run on the session's own thread, so they can
+/// still be running — concurrently with the plugin's <c>Shutdown</c>, and after <see cref="Dispose"/>
+/// returns — until <see cref="WaitForExit"/> says otherwise.
 /// </summary>
-public sealed class PluginBridgeSession : IDisposable
+public sealed class PluginBridgeSession : IDisposable, IPluginSessionControl
 {
     private readonly PluginEvents? _dispatcher;
     private readonly CommanderStateView? _view;
@@ -191,13 +229,17 @@ public sealed class PluginBridgeSession : IDisposable
         PluginEvents? dispatcher,
         IPluginEvents events,
         CommanderStateView? view,
-        IReadOnlyCommanderState state)
+        IReadOnlyCommanderState state,
+        IPluginStorage storage,
+        IUiRegistry ui)
     {
         PluginId = pluginId;
         _dispatcher = dispatcher;
         _view = view;
         Events = events;
         State = state;
+        Storage = storage;
+        Ui = ui;
     }
 
     /// <summary>The plugin this session belongs to.</summary>
@@ -209,7 +251,26 @@ public sealed class PluginBridgeSession : IDisposable
     /// <summary>The plugin's read-only state view, for <see cref="IPluginContext.State"/>.</summary>
     public IReadOnlyCommanderState State { get; }
 
-    /// <summary>Subscribed-to events dropped because the plugin fell <see cref="PluginBridgeOptions.QueueCapacity"/> behind.</summary>
+    /// <summary>
+    /// The plugin's storage, for <see cref="IPluginContext.Storage"/>. The bridge has no storage
+    /// backend yet, so this always refuses (<see cref="UnauthorizedAccessException"/>) rather than
+    /// letting a context factory hand the plugin a stub that silently discards its data; a real
+    /// implementation replaces it for plugins granted <see cref="PluginCapabilities.Storage"/>.
+    /// </summary>
+    public IPluginStorage Storage { get; }
+
+    /// <summary>
+    /// The plugin's UI registry, for <see cref="IPluginContext.Ui"/>. The bridge has no UI
+    /// contribution points yet, so this always refuses, as <see cref="Storage"/> does; a real
+    /// implementation replaces it for plugins granted <see cref="PluginCapabilities.UiDashboard"/> or
+    /// <see cref="PluginCapabilities.UiOverlay"/>.
+    /// </summary>
+    public IUiRegistry Ui { get; }
+
+    /// <summary>
+    /// Subscribed-to events dropped because the plugin fell <see cref="PluginBridgeOptions.QueueCapacity"/>
+    /// events or <see cref="PluginBridgeOptions.QueueByteCapacity"/> bytes behind.
+    /// </summary>
     public long DroppedEventCount => _dispatcher?.DroppedEventCount ?? 0;
 
     /// <summary>Handler invocations that threw, for quarantine decisions.</summary>
@@ -218,13 +279,16 @@ public sealed class PluginBridgeSession : IDisposable
     /// <summary>Events queued for the plugin but not yet delivered.</summary>
     public int PendingEventCount => _dispatcher?.PendingCount ?? 0;
 
+    /// <summary>Approximate memory held by <see cref="PendingEventCount"/>.</summary>
+    public long PendingEventBytes => _dispatcher?.PendingBytes ?? 0;
+
     /// <summary>
     /// After <see cref="Dispose"/>, waits up to <paramref name="timeout"/> for the dispatch thread to
     /// finish the handler it may be running. Returns false if the plugin is stuck in a handler:
     /// callers must then treat the plugin as <b>cannot unload</b>, because its code is still on a
     /// stack and unloading its <c>AssemblyLoadContext</c> will not complete.
     /// </summary>
-    public bool WaitForDispatchExit(TimeSpan timeout) => _dispatcher?.WaitForExit(timeout) ?? true;
+    public bool WaitForExit(TimeSpan timeout) => _dispatcher?.WaitForExit(timeout) ?? true;
 
     /// <inheritdoc />
     public void Dispose()

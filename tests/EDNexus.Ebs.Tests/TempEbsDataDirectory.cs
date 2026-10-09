@@ -51,8 +51,12 @@ public sealed class TempEbsDataDirectory : IDisposable
 
     public void Dispose()
     {
-        // Pooled connections keep the file open on Windows, which would block the delete.
-        SqliteConnection.ClearAllPools();
+        // Pooled connections keep the file open on Windows, which would block the delete. Only THIS
+        // directory's pool is cleared: ClearAllPools() would close (and so checkpoint, and delete the
+        // -wal file of) every other test's live database, racing ReadAllDatabaseBytes in tests that
+        // xUnit runs in parallel.
+        using (var own = new SqliteConnection(EbsDatabase.BuildConnectionString(System.IO.Path.Combine(Path, EbsDatabase.FileName))))
+            SqliteConnection.ClearPool(own);
         try { Directory.Delete(Path, recursive: true); }
         catch (IOException) { /* best-effort temp cleanup */ }
         catch (UnauthorizedAccessException) { }

@@ -1,8 +1,8 @@
 namespace EDNexus.Ebs.Options;
 
 /// <summary>
-/// Configuration required to authenticate against Twitch's Extensions platform and to sign/verify
-/// the JWTs exchanged with the desktop client and the Twitch Helix API.
+/// Configuration required to authenticate against Twitch's Extensions platform and to sign the JWT the
+/// EBS uses to call the Twitch Helix PubSub API.
 /// </summary>
 /// <remarks>
 /// Bound from the <c>Twitch</c> configuration section. In production these values should come from
@@ -17,21 +17,28 @@ public sealed class TwitchEbsOptions
     /// <summary>The Twitch application Client ID associated with the extension.</summary>
     public string ClientId { get; set; } = string.Empty;
 
-    /// <summary>The Twitch Extension ID (Client ID of the extension itself), used in PubSub payloads.</summary>
+    /// <summary>
+    /// The Twitch Extension ID (the extension's own Client ID). Sent as the <c>Client-Id</c> header on
+    /// the Helix "Send Extension PubSub Message" call, which Twitch ties to the extension rather than
+    /// to the OAuth application. Often the same value as <see cref="ClientId"/>, which is what the
+    /// login flow uses; set both when the extension and the application have different Client IDs.
+    /// </summary>
     public string ExtensionId { get; set; } = string.Empty;
 
     /// <summary>
-    /// The base64-encoded Extension Secret issued by Twitch, used both to verify JWTs signed by
-    /// Twitch (broadcaster/viewer config-page JWTs) and to sign outbound JWTs the EBS uses to call
-    /// the Helix PubSub API on the extension's behalf.
+    /// The Twitch user id of the extension's OWNER (the account that created it in the Developer
+    /// Console), placed in the <c>user_id</c> claim of the JWT signed for the PubSub call. Twitch
+    /// documents that claim as the extension owner's id. Optional: when empty the claim keeps its
+    /// historical placeholder value, which Twitch has so far accepted; set it if PubSub publishing
+    /// fails with <c>401</c>/<c>403</c> (see the README's publish smoke test).
     /// </summary>
-    public string ExtensionSecret { get; set; } = string.Empty;
+    public string? OwnerUserId { get; set; }
 
     /// <summary>
-    /// Optional clock skew (seconds) tolerated when validating the <c>exp</c>/<c>nbf</c> claims of
-    /// inbound JWTs. Defaults to 30 seconds.
+    /// The base64-encoded Extension Secret issued by Twitch, used to sign the outbound JWTs the EBS
+    /// uses to call the Helix PubSub API on the extension's behalf.
     /// </summary>
-    public int ClockSkewSeconds { get; set; } = 30;
+    public string ExtensionSecret { get; set; } = string.Empty;
 
     /// <summary>Lifetime (seconds) of JWTs the EBS mints to call the Helix PubSub API. Defaults to 180s.</summary>
     public int OutboundTokenLifetimeSeconds { get; set; } = 180;

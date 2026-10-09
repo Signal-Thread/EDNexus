@@ -10,12 +10,6 @@
         Width="980" Height="660" MinWidth="720" MinHeight="480"
         Background="{StaticResource Surface0}">
 
-  <Window.Resources>
-    <!-- One-off banner backgrounds not part of the shared design-system palette. -->
-    <SolidColorBrush x:Key="DevModeBarBg" Color="#FF141013" />
-    <SolidColorBrush x:Key="UpdateBarBg" Color="#FF112322" />
-  </Window.Resources>
-
   <Window.Styles>
     <Style Selector="Border.card">
       <Setter Property="Background" Value="{StaticResource CardBg}" />
@@ -216,9 +210,8 @@
     <Border DockPanel.Dock="Bottom" Background="{StaticResource UpdateBarBg}" BorderBrush="{StaticResource CardBorder}"
             BorderThickness="0,0,0,1" Padding="12" IsVisible="{Binding UpdateAvailable}">
       <Grid ColumnDefinitions="*,Auto">
-        <TextBlock Text="An update was downloaded" Foreground="{StaticResource Ink}" VerticalAlignment="Center" />
+        <TextBlock Text="An update was downloaded and verified. It is ready to install." Foreground="{StaticResource Ink}" VerticalAlignment="Center" />
         <StackPanel Orientation="Horizontal" Grid.Column="1" Spacing="8" VerticalAlignment="Center">
-          <TextBlock Text="An update is ready to install" Foreground="{StaticResource Ink}" VerticalAlignment="Center" />
           <Button Content="Install" Command="{Binding InstallUpdateCommand}" Classes="action" Margin="8,0,0,0"/>
         </StackPanel>
       </Grid>

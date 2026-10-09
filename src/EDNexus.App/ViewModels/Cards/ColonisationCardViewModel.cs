@@ -55,16 +55,26 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
         var site = Context.Host.Colonisation.ActiveSite;
         if (site is null)
         {
-            if (HasColonisation) { HasColonisation = false; ShoppingList.Clear(); _signature = ""; ClearShared(); }
+            if (HasColonisation)
+            {
+                HasColonisation = false;
+                ShoppingList.Clear();
+                _signature = "";
+                _sharedMarketId = 0;   // docking at the same depot again must look it up again
+                ClearShared();
+            }
             return;
         }
 
         // Docking at a different depot means different shared totals — look them up once, not per tick.
-        if (site.MarketId != _sharedMarketId)
+        // While a lookup for the previous depot is still in flight the new one has to wait: the id is
+        // only claimed once its own lookup actually starts, so a later tick picks it up instead of the
+        // new depot's shared load being dropped for good.
+        if (site.MarketId != _sharedMarketId && !SharedBusy)
         {
             _sharedMarketId = site.MarketId;
             ClearShared();
-            _ = LoadSharedAsync(site.StarSystem, site.MarketId);
+            LoadSharedAsync(site.StarSystem, site.MarketId).Forget("Colonisation: shared project lookup");
         }
 
         HasColonisation = true;
@@ -106,6 +116,7 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
     private Task RefreshShared()
     {
         var site = Context.Host.Colonisation.ActiveSite;
+        if (site is not null) _sharedMarketId = site.MarketId;   // a manual refresh claims the depot too
         return site is null ? Task.CompletedTask : LoadSharedAsync(site.StarSystem, site.MarketId);
     }
 
@@ -123,6 +134,8 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
     /// </summary>
     private async Task LoadSharedAsync(string? systemName, long marketId)
     {
+        // Sends the depot's system name and market id to a third party, so it is opt-out in Settings.
+        if (!Context.SharedProjectLookupEnabled) { ClearShared(); return; }
         if (SharedBusy || string.IsNullOrWhiteSpace(systemName) || marketId <= 0) return;
 
         SharedBusy = true;
@@ -130,7 +143,9 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
         {
             var lookup = Context.Host.SharedProjects;
             var shared = await lookup.GetForDepotAsync(systemName, marketId, CancellationToken.None);
-            if (shared is null || marketId != _sharedMarketId) return;   // undocked meanwhile
+            // Undocked, or docked somewhere else, while the lookup was in flight: these totals belong
+            // to a depot the card is no longer showing.
+            if (shared is null || Context.Host.Colonisation.ActiveSite?.MarketId != marketId) return;
 
             var architect = string.IsNullOrWhiteSpace(shared.Architect) ? "" : $" · started by {shared.Architect}";
             SharedTitle = $"{shared.BuildName}{architect}";

@@ -132,6 +132,10 @@ public sealed class Bootstrap
     /// </summary>
     public void LearnCommodityPrices(IEnumerable<(string Symbol, int MeanPrice)> prices)
     {
+        // Developer mode feeds fabricated markets (invented MeanPrice values) through the real bus, and
+        // is documented as never persisted — so nothing observed while it is on may reach the settings file.
+        if (Dev.Enabled) return;
+
         var changed = false;
         foreach (var (symbol, mean) in prices)
         {
@@ -173,6 +177,7 @@ public sealed class Bootstrap
     /// </summary>
     public void RecordMiningRefined(DateTimeOffset when, long credits)
     {
+        if (Dev.Enabled) return;   // fabricated refining must not count toward the real daily total
         EnsureMiningSessionDate(when);
         Settings.Mining.SessionValue += Math.Max(0, credits);
         Settings.Mining.SessionUnits += 1;
@@ -185,7 +190,15 @@ public sealed class Bootstrap
     /// </summary>
     public void RecordMiningSpot(RefinedUnit unit, int averagePrice)
     {
+        if (Dev.Enabled) return;   // a fabricated spot would be announced as real once developer mode is off
         Settings.Mining.KnownSpots = MiningSpotBook.Record(Settings.Mining.KnownSpots, unit, averagePrice);
+        Store.Save(Settings);
+    }
+
+    /// <summary>Persist whether docking at a construction site looks up a shared project on Raven Colonial.</summary>
+    public void ApplySharedProjectLookup(bool enabled)
+    {
+        Settings.Colonisation.SharedProjectLookup = enabled;
         Store.Save(Settings);
     }
 
@@ -259,6 +272,9 @@ public sealed class Bootstrap
     {
         var trimmed = (ebsBaseUrl ?? string.Empty).Trim().TrimEnd('/');
         var previousBaseUrl = Settings.Twitch.EbsBaseUrl;
+        // The dialog refuses an insecure address before it gets here; this is the backstop for any
+        // other caller. Keeping the current EBS is safer than storing one the token cannot be sent to.
+        if (TwitchOAuthOptions.ValidateEbsBaseUrl(trimmed) is not null) trimmed = previousBaseUrl;
         var wasOnAir = Settings.Twitch.StreamCardEnabled && !string.IsNullOrWhiteSpace(Settings.Twitch.Token);
         var previousToken = Settings.Twitch.Token;
 

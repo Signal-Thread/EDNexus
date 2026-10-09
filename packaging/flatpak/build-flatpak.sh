@@ -88,6 +88,6 @@ fi
 cat <<EOF
 
 For a Flathub submission, upload the tarball as a GitHub Release asset and set in $APP_ID.yml:
-  url:    https://github.com/Signal-Thread-LLC/EDNexus/releases/download/v$VERSION/$(basename "$TARBALL")
+  url:    https://github.com/Signal-Thread/EDNexus/releases/download/v$VERSION/$(basename "$TARBALL")
   sha256: $SHA
 EOF

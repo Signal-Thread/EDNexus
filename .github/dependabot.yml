@@ -10,3 +10,21 @@ updates:
     groups:
       github-actions:
         patterns: ['*']
+
+  # NuGet: one weekly PR across every project (Dependabot scans each project folder for its csproj).
+  - package-ecosystem: nuget
+    directories: ['/src/*', '/tests/*', '/tools/*']
+    schedule:
+      interval: weekly
+    groups:
+      nuget:
+        patterns: ['*']
+
+  # The EBS container's base images (mcr.microsoft.com/dotnet/sdk + aspnet).
+  - package-ecosystem: docker
+    directory: /src/EDNexus.Ebs
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ['*']

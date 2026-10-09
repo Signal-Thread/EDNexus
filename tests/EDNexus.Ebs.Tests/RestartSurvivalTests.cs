@@ -81,7 +81,7 @@ public sealed class RestartSurvivalTests : IDisposable
         var response = await client.GetAsync("/");
 
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
-        Assert.Equal("https://signal-thread-llc.github.io/EDNexus/", response.Headers.Location?.ToString());
+        Assert.Equal("https://signal-thread.github.io/EDNexus/", response.Headers.Location?.ToString());
     }
 
     private sealed class Host(string dataDirectory) : WebApplicationFactory<Program>
@@ -95,6 +95,7 @@ public sealed class RestartSurvivalTests : IDisposable
             {
                 ["Twitch:ExtensionSecret"] = "c3VwZXItc2VjcmV0LWV4dGVuc2lvbi1rZXktMTIzNA==",
                 ["Twitch:ClientId"] = "test-client-id",
+                ["Twitch:ClientSecret"] = "test-client-secret",
                 ["Twitch:ExtensionId"] = "test-extension-id",
                 ["Ebs:StorageProvider"] = "Sqlite",
                 ["Ebs:DataDirectory"] = dataDirectory,

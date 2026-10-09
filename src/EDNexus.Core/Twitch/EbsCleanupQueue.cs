@@ -31,6 +31,14 @@ public sealed class PendingEbsCleanup
     public DateTimeOffset QueuedAt { get; set; }
 
     /// <summary>
+    /// Position in this run's queueing order (0 for an entry loaded from a previous run). Not
+    /// persisted: it only lets <see cref="EbsCleanupQueue.Discard"/> tell a clear queued before a
+    /// publish started from one queued while it was in flight.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public long Sequence { get; set; }
+
+    /// <summary>
     /// When the EBS confirmed the snapshot was removed but could not tell viewers already watching,
     /// for <see cref="EbsCleanupQueue.MaxOfflineNotifyRetry"/>. Null until then.
     /// </summary>
@@ -45,6 +53,9 @@ public sealed class PendingEbsCleanup
 /// <remarks>
 /// Entries survive restarts via <see cref="TwitchSettings.PendingCleanups"/>. The list is replaced
 /// rather than mutated, so another thread serializing the settings never sees it change mid-write.
+/// The retry loop saves from a worker thread while the UI thread edits other parts of the same
+/// settings object, so a save can fail transiently; it is retried on the spot, and again on every
+/// later round while a write is still owed.
 /// </remarks>
 public sealed class EbsCleanupQueue : IDisposable
 {
@@ -78,6 +89,12 @@ public sealed class EbsCleanupQueue : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private Task? _loop;
 
+    /// <summary>Immediate attempts at one save before it is left for the next retry round.</summary>
+    private const int SaveAttempts = 3;
+
+    /// <summary>True while the on-disk queue is behind the in-memory one because every save attempt failed.</summary>
+    private bool _saveOwed;
+
     public EbsCleanupQueue(
         AppSettings settings,
         SettingsStore store,
@@ -110,6 +127,11 @@ public sealed class EbsCleanupQueue : IDisposable
         _loop = Task.Run(() => LoopAsync(_cts.Token));
     }
 
+    private long _sequence;
+
+    /// <summary>The queueing position so far; pass it to <see cref="Discard"/> to leave later entries alone.</summary>
+    public long Mark() => Interlocked.Read(ref _sequence);
+
     /// <summary>Records a request and persists it before anything is sent, so a crash cannot lose it.</summary>
     public PendingEbsCleanup Enqueue(EbsCleanupKind kind, string endpoint, string token)
     {
@@ -118,17 +140,52 @@ public sealed class EbsCleanupQueue : IDisposable
         {
             var existing = _settings.Twitch.PendingCleanups
                 .FirstOrDefault(p => p.Kind == kind && p.Endpoint == endpoint && p.Token == token);
-            if (existing is not null) return existing;
+            if (existing is not null)
+            {
+                // Asked for again: it counts as queued now, so a publish already in flight cannot discard it.
+                existing.Sequence = Interlocked.Increment(ref _sequence);
+                return existing;
+            }
 
-            entry = new PendingEbsCleanup { Kind = kind, Endpoint = endpoint, Token = token, QueuedAt = _time.GetUtcNow() };
+            entry = new PendingEbsCleanup
+            {
+                Kind = kind, Endpoint = endpoint, Token = token, QueuedAt = _time.GetUtcNow(),
+                Sequence = Interlocked.Increment(ref _sequence),
+            };
             _settings.Twitch.PendingCleanups = [.. _settings.Twitch.PendingCleanups, entry];
-            _store.Save(_settings);
+            Persist();
         }
 
         try { _enqueued.Release(); }
         catch (SemaphoreFullException) { /* the loop is already due to look */ }
         catch (ObjectDisposedException) { /* shutting down; the entry is on disk for next launch */ }
         return entry;
+    }
+
+    /// <summary>
+    /// Drops every pending clear for this EBS and token. Called when the card is put back on the air
+    /// on purpose, since a clear that is still waiting to be retried would otherwise take the new card
+    /// down. Revokes are never dropped this way.
+    /// </summary>
+    /// <param name="upToSequence">
+    /// When given (a <see cref="Mark"/> taken before the publish began), only clears queued up to then
+    /// are dropped: one queued while the publish was in flight asks for the card to come down after it,
+    /// and must keep its persisted retry.
+    /// </param>
+    public void Discard(EbsCleanupKind kind, string endpoint, string token, long? upToSequence = null)
+    {
+        if (kind == EbsCleanupKind.Revoke) return;
+
+        lock (_gate)
+        {
+            var remaining = _settings.Twitch.PendingCleanups
+                .Where(p => !(p.Kind == kind && p.Endpoint == endpoint && p.Token == token
+                              && (upToSequence is null || p.Sequence <= upToSequence)))
+                .ToList();
+            if (remaining.Count == _settings.Twitch.PendingCleanups.Count) return;
+            _settings.Twitch.PendingCleanups = remaining;
+            Persist();
+        }
     }
 
     /// <summary>
@@ -143,6 +200,11 @@ public sealed class EbsCleanupQueue : IDisposable
     /// <summary>Sends every pending request once. Returns how many are still pending afterwards.</summary>
     public async Task<int> RetryPendingAsync(CancellationToken ct = default)
     {
+        lock (_gate)
+        {
+            if (_saveOwed) Persist();
+        }
+
         foreach (var entry in Pending)
         {
             ct.ThrowIfCancellationRequested();
@@ -200,7 +262,7 @@ public sealed class EbsCleanupQueue : IDisposable
             lock (_gate)
             {
                 entry.SnapshotRemovedAt = _time.GetUtcNow();
-                _store.Save(_settings);
+                Persist();
             }
         }
 
@@ -214,8 +276,30 @@ public sealed class EbsCleanupQueue : IDisposable
             var remaining = _settings.Twitch.PendingCleanups.Where(p => !ReferenceEquals(p, entry)).ToList();
             if (remaining.Count == _settings.Twitch.PendingCleanups.Count) return;
             _settings.Twitch.PendingCleanups = remaining;
-            _store.Save(_settings);
+            Persist();
         }
+    }
+
+    /// <summary>
+    /// Writes the settings file, trying again if the write fails — most likely because the UI thread
+    /// changed a collection under the serializer. Call with <see cref="_gate"/> held. A write that
+    /// still fails is logged and retried at the start of the next retry round.
+    /// </summary>
+    private void Persist()
+    {
+        for (var attempt = 1; attempt <= SaveAttempts; attempt++)
+        {
+            if (_store.TrySave(_settings))
+            {
+                _saveOwed = false;
+                return;
+            }
+
+            if (attempt < SaveAttempts) Thread.Sleep(15);
+        }
+
+        _saveOwed = true;
+        System.Diagnostics.Trace.TraceWarning("Twitch: could not save the pending EBS cleanup queue; will retry.");
     }
 
     private async Task LoopAsync(CancellationToken ct)

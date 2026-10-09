@@ -178,6 +178,162 @@ public class TwitchAuthServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task LoginAsync_is_listening_before_the_browser_is_opened()
+    {
+        var (settings, store) = NewStore();
+        var listener = new FakeCallbackListener(new Dictionary<string, string> { ["error"] = "access_denied" });
+        var browser = new ProbingBrowserLauncher(listener);
+
+        var service = new TwitchAuthService(settings, store, Options, new FakeEbsAuthApiClient(), browser, listener);
+        await service.LoginAsync();
+
+        Assert.True(browser.ListeningWhenOpened);
+        Assert.False(string.IsNullOrEmpty(listener.ExpectedState));
+        Assert.Contains($"state={listener.ExpectedState}", browser.LastUrl);
+    }
+
+    [Fact]
+    public async Task LoginAsync_reports_a_bind_failure_without_ever_opening_the_browser()
+    {
+        var (settings, store) = NewStore();
+        var browser = new FakeBrowserLauncher();
+        var listener = new FakeCallbackListener(new Dictionary<string, string>())
+        {
+            ListenFailure = new InvalidOperationException("port 59123 is taken"),
+        };
+
+        var service = new TwitchAuthService(settings, store, Options, new FakeEbsAuthApiClient(), browser, listener);
+        var result = await service.LoginAsync();
+
+        Assert.Equal(TwitchAuthStatus.Error, result.Status);
+        Assert.Contains("port 59123 is taken", result.Error);
+        Assert.Null(browser.LastUrl);
+    }
+
+    [Fact]
+    public async Task LoginAsync_releases_the_port_when_the_browser_cannot_be_opened()
+    {
+        var (settings, store) = NewStore();
+        var listener = new FakeCallbackListener(new Dictionary<string, string>());
+        var browser = new ProbingBrowserLauncher(listener, fail: true);
+
+        var service = new TwitchAuthService(settings, store, Options, new FakeEbsAuthApiClient(), browser, listener);
+        var result = await service.LoginAsync();
+
+        Assert.Equal(TwitchAuthStatus.Error, result.Status);
+        Assert.Contains("browser", result.Error);
+        Assert.True(listener.Released);
+    }
+
+    [Fact]
+    public async Task LoginAsync_releases_the_port_after_a_completed_login()
+    {
+        var (settings, store) = NewStore();
+        var browser = new FakeBrowserLauncher();
+        var listener = new FakeCallbackListener(browser, () => new Dictionary<string, string>
+        {
+            ["code"] = "code",
+            ["state"] = ExtractState(browser.LastUrl ?? ""),
+        });
+        var api = new FakeEbsAuthApiClient
+        {
+            OnExchange = (_, _, _) => new EbsTokenResponse { Token = "t", ChannelId = "1", Username = "X" },
+        };
+
+        var service = new TwitchAuthService(settings, store, Options, api, browser, listener);
+        var result = await service.LoginAsync();
+
+        Assert.True(result.IsSuccess);
+        Assert.True(listener.Released);
+    }
+
+    [Fact]
+    public async Task LoginAsync_uses_the_redirect_that_was_actually_bound_for_the_authorize_url_and_the_exchange()
+    {
+        var (settings, store) = NewStore();
+        var browser = new FakeBrowserLauncher();
+        var fallback = new Uri("http://localhost:51234/callback");
+        var listener = new FakeCallbackListener(browser, () => new Dictionary<string, string>
+        {
+            ["code"] = "code",
+            ["state"] = ExtractState(browser.LastUrl ?? ""),
+        })
+        {
+            BoundRedirect = fallback,
+        };
+        string? exchangedRedirect = null;
+        var api = new FakeEbsAuthApiClient
+        {
+            OnExchange = (_, _, redirect) =>
+            {
+                exchangedRedirect = redirect;
+                return new EbsTokenResponse { Token = "t", ChannelId = "1", Username = "X" };
+            },
+        };
+
+        var service = new TwitchAuthService(settings, store, Options, api, browser, listener);
+        await service.LoginAsync();
+
+        Assert.Contains("redirect_uri=http%3A%2F%2Flocalhost%3A51234%2Fcallback", browser.LastUrl);
+        Assert.Equal("http://localhost:51234/callback", exchangedRedirect);
+    }
+
+    [Theory]
+    [InlineData("http://ebs.example.com")]
+    [InlineData("ebs.example.com")]
+    public async Task LoginAsync_refuses_an_insecure_EBS_without_opening_the_browser(string baseUrl)
+    {
+        var (settings, store) = NewStore();
+        var browser = new FakeBrowserLauncher();
+        var api = new FakeEbsAuthApiClient();
+        var options = new TwitchOAuthOptions { EbsBaseUrl = baseUrl, LoginTimeout = TimeSpan.FromSeconds(5) };
+
+        var service = new TwitchAuthService(settings, store, options, api, browser, new FakeCallbackListener(new Dictionary<string, string>()));
+        var result = await service.LoginAsync();
+
+        Assert.Equal(TwitchAuthStatus.Error, result.Status);
+        Assert.Contains("https", result.Error);
+        Assert.Null(browser.LastUrl);
+        Assert.Equal(0, api.ExchangeCalls);
+    }
+
+    [Fact]
+    public async Task LogoutAsync_does_not_send_the_token_to_an_insecure_EBS_or_queue_it()
+    {
+        var (settings, store) = NewStore();
+        settings.Twitch.Token = "ebs-token-1";
+        settings.Twitch.ChannelId = "1";
+        var api = new FakeEbsAuthApiClient();
+        using var cleanup = new EbsCleanupQueue(settings, store, new FakeStreamStateApiClient(), api);
+        var options = new TwitchOAuthOptions { EbsBaseUrl = "http://ebs.example.com" };
+
+        var service = new TwitchAuthService(settings, store, options, api, new FakeBrowserLauncher(),
+            new FakeCallbackListener(new Dictionary<string, string>()), cleanup);
+        await service.LogoutAsync();
+
+        Assert.Equal(0, api.RevokeCalls);
+        Assert.Empty(cleanup.Pending);
+        Assert.False(service.IsLoggedIn);
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("   ", true)]
+    [InlineData("https://ebs.example.com", true)]
+    [InlineData("  https://ebs.example.com/  ", true)]
+    [InlineData("http://localhost:8787", true)]
+    [InlineData("http://127.0.0.1:8787", true)]
+    [InlineData("http://[::1]:8787", true)]
+    [InlineData("http://ebs.example.com", false)]
+    [InlineData("ebs.example.com", false)]
+    [InlineData("ftp://ebs.example.com", false)]
+    public void ValidateEbsBaseUrl_allows_https_and_loopback_only(string? text, bool valid)
+    {
+        Assert.Equal(valid, TwitchOAuthOptions.ValidateEbsBaseUrl(text) is null);
+    }
+
+    [Fact]
     public async Task LogoutAsync_revokes_the_token_with_the_EBS_and_clears_the_session()
     {
         var (settings, store) = NewStore();

@@ -25,6 +25,9 @@ internal static class Program
             Trace.Listeners.Add(new TextWriterTraceListener(tw));
             Trace.AutoFlush = true;
             Trace.TraceInformation($"EDNexus starting, log file: {file}");
+
+            // One log per launch: keep the newest few so the folder doesn't grow without bound.
+            LogRetention.Prune(logDir);
         }
         catch (Exception ex)
         {
@@ -48,8 +51,16 @@ internal static class Program
             System.Diagnostics.Trace.TraceInformation("Program: starting background auto-update check");
             _ = System.Threading.Tasks.Task.Run(async () =>
             {
-                var res = await EDNexus.App.Services.AutoUpdateService.CheckForUpdatesAsync().ConfigureAwait(false);
-                System.Diagnostics.Trace.TraceInformation($"Program: background auto-update finished Found={res.Found}, Message={res.Message}, Verified={res.Verified}");
+                try
+                {
+                    var res = await EDNexus.App.Services.AutoUpdateService.CheckForUpdatesAsync().ConfigureAwait(false);
+                    System.Diagnostics.Trace.TraceInformation($"Program: background auto-update finished Found={res.Found}, Message={res.Message}, Verified={res.Verified}");
+                }
+                catch (Exception ex)
+                {
+                    // Fire-and-forget: observe the failure here rather than leave it unobserved.
+                    System.Diagnostics.Trace.TraceWarning($"Program: background auto-update check failed: {ex.Message}");
+                }
             });
         }
 

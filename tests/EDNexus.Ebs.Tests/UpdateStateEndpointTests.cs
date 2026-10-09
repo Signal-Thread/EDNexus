@@ -294,6 +294,7 @@ public class UpdateStateEndpointTests : IClassFixture<UpdateStateEndpointTests.F
             {
                 ["Twitch:ExtensionSecret"] = "c3VwZXItc2VjcmV0LWV4dGVuc2lvbi1rZXktMTIzNA==",
                 ["Twitch:ClientId"] = "test-client-id",
+                ["Twitch:ClientSecret"] = "test-client-secret",
                 ["Twitch:ExtensionId"] = "test-extension-id",
                 // Keep the shared fixture off disk; the restart-survival tests opt into Sqlite explicitly.
                 ["Ebs:StorageProvider"] = "InMemory",
@@ -323,6 +324,8 @@ public sealed class FailingRemoveChannelStateStore : IChannelStateStore
     public bool TryGet(string channelId, out JsonElement state) => _inner.TryGet(channelId, out state);
 
     public void Remove(string channelId) => throw new InvalidOperationException("simulated storage failure");
+
+    public int PruneExpired() => 0;
 }
 
 /// <summary>Records every broadcast call instead of making a real Helix API request.</summary>

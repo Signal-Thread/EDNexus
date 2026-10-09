@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml;
 using System.Xml.Linq;
 
 namespace EliteDangerous.Galnet;
@@ -42,17 +43,38 @@ public sealed class GalnetClient : IDisposable
     {
         try
         {
-            using var response = await _http.GetAsync(_options.FeedUrl, ct).ConfigureAwait(false);
+            // Headers first, so an oversized body can be refused before any of it is buffered.
+            using var response = await _http.GetAsync(_options.FeedUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
                 return GalnetResult<IReadOnlyList<GalnetArticle>>.Failure($"HTTP {(int)response.StatusCode}");
 
             // Read as bytes and decode leniently: the live feed occasionally carries a stray byte
             // that is not valid UTF-8, and one bad apostrophe should not cost the whole news card.
-            var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-            return Parse(Decode(bytes));
+            var bytes = await ReadCappedAsync(response.Content, ct).ConfigureAwait(false);
+            return bytes is null
+                ? GalnetResult<IReadOnlyList<GalnetArticle>>.Failure($"feed larger than {_options.MaxResponseBytes} bytes")
+                : Parse(Decode(bytes));
         }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { return GalnetResult<IReadOnlyList<GalnetArticle>>.Failure(ex.Message); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { return GalnetResult<IReadOnlyList<GalnetArticle>>.Failure(ex.Message); }   // incl. an HttpClient timeout
+    }
+
+    /// <summary>The body bytes, or null if the body exceeds <see cref="GalnetClientOptions.MaxResponseBytes"/>.</summary>
+    private async Task<byte[]?> ReadCappedAsync(HttpContent content, CancellationToken ct)
+    {
+        var cap = _options.MaxResponseBytes;
+        if (content.Headers.ContentLength is { } declared && declared > cap) return null;
+
+        await using var stream = await content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[16 * 1024];
+        int read;
+        while ((read = await stream.ReadAsync(chunk, ct).ConfigureAwait(false)) > 0)
+        {
+            if (buffer.Length + read > cap) return null;
+            buffer.Write(chunk, 0, read);
+        }
+        return buffer.ToArray();
     }
 
     /// <summary>Parse a feed document that has already been fetched. Exposed for tests and offline replay.</summary>
@@ -64,9 +86,13 @@ public sealed class GalnetClient : IDisposable
         XDocument doc;
         try
         {
-            doc = XDocument.Parse(feed);
+            // A feed has no business carrying a DTD: refuse one (no entity expansion, no external
+            // resolution) rather than rely on the framework defaults.
+            var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
+            using var reader = XmlReader.Create(new StringReader(feed), settings);
+            doc = XDocument.Load(reader);
         }
-        catch (System.Xml.XmlException ex)
+        catch (XmlException ex)
         {
             return GalnetResult<IReadOnlyList<GalnetArticle>>.Failure("unparseable feed: " + ex.Message);
         }
@@ -141,14 +167,57 @@ public sealed class GalnetClient : IDisposable
 
         // The feed writes each break as "<br />" followed by a real newline. In HTML that trailing
         // whitespace is insignificant, so swallow it — keeping it would double-space every article.
-        var text = Regex.Replace(html, @"<br\s*/?>\s*", "\n", RegexOptions.IgnoreCase);
-        text = Regex.Replace(text, @"</p\s*>\s*", "\n\n", RegexOptions.IgnoreCase);
-        text = Regex.Replace(text, "<[^>]+>", "");
-        text = System.Net.WebUtility.HtmlDecode(text);
-        text = text.Replace("\r\n", "\n").Replace('\r', '\n');
-        text = Regex.Replace(text, @"[ \t]+\n", "\n");
-        text = Regex.Replace(text, @"\n{3,}", "\n\n");
-        return text.Trim();
+        try
+        {
+            var text = LineBreak.Replace(html, "\n");
+            text = ParagraphEnd.Replace(text, "\n\n");
+            text = StripTags(text);
+            text = System.Net.WebUtility.HtmlDecode(text);
+            text = text.Replace("\r\n", "\n").Replace('\r', '\n');
+            text = TrimLineEnds(text);
+            text = BlankRun.Replace(text, "\n\n");
+            return text.Trim();
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return "";   // pathological input: an unreadable article beats a hung fetch
+        }
+    }
+
+    // Every pattern carries a timeout, so a crafted body can never pin a thread on regex backtracking.
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);
+    private static readonly Regex LineBreak = new(@"<br\s*/?>\s*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, RegexTimeout);
+    private static readonly Regex ParagraphEnd = new(@"</p\s*>\s*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, RegexTimeout);
+    private static readonly Regex BlankRun = new(@"\n{3,}", RegexOptions.CultureInvariant, RegexTimeout);
+
+    /// <summary>
+    /// Drops every <c>&lt;...&gt;</c> tag in one linear pass. (The obvious <c>&lt;[^&gt;]+&gt;</c> regex is
+    /// quadratic on a long run of '&lt;' with no closing '&gt;'.) A '&lt;' with no matching '&gt;' is kept as text.
+    /// </summary>
+    private static string StripTags(string text)
+    {
+        var sb = new StringBuilder(text.Length);
+        var i = 0;
+        while (i < text.Length)
+        {
+            var open = text.IndexOf('<', i);
+            if (open < 0) { sb.Append(text, i, text.Length - i); break; }
+
+            var close = text.IndexOf('>', open + 1);
+            if (close < 0) { sb.Append(text, i, text.Length - i); break; }   // no tag can end: the rest is text
+
+            sb.Append(text, i, open - i);
+            i = close + 1;
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Trims trailing spaces/tabs from every line, in one linear pass (no regex backtracking).</summary>
+    private static string TrimLineEnds(string text)
+    {
+        var lines = text.Split('\n');
+        for (var n = 0; n < lines.Length; n++) lines[n] = lines[n].TrimEnd(' ', '\t');
+        return string.Join('\n', lines);
     }
 
     /// <summary>UTF-8 with replacement rather than throwing, so one malformed byte cannot fail a fetch.</summary>

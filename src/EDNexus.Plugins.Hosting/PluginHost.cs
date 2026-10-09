@@ -24,6 +24,12 @@ namespace EDNexus.Plugins.Hosting;
 /// the threading contract, #62).
 /// </para>
 /// <para>
+/// <b>Consent.</b> The host never runs a plugin the user has not approved: every plugin that
+/// passes the static checks is put to the required <c>consent</c> callback before any of its code
+/// loads, and the capabilities that callback returns are the only ones handed to the context
+/// factory. A callback that returns <see langword="null"/> (or throws) means "do not run it".
+/// </para>
+/// <para>
 /// A load context isolates dependency <em>versions</em>; it is <strong>not a security
 /// boundary</strong>. Plugin code runs with the host's full trust, and any assembly a plugin does
 /// not ship itself (including the host's own assemblies) resolves from the host process.
@@ -35,26 +41,49 @@ public sealed class PluginHost : IDisposable
 
     private readonly object _gate = new();
     private readonly Dictionary<string, LoadedPlugin> _loaded = new(StringComparer.Ordinal);
-    private readonly Func<PluginManifest, IPluginContext> _contextFactory;
+    private readonly Func<PluginManifest, IReadOnlyCollection<string>?> _consent;
+    private readonly Func<PluginManifest, IReadOnlySet<string>, IPluginContext> _contextFactory;
+    private TimeSpan _unloadTimeout = TimeSpan.FromSeconds(5);
     private bool _disposed;
     private bool _loading;
+    private volatile PluginRecoveryResult? _recovery;
+    private volatile PluginDiscoveryReport? _lastReport;
 
     /// <param name="pluginsRoot">The plugins root (see <see cref="PluginPaths.Resolve()"/>). It need not exist.</param>
     /// <param name="appVersion">The running EDNexus version, for <see cref="PluginManifest.MinAppVersion"/>.</param>
+    /// <param name="consent">
+    /// Required. Decides, for each plugin that passed the static checks and is about to be loaded,
+    /// whether it may run and which of its declared capabilities it is granted. Return
+    /// <see langword="null"/> to deny: the plugin is reported as <see cref="PluginLoadStatus.Denied"/>
+    /// and none of its code runs. Return a collection (possibly empty) to allow it with exactly those
+    /// capabilities; anything the manifest does not declare is dropped. A callback that throws also
+    /// denies (<see cref="PluginLoadStatus.Failed"/>). Called on the loading thread, once per
+    /// plugin per pass, before any plugin code is loaded; it must not call back into this host.
+    /// There is deliberately no allow-all default: whoever wires the host must decide.
+    /// </param>
     /// <param name="contextFactory">
     /// Builds the <see cref="IPluginContext"/> handed to each plugin's
-    /// <see cref="IEDNexusPlugin.Initialize"/>. This is the only place a plugin's context is built.
-    /// If the returned context is <see cref="IDisposable"/> the host disposes it when the plugin
-    /// unloads or fails to initialise, so the bridge behind it can drop the plugin's subscriptions
-    /// (which would otherwise keep the plugin in memory).
+    /// <see cref="IEDNexusPlugin.Initialize"/>, given the capabilities <paramref name="consent"/>
+    /// granted (pass them straight to <c>PluginBridge.Attach</c>). This is the only place a plugin's
+    /// context is built. If the returned context is <see cref="IDisposable"/> the host disposes it
+    /// when the plugin unloads or fails to initialise, so the bridge behind it can drop the plugin's
+    /// subscriptions (which would otherwise keep the plugin in memory). If it is also an
+    /// <see cref="IPluginSessionControl"/> the host then waits for in-flight handlers to finish
+    /// (see <see cref="UnloadTimeout"/>).
     /// </param>
-    public PluginHost(string pluginsRoot, SemanticVersion appVersion, Func<PluginManifest, IPluginContext> contextFactory)
+    public PluginHost(
+        string pluginsRoot,
+        SemanticVersion appVersion,
+        Func<PluginManifest, IReadOnlyCollection<string>?> consent,
+        Func<PluginManifest, IReadOnlySet<string>, IPluginContext> contextFactory)
     {
         ArgumentNullException.ThrowIfNull(pluginsRoot);
         ArgumentNullException.ThrowIfNull(appVersion);
+        ArgumentNullException.ThrowIfNull(consent);
         ArgumentNullException.ThrowIfNull(contextFactory);
         PluginsRoot = Path.GetFullPath(pluginsRoot);
         AppVersion = appVersion;
+        _consent = consent;
         _contextFactory = contextFactory;
     }
 
@@ -68,13 +97,31 @@ public sealed class PluginHost : IDisposable
     internal Version HostSdkVersion { get; init; } = PluginSdk.CurrentVersion;
 
     /// <summary>
-    /// What install recovery did on the first <see cref="LoadAll"/>, or <see langword="null"/>
-    /// before it. Recovery runs once per host.
+    /// How long unloading a plugin waits for a handler that is still running on one of its event
+    /// threads (only for contexts that implement <see cref="IPluginSessionControl"/>) before
+    /// reporting it as stuck. Default 5 seconds.
     /// </summary>
-    public PluginRecoveryResult? Recovery { get; private set; }
+    public TimeSpan UnloadTimeout
+    {
+        get => _unloadTimeout;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero);
+            _unloadTimeout = value;
+        }
+    }
 
-    /// <summary>The report from the last <see cref="LoadAll"/>, or <see langword="null"/> before the first.</summary>
-    public PluginDiscoveryReport? LastReport { get; private set; }
+    /// <summary>
+    /// What install recovery did on the first <see cref="LoadAll"/>, or <see langword="null"/>
+    /// before it. Recovery runs once per host. Safe to read from any thread.
+    /// </summary>
+    public PluginRecoveryResult? Recovery => _recovery;
+
+    /// <summary>
+    /// The report from the last <see cref="LoadAll"/>, or <see langword="null"/> before the first.
+    /// Safe to read from any thread.
+    /// </summary>
+    public PluginDiscoveryReport? LastReport => _lastReport;
 
     /// <summary>A snapshot of the plugins currently loaded, in id order.</summary>
     public IReadOnlyList<LoadedPlugin> Loaded
@@ -121,19 +168,28 @@ public sealed class PluginHost : IDisposable
             // Must run before discovery: a replace interrupted by a crash leaves the plugin's
             // previous version in a hidden .replaced-* folder that only recovery puts back.
             var recovery = NoRecovery;
-            if (Recovery is null)
+            if (_recovery is null)
             {
                 recovery = PluginInstaller.RecoverInterrupted(PluginsRoot);
-                Recovery = recovery;
+                _recovery = recovery;
             }
             var errors = recovery.Errors.Select(e => "plugin install recovery: " + e).ToList();
 
             var results = new List<PluginLoadResult>();
             foreach (var candidate in Discover(errors))
+            {
+                // Dispose can arrive mid-pass (app shutdown, or from a plugin's own thread): stop
+                // constructing and initialising further plugins rather than load them only to unload them.
+                if (IsDisposed)
+                {
+                    errors.Add("the host was disposed during the load pass; the remaining plugins were not loaded");
+                    break;
+                }
                 results.Add(LoadCandidate(candidate));
+            }
 
             var report = new PluginDiscoveryReport(PluginsRoot, recovery, errors, results);
-            LastReport = report;
+            _lastReport = report;
             return report;
         }
         finally
@@ -141,6 +197,11 @@ public sealed class PluginHost : IDisposable
             lock (_gate)
                 _loading = false;
         }
+    }
+
+    private bool IsDisposed
+    {
+        get { lock (_gate) return _disposed; }
     }
 
     private PluginLoadResult LoadCandidate(Candidate candidate)
@@ -171,7 +232,7 @@ public sealed class PluginHost : IDisposable
             }
             // Disposed mid-pass (e.g. app shutdown): don't leave this one running.
             if (disposed)
-                plugin.Unload();
+                plugin.Unload(UnloadTimeout);
         }
         return result;
     }
@@ -181,7 +242,15 @@ public sealed class PluginHost : IDisposable
     /// it is not loaded. Never throws for plugin misbehaviour. The load context is collected once
     /// nothing references the plugin's types — note that something outside the host (a static
     /// event such as <see cref="AppDomain.ProcessExit"/>, a running thread or timer the plugin
-    /// started) can keep it alive indefinitely.
+    /// started) can keep it alive indefinitely. A plugin whose event handler is still running
+    /// after <see cref="UnloadTimeout"/> is reported as stuck (<see cref="PluginUnloadResult.Stuck"/>)
+    /// rather than as cleanly unloaded.
+    /// <para>
+    /// Order: <see cref="IEDNexusPlugin.Shutdown"/>, then the context is disposed (which stops
+    /// event delivery), then the host waits for in-flight handlers, then the load context is
+    /// unloaded. Handlers may therefore still be running on the plugin's event thread while
+    /// <c>Shutdown</c> runs.
+    /// </para>
     /// </summary>
     public PluginUnloadResult? Unload(string id)
     {
@@ -192,7 +261,7 @@ public sealed class PluginHost : IDisposable
             if (!_loaded.Remove(id, out plugin))
                 return null;
         }
-        return plugin.Unload();
+        return plugin.Unload(UnloadTimeout);
     }
 
     /// <summary>
@@ -209,7 +278,7 @@ public sealed class PluginHost : IDisposable
         }
         var results = new List<PluginUnloadResult>(plugins.Count);
         foreach (var plugin in plugins)
-            results.Add(plugin.Unload()); // LoadedPlugin.Unload never throws
+            results.Add(plugin.Unload(UnloadTimeout)); // LoadedPlugin.Unload never throws
         return results;
     }
 
@@ -299,6 +368,26 @@ public sealed class PluginHost : IDisposable
         if (ResolveEntryAssembly(dir, manifest.EntryAssembly, out var entryPath) is { } badPath)
             return Result(PluginLoadStatus.Rejected, badPath);
 
+        // Built against a newer (or different-major) SDK than the manifest admits: read from the
+        // assembly's metadata, so the manifest's sdkVersion is not taken on trust. No code runs.
+        if (PluginAssemblyInspector.GetReferencedSdkVersion(entryPath!) is { } built
+            && PluginCompatibility.CheckBuiltAgainst(built, HostSdkVersion) is { } builtAgainst)
+            return Result(PluginLoadStatus.Incompatible, builtAgainst);
+
+        // Last gate before any plugin code is loaded.
+        IReadOnlySet<string> granted;
+        try
+        {
+            var decision = _consent(manifest);
+            if (decision is null)
+                return Result(PluginLoadStatus.Denied, "the user has not allowed this plugin to run");
+            granted = new HashSet<string>(manifest.Capabilities.Where(c => decision.Contains(c, StringComparer.Ordinal)), StringComparer.Ordinal);
+        }
+        catch (Exception ex)
+        {
+            return Result(PluginLoadStatus.Failed, Describe("the consent check failed (the plugin was not run)", ex));
+        }
+
         PluginLoadContext? loadContext = null;
         IPluginContext? context = null;
         IEDNexusPlugin? initializing = null;
@@ -325,7 +414,7 @@ public sealed class PluginHost : IDisposable
             var instance = (IEDNexusPlugin)Activator.CreateInstance(type!)!;
 
             stage = "building the plugin context";
-            context = _contextFactory(manifest);
+            context = _contextFactory(manifest, granted);
 
             stage = "Initialize";
             initializing = instance;
@@ -354,7 +443,7 @@ public sealed class PluginHost : IDisposable
             {
                 try
                 {
-                    DisposeContext(context, reasons);
+                    DisposeContext(context, UnloadTimeout, reasons);
                 }
                 finally
                 {
@@ -414,12 +503,22 @@ public sealed class PluginHost : IDisposable
     private static string Show(string text) => TextRules.ForDisplay(text, 200);
 
     /// <summary>
-    /// A one-line description of an exception from plugin code. Never throws: a plugin exception
-    /// can override <see cref="Exception.Message"/> (or <see cref="object.ToString"/>) to throw,
-    /// so neither is read unguarded. Only text is kept: holding the exception would keep the
-    /// plugin's types, and so its load context, alive.
+    /// A one-line description of an exception from plugin code. Never throws: see
+    /// <see cref="Summarise"/>.
     /// </summary>
     internal static string Describe(string what, Exception ex)
+    {
+        var (typeName, message) = Summarise(ex);
+        return $"{what}: {typeName}: {message}";
+    }
+
+    /// <summary>
+    /// The type name and message of an exception from plugin code, as plain (sanitised) text.
+    /// Never throws: a plugin exception can override <see cref="Exception.Message"/> (or
+    /// <see cref="object.ToString"/>) to throw, so neither is read unguarded. Only text is kept:
+    /// holding the exception would keep the plugin's types, and so its load context, alive.
+    /// </summary>
+    internal static (string TypeName, string Message) Summarise(Exception ex)
     {
         string typeName = "an exception";
         try
@@ -427,20 +526,23 @@ public sealed class PluginHost : IDisposable
             if (ex is TargetInvocationException { InnerException: { } inner })
                 ex = inner;
             typeName = TextRules.ForDisplay(ex.GetType().FullName, 200);
-            string message;
             try
             {
-                message = TextRules.ForDisplay(ex.Message);
+                var message = TextRules.ForDisplay(ex.Message);
+                // The runtime wraps the reason an assembly could not be bound (our own load
+                // context's explanation, for one) in a generic FileLoad/FileNotFound exception.
+                if (ex is FileLoadException or FileNotFoundException && ex.InnerException is { } cause)
+                    message += " (cause: " + TextRules.ForDisplay(cause.Message) + ")";
+                return (typeName, message);
             }
             catch
             {
-                message = $"<message unavailable: {typeName}>";
+                return (typeName, $"<message unavailable: {typeName}>");
             }
-            return $"{what}: {typeName}: {message}";
         }
         catch
         {
-            return $"{what}: {typeName}: <message unavailable>";
+            return (typeName, "<message unavailable>");
         }
     }
 
@@ -487,18 +589,41 @@ public sealed class PluginHost : IDisposable
         }
     }
 
-    /// <summary>Disposes <paramref name="context"/> when it is disposable, recording (never throwing) a failure.</summary>
-    internal static void DisposeContext(IPluginContext? context, List<string> errors)
+    /// <summary>
+    /// Disposes <paramref name="context"/> when it is disposable, recording (never throwing) a
+    /// failure, then, when it is an <see cref="IPluginSessionControl"/>, waits up to
+    /// <paramref name="waitTimeout"/> for the plugin's in-flight handlers to return. Returns
+    /// <see langword="true"/> (and records why) when one is still running: plugin code is then still
+    /// on a thread's stack and its load context cannot finish unloading.
+    /// </summary>
+    internal static bool DisposeContext(IPluginContext? context, TimeSpan waitTimeout, List<string> errors)
     {
-        if (context is not IDisposable disposable)
-            return;
+        if (context is IDisposable disposable)
+        {
+            try
+            {
+                disposable.Dispose();
+            }
+            catch (Exception ex)
+            {
+                errors.Add(Describe("disposing the plugin context failed", ex));
+            }
+        }
+
+        if (context is not IPluginSessionControl control)
+            return false;
         try
         {
-            disposable.Dispose();
+            if (control.WaitForExit(waitTimeout))
+                return false;
+            errors.Add($"stuck handler: a plugin event handler was still running {waitTimeout.TotalSeconds:0.##}s after the plugin was released, "
+                + "so its code is still executing and its load context cannot be fully unloaded until that handler returns");
         }
         catch (Exception ex)
         {
-            errors.Add(Describe("disposing the plugin context failed", ex));
+            errors.Add(Describe("waiting for the plugin's event handlers failed", ex));
+            return false;   // unknown, not observed to be stuck; the error above keeps the unload from reading as clean
         }
+        return true;
     }
 }

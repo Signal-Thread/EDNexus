@@ -44,6 +44,7 @@ public class OAuthEndpointsTests : IClassFixture<OAuthEndpointsTests.Factory>
                 {
                     ["Twitch:ExtensionSecret"] = "c3VwZXItc2VjcmV0LWV4dGVuc2lvbi1rZXktMTIzNA==",
                     ["Twitch:ClientId"] = "test-client-id",
+                    ["Twitch:ClientSecret"] = "test-client-secret",
                     ["Twitch:ExtensionId"] = "test-extension-id",
                     // Keep the shared fixture off disk; the restart-survival tests opt into Sqlite explicitly.
                     ["Ebs:StorageProvider"] = "InMemory",
@@ -105,7 +106,7 @@ public class OAuthEndpointsTests : IClassFixture<OAuthEndpointsTests.Factory>
 
         var response = await client.GetAsync(
             "/oauth/authorize?redirect_uri=" + Uri.EscapeDataString("http://localhost:59123/callback") +
-            "&state=desktop-state-123&code_challenge=abc-challenge&code_challenge_method=S256");
+            "&state=desktop-state-123&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256");
 
         Assert.Equal(HttpStatusCode.Found, response.StatusCode);
         var location = response.Headers.Location!;
@@ -122,7 +123,7 @@ public class OAuthEndpointsTests : IClassFixture<OAuthEndpointsTests.Factory>
 
         var response = await client.GetAsync(
             "/oauth/authorize?redirect_uri=" + Uri.EscapeDataString("http://localhost:59123/callback") +
-            "&state=desktop-state-123&code_challenge=abc-challenge&code_challenge_method=S256");
+            "&state=desktop-state-123&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256");
 
         var scope = ExtractQueryParam(response.Headers.Location!, "scope");
         var requested = scope.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -140,7 +141,7 @@ public class OAuthEndpointsTests : IClassFixture<OAuthEndpointsTests.Factory>
 
         var response = await client.GetAsync(
             "/oauth/authorize?redirect_uri=" + Uri.EscapeDataString("http://evil.example.com/callback") +
-            "&state=s&code_challenge=c");
+            "&state=s&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -289,7 +290,7 @@ public class OAuthEndpointsTests : IClassFixture<OAuthEndpointsTests.Factory>
         using var client = NoRedirectClient(_factory);
         var authorizeResponse = await client.GetAsync(
             "/oauth/authorize?redirect_uri=" + Uri.EscapeDataString("http://localhost:59123/callback") +
-            "&state=desktop-state-xyz&code_challenge=c");
+            "&state=desktop-state-xyz&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
         var sessionId = ExtractQueryParam(authorizeResponse.Headers.Location!, "state");
 
         var callbackResponse = await client.GetAsync($"/oauth/callback?state={sessionId}&error=access_denied&error_description=nope");

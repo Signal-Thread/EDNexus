@@ -16,12 +16,12 @@ public static class PluginSdk
     /// as <c>"major.minor"</c>. Bump the major component for breaking contract changes.
     /// </summary>
     /// <remarks>
-    /// Still 1.0 although members were added after the first contract (<c>IPluginEvents.On/OnAny</c>,
-    /// <c>IJournalEvent.IsSimulated</c>, the <c>IReadOnlyCommanderState</c> inventories and
-    /// <c>Snapshot</c>), because no host had loaded a plugin before them. If any loader ever ships
-    /// without these members, this must become 1.1 so plugins using them are not loaded there.
+    /// 2.0: <c>IJournalEvent.Deserialize&lt;T&gt;()</c> was removed from the 1.0 contract (binding a
+    /// plugin-defined type pinned the plugin's load context forever; use <c>IJournalEvent.Payload</c>).
+    /// A removed member is a breaking change, so the major was bumped and the host rejects plugins
+    /// built against 1.x instead of letting them fail with a <c>MissingMethodException</c> in a handler.
     /// </remarks>
-    public const string CurrentVersionString = "1.0";
+    public const string CurrentVersionString = "2.0";
 
     /// <summary>The parsed <see cref="CurrentVersionString"/>.</summary>
     public static Version CurrentVersion { get; } = Version.Parse(CurrentVersionString);

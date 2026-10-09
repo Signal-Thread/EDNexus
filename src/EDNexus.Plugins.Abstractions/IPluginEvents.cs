@@ -12,7 +12,13 @@ namespace EDNexus.Plugins.Abstractions;
 /// event at a time and in journal order, so a slow plugin only delays itself. By the time a
 /// handler runs, the host has already folded the event into <see cref="IPluginContext.State"/>
 /// (which may by then reflect later events too). If a plugin falls far enough behind, the oldest
-/// undelivered events are dropped rather than letting the backlog grow without bound.
+/// undelivered events are dropped rather than letting the backlog grow without bound: the limit is
+/// on both the number of events and on the memory they hold, so a plugin that stalls while
+/// subscribed to everything loses its oldest events well before it can hold gigabytes of payloads.
+/// </para>
+/// <para>
+/// A handler may still be running while the plugin's <see cref="IEDNexusPlugin.Shutdown"/> runs;
+/// see its remarks.
 /// </para>
 /// <para>
 /// A handler that throws is reported to the host against the owning plugin and does not affect

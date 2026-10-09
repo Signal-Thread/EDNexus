@@ -28,21 +28,28 @@ public sealed class JournalEntry
         {
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
+            // A line can be valid JSON yet not an object ([], 5, null, "x"); TryGetProperty throws on those.
+            if (root.ValueKind != JsonValueKind.Object) return false;
             if (!root.TryGetProperty("event", out var ev) || ev.ValueKind != JsonValueKind.String)
                 return false;
+
+            // TryGetDateTimeOffset throws (rather than returning false) unless the value is a string.
+            var timestamp = root.TryGetProperty("timestamp", out var ts)
+                && ts.ValueKind == JsonValueKind.String
+                && ts.TryGetDateTimeOffset(out var t)
+                    ? t : default;
 
             entry = new JournalEntry
             {
                 Event = ev.GetString() ?? string.Empty,
-                Timestamp = root.TryGetProperty("timestamp", out var ts) && ts.TryGetDateTimeOffset(out var t)
-                    ? t : default,
+                Timestamp = timestamp,
                 // Clone() detaches the element so it stays valid after the document is disposed.
                 Raw = root.Clone(),
                 IsHistorical = historical,
             };
             return true;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
         {
             return false;
         }

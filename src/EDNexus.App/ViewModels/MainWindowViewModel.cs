@@ -38,6 +38,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private EngineHost _host;
     private DispatcherTimer? _timer;
 
+    // Engine lifecycle. Starting a host replays the latest journal, which on a multi-MB file takes
+    // long enough to freeze the window, so it runs off the UI thread; until it finishes the cards
+    // are not refreshed (they would be reading state mid-replay). _transition serialises host
+    // rebuilds, and _hostFailed marks an engine that could not be (re)built so the tick stops
+    // reading the disposed one.
+    private bool _loading;
+    private bool _hostFailed;
+    private Task _transition = Task.CompletedTask;
+    private int _disposed;
+
     public MainWindowViewModel(Bootstrap boot)
     {
         _boot = boot;
@@ -66,7 +76,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             now => _boot.EnsureMiningSessionDate(now),
             (when, credits) => _boot.RecordMiningRefined(when, credits),
             (unit, price) => _boot.RecordMiningSpot(unit, price),
-            _radio);
+            _radio,
+            () => _boot.Settings.Colonisation.SharedProjectLookup);
         Cards = new ObservableCollection<CardViewModel>
         {
             new LocationCardViewModel(_context),
@@ -92,9 +103,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         foreach (var card in Cards) card.LayoutChanged += _ => SaveLayout();
 
         DevMode = _boot.Dev.Enabled;
-        JournalStatus = _host.JournalFound
-            ? $"● Watching  {_host.JournalDirectory}"
-            : "✕ Journal folder not found — set EDNEXUS_JOURNAL_DIR";
+        UpdateJournalStatus();
         RefreshPrivacyStatus();
 
         // Listen for background updater notifications so the UI can show a bottom update bar.
@@ -242,8 +251,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         // While developer mode is on, reporting is paused so fabricated events never reach EDDN/Inara.
         var host = new EngineHost(
             settings: _boot.Settings,
-            reportingSuppressed: () => _boot.Dev.Enabled);
+            reportingSuppressed: () => _boot.Dev.Enabled,
+            twitchCleanup: _boot.TwitchCleanup);
         _boot.Crash.Attach(host.Bus, host.State); // report journal handler errors; redact the CMDR name
+        host.WatcherError += ex => _boot.Crash.Capture(ex, "journal-watcher"); // throttled per fault; a dead watcher is not silent
 
         // The stream card talks to a network service and can fail in several distinct ways. Without
         // this the only feedback is a label in the settings dialog, so a commander whose card never
@@ -280,17 +291,24 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     public void Start()
     {
-        _host.Start();
         if (_boot.Settings.Overlay.Enabled) _boot.Overlay.Show();
-        _ = _radioService.RestoreAsync(); // fire-and-forget: resumes the last station off the UI thread
+        _radioService.RestoreAsync().Forget("Radio: restore"); // resumes the last station off the UI thread
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _timer.Tick += (_, _) => Refresh();
         _timer.Start();
+
+        // Warm the engine from the journal in the background; the window is already up and shows
+        // "Loading journal…" until the replay is done.
+        _transition = StartHostAsync(_host);
         Refresh();
     }
 
+    /// <summary>Idempotent: the app's shutdown path reaches this from more than one event.</summary>
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+        _timer?.Stop();
         _boot.DiscordSettingsChanged -= OnDiscordSettingsChanged;
         _boot.Overlay.Hide();
         try
@@ -299,9 +317,58 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            _host.Dispose();
+            // App exit only (a host rebuild goes through RebuildHost): the card must not stay public
+            // after the app has gone. Bounded, so an unreachable EBS cannot hold up closing; whatever
+            // does not finish is in the cleanup queue and is retried on the next launch.
+            try { _host.TakeTwitchCardOffAirForExit(TimeSpan.FromSeconds(2)); }
+            catch (Exception ex) { Trace.TraceWarning($"Twitch: could not take the card off the air on exit: {ex.Message}"); }
+            try
+            {
+                _host.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                // A rebuild that failed part-way already tore this engine down.
+            }
         }
     }
+
+    /// <summary>
+    /// Replay the journal on a worker thread and flip the loading flag when it is done. The engine's
+    /// own watcher already runs off the UI thread, so this only moves the initial warm-up there too.
+    /// </summary>
+    private async Task StartHostAsync(EngineHost host)
+    {
+        _loading = true;
+        UpdateJournalStatus();
+        try
+        {
+            await Task.Run(host.Start);
+        }
+        catch (Exception ex)
+        {
+            // A journal the replay can't get through must not take the app down with it: carry on
+            // with whatever state was built, and say so.
+            Trace.TraceError($"Engine start failed: {ex}");
+            _boot.Crash.Capture(ex);
+        }
+        finally
+        {
+            _loading = false;
+        }
+
+        UpdateJournalStatus();
+        Refresh();
+    }
+
+    private void UpdateJournalStatus()
+        => JournalStatus = _hostFailed ? "✕ The engine failed to restart — restart EDNexus"
+            : _loading ? "⏳ Loading journal…"
+            : _host.JournalFound ? $"● Watching  {_host.JournalDirectory}"
+            : "✕ Journal folder not found — set EDNEXUS_JOURNAL_DIR";
+
+    /// <summary>True while the cards must not read the engine: it is replaying, being rebuilt, or gone.</summary>
+    private bool EngineUnavailable => _loading || _hostFailed || _disposed != 0;
 
     /// <summary>Push saved Discord Rich Presence settings onto the live engine (connect/disconnect, privacy).</summary>
     private void OnDiscordSettingsChanged(DiscordSettings settings) => _host.ApplyDiscordSettings(settings);
@@ -351,7 +418,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// real player, because this is a saved preference, not developer-mode state. The dialog only
     /// calls it when the commander actually changed the checkbox.
     /// </summary>
-    public void ApplyRadioEnabled(bool enabled) => _ = _radioService.SetEnabledAsync(enabled);
+    public void ApplyRadioEnabled(bool enabled) => _radioService.SetEnabledAsync(enabled).Forget("Radio: enable/disable");
 
     [RelayCommand]
     private Task RadioPlayPause() => _radio.Active.TogglePlayPauseAsync();
@@ -383,7 +450,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         // While developer mode is on the radio UI drives a simulation and can't reach the real
         // player, so silence a real stream on the way in (keeping its resume-on-launch intent and
         // writing nothing) and restart it on the way out, but only if entering is what stopped it.
-        if (!wasDev && enabled) _ = _radioService.SuspendForDeveloperModeAsync();
+        if (!wasDev && enabled) _radioService.SuspendForDeveloperModeAsync().Forget("Radio: suspend for developer mode");
 
         if (wasDev && !enabled)
         {
@@ -391,21 +458,28 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             // events went through the real bus into the real CommanderState, so without a rebuild the
             // cards keep showing invented systems and cargo that no longer have a dev-mode label on
             // them. The flag flips only once the fabricated engine is gone, so it never gets a moment
-            // unsuppressed in which to report to EDDN/Inara or Discord.
-            RebuildHost(beforeRebuild: () => _boot.Dev.Enabled = false);
+            // unsuppressed in which to report to EDDN/Inara or Discord. The teardown and the journal
+            // replay run off the UI thread, so the rest of this finishes when they do.
+            LeaveDeveloperModeAsync().Forget("Developer mode: leave");
+            return;
         }
-        else
-        {
-            _boot.Dev.Enabled = enabled;
 
-            // Entering developer mode suppresses Discord presence; clear the real one right away
-            // rather than leaving it up until the first fabricated event arrives.
-            if (!wasDev && _boot.Dev.Enabled) _host.RefreshDiscordPresence();
-        }
+        _boot.Dev.Enabled = enabled;
+
+        // Entering developer mode suppresses Discord presence; clear the real one right away
+        // rather than leaving it up until the first fabricated event arrives.
+        if (!wasDev && _boot.Dev.Enabled && !_hostFailed) _host.RefreshDiscordPresence();
 
         DevMode = _boot.Dev.Enabled;
-        if (wasDev && !DevMode) _ = _radioService.ResumeAfterDeveloperModeAsync();
         RefreshRadio(); // the transport switches between the real player and the simulation
+    }
+
+    private async Task LeaveDeveloperModeAsync()
+    {
+        await RebuildHostAsync(beforeRebuild: () => _boot.Dev.Enabled = false);
+        DevMode = _boot.Dev.Enabled;
+        if (!DevMode) _radioService.ResumeAfterDeveloperModeAsync().Forget("Radio: resume after developer mode");
+        RefreshRadio();
     }
 
     [RelayCommand]
@@ -429,9 +503,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private async Task InstallUpdate()
     {
         if (string.IsNullOrEmpty(UpdatePath)) return;
+
+        // Only a download the updater verified against its published checksum is ever offered.
+        var verifiedSha = EDNexus.App.Services.AutoUpdateService.LastVerifiedSha256;
+        var installerPath = UpdatePath;
+        if (string.IsNullOrEmpty(verifiedSha))
+        {
+            Trace.TraceWarning("Update: no verified checksum for the downloaded installer; not installing");
+            return;
+        }
+
         var owner = (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
         var dlg = new EDNexus.App.Views.ConfirmInstallWindow();
-        dlg.SetFilePath(UpdatePath);
+        dlg.SetDetails(installerPath, verifiedSha);
         if (owner is null)
         {
             // No owner (rare in tests). Show non-modal confirmation and abort install — safer than auto-running.
@@ -442,11 +526,21 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         var result = await dlg.ShowDialog<bool>(owner);
         if (!result) return;
 
+        // Re-hash right before running it, so a file swapped on disk since the check (or while the dialog
+        // was open) is refused rather than launched elevated.
+        if (!await Task.Run(() => EDNexus.Core.Updates.UpdateChecker.HashMatches(installerPath, verifiedSha)))
+        {
+            Trace.TraceWarning($"Update: {installerPath} failed re-verification; not installing");
+            UpdateAvailable = false;
+            UpdatePath = "";
+            return;
+        }
+
         try
         {
             var psi = new ProcessStartInfo
             {
-                FileName = UpdatePath,
+                FileName = installerPath,
                 UseShellExecute = true
             };
             Process.Start(psi)?.Dispose();
@@ -454,13 +548,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         catch (Exception ex)
         {
             // Launch failed (e.g. UAC declined) — stay open so the user isn't left with nothing running.
-            Trace.TraceWarning($"Update: failed to launch installer {UpdatePath}: {ex.Message}");
+            Trace.TraceWarning($"Update: failed to launch installer {installerPath}: {ex.Message}");
             return;
         }
 
         // The installer can't replace EDNexus's files while this process holds them open, so exit
         // once it's launched. Shutdown raises ShutdownRequested, which disposes the engine.
-        Trace.TraceInformation($"Update: launched installer {UpdatePath}; shutting down so it can complete");
+        Trace.TraceInformation($"Update: launched installer {installerPath}; shutting down so it can complete");
         (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
     }
 
@@ -473,6 +567,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void RandomizeCard(string cardKey)
     {
+        if (EngineUnavailable) return;
         _dev.Randomize(_host.Bus, _rng, cardKey);
         Refresh();
     }
@@ -481,37 +576,93 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void RandomizeAll()
     {
+        if (EngineUnavailable) return;
         _dev.Randomize(_host.Bus, _rng);
         Refresh();
     }
 
     /// <summary>Discard fabricated state and re-warm from the real journal by rebuilding the engine.</summary>
     [RelayCommand]
-    private void ResetToLive() => RebuildHost(beforeRebuild: null);
+    private void ResetToLive()
+    {
+        if (_loading) return;   // already replaying (or rebuilding); a second click would only queue another
+        RebuildHostAsync(beforeRebuild: null).Forget("Engine: reset to live");
+    }
 
+    /// <summary>
+    /// Replace the engine host. Disposing the old one waits on its watcher and flushes its reporters
+    /// (seconds, in the worst case) and starting the new one replays the journal, so both run off the
+    /// UI thread; the cards sit out the swap rather than reading a disposed engine. Rebuilds are
+    /// serialised so a second one never overlaps the first.
+    /// </summary>
     /// <param name="beforeRebuild">
     /// Runs after the old engine is disposed and before the new one is built — the only point at which
     /// developer mode can be switched off without the fabricated engine briefly running unsuppressed.
     /// </param>
-    private void RebuildHost(Action? beforeRebuild)
+    private Task RebuildHostAsync(Action? beforeRebuild)
+        => _transition = RebuildAfterAsync(_transition, beforeRebuild);
+
+    private async Task RebuildAfterAsync(Task previous, Action? beforeRebuild)
     {
-        _host.Dispose();
-        beforeRebuild?.Invoke();
-        _host = BuildHost();
-        _host.Start();
-        foreach (var card in Cards) card.Reset();
-        Refresh();
+        try { await previous; }
+        catch { /* its failure was already reported; this rebuild starts from whatever it left */ }
+
+        _loading = true;
+        UpdateJournalStatus();
+
+        var old = _host;
+        try
+        {
+            await Task.Run(old.Dispose);
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"Engine: disposing the previous host failed: {ex.Message}");
+        }
+
+        EngineHost host;
+        try
+        {
+            beforeRebuild?.Invoke();
+            host = BuildHost();
+        }
+        catch (Exception ex)
+        {
+            // The old engine is gone and there is no new one. Leave the dashboard on its last
+            // contents, stop the tick reading the disposed host, and say so.
+            Trace.TraceError($"Engine: rebuild failed: {ex}");
+            _boot.Crash.Capture(ex);
+            _hostFailed = true;
+            _loading = false;
+            UpdateJournalStatus();
+            return;
+        }
+
+        _host = host;
+        _hostFailed = false;
+        foreach (var card in Cards)
+        {
+            card.Reset();
+            card.ClearFault();
+        }
+
+        await StartHostAsync(host);
     }
 
     private void Refresh()
     {
+        RefreshRadio();
+
+        // Mid-replay the state is half-built, and after a failed rebuild the host is disposed.
+        if (EngineUnavailable) return;
+
         var s = _host.State;
         CommanderName = s.Name ?? "—";
         Balance = s.Balance.ToString("N0") + " cr";
         LastUpdated = s.LastUpdated == default ? "—" : s.LastUpdated.LocalDateTime.ToString("HH:mm:ss");
 
-        foreach (var card in Cards) card.Update(s);
-        RefreshRadio();
+        // One card throwing on an odd state must not take the dashboard down on every 250 ms tick.
+        foreach (var card in Cards) card.TryUpdate(s, OnCardUpdateFailed);
 
         if (_boot.Settings.Overlay.Enabled)
         {
@@ -522,6 +673,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void OnCardUpdateFailed(CardViewModel card, Exception ex, int failures, bool paused)
+    {
+        Trace.TraceError($"Card '{card.Id}' update failed ({failures}x{(paused ? ", paused" : "")}): {ex}");
+        if (failures == 1) _boot.Crash.Capture(ex);   // one report per streak, not one per tick
+    }
+
     /// <summary>
     /// Developer-mode helper: fabricates a low-fuel status, a completed exobiology scan, and a
     /// colonisation delivery that fully covers a shopping-list item — the three moments that drive a
@@ -530,6 +687,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void SimulateOverlayVoice()
     {
+        if (EngineUnavailable) return;
         _dev.Randomize(_host.Bus, _rng, "overlay-voice");
         Refresh();
     }

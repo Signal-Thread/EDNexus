@@ -201,4 +201,88 @@ public class TwitchTokenRefreshBackgroundServiceTests
         Assert.True(later.IsTwitchGrantValid);
         Assert.Equal("new-access", later.TwitchAccessToken); // still refreshed despite the earlier failure
     }
+
+    [Theory]
+    [InlineData(500)]
+    [InlineData(502)]
+    [InlineData(503)]
+    [InlineData(429)]
+    [InlineData(null)] // an unparseable / empty body carries no status at all
+    public async Task RefreshDueTokensAsync_leaves_the_grant_valid_when_Twitch_fails_transiently(int? status)
+    {
+        // A Twitch outage or rate limit says nothing about the grant. It used to be treated as "grant
+        // gone", which logged out every broadcaster that came due during the outage.
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var store = new InMemoryBroadcasterTokenStore(time);
+        var record = store.IssueToken("channel-1", "CMDR", "access", "refresh", time.Now.AddMinutes(1));
+        var twitch = new FakeTwitchOAuthClient { OnRefresh = _ => throw new TwitchOAuthException("Twitch is having a bad day", status) };
+        var service = CreateService(store, twitch, time, new EbsOptions { TwitchTokenRefreshBufferMinutes = 60 });
+
+        await service.RefreshDueTokensAsync(CancellationToken.None);
+
+        Assert.Equal(1, twitch.RefreshCalls);
+        Assert.True(store.TryGetByToken(record.Token, out var updated));
+        Assert.True(updated.IsTwitchGrantValid);
+        Assert.Equal("refresh", updated.TwitchRefreshToken);
+    }
+
+    [Theory]
+    [InlineData(400, "Invalid refresh token")]
+    [InlineData(401, "invalid_grant")]
+    public async Task RefreshDueTokensAsync_marks_the_grant_invalid_on_a_400_or_401_for_the_refresh_token(int status, string message)
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var store = new InMemoryBroadcasterTokenStore(time);
+        var record = store.IssueToken("channel-1", "CMDR", "access", "refresh", time.Now.AddMinutes(1));
+        var twitch = new FakeTwitchOAuthClient { OnRefresh = _ => throw new TwitchOAuthException(message, status) };
+        var service = CreateService(store, twitch, time, new EbsOptions { TwitchTokenRefreshBufferMinutes = 60 });
+
+        await service.RefreshDueTokensAsync(CancellationToken.None);
+
+        Assert.True(store.TryGetByToken(record.Token, out var updated));
+        Assert.False(updated.IsTwitchGrantValid);
+    }
+
+    [Fact]
+    public async Task RefreshDueTokensAsync_does_not_log_everyone_out_when_the_client_secret_is_wrong()
+    {
+        // "invalid client secret" is a 400 too, but it is this service's misconfiguration (a rotated
+        // secret), not the broadcaster's grant: invalidating here would log out every broadcaster.
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var store = new InMemoryBroadcasterTokenStore(time);
+        var record = store.IssueToken("channel-1", "CMDR", "access", "refresh", time.Now.AddMinutes(1));
+        var twitch = new FakeTwitchOAuthClient
+        {
+            OnRefresh = _ => throw new TwitchOAuthException("""Twitch rejected the token request: HTTP 400 - {"status":400,"message":"invalid client secret"}""", 400),
+        };
+        var service = CreateService(store, twitch, time, new EbsOptions { TwitchTokenRefreshBufferMinutes = 60 });
+
+        await service.RefreshDueTokensAsync(CancellationToken.None);
+
+        Assert.True(store.TryGetByToken(record.Token, out var updated));
+        Assert.True(updated.IsTwitchGrantValid);
+    }
+
+    [Fact]
+    public async Task RefreshDueTokensAsync_dates_the_new_expiry_from_when_Twitch_answered_not_from_the_start_of_the_pass()
+    {
+        // The pass can be slow (one network call per broadcaster), so the clock is read per record.
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var store = new InMemoryBroadcasterTokenStore(time);
+        var record = store.IssueToken("channel-1", "A", "access", "refresh", time.Now.AddMinutes(1));
+        var twitch = new FakeTwitchOAuthClient
+        {
+            OnRefresh = _ =>
+            {
+                time.Now += TimeSpan.FromMinutes(5); // the call took five minutes
+                return new TwitchTokenResponse { AccessToken = "new-access", RefreshToken = "r", ExpiresIn = 3600 };
+            },
+        };
+        var service = CreateService(store, twitch, time, new EbsOptions { TwitchTokenRefreshBufferMinutes = 60 });
+
+        await service.RefreshDueTokensAsync(CancellationToken.None);
+
+        Assert.True(store.TryGetByToken(record.Token, out var updated));
+        Assert.Equal(time.Now.AddSeconds(3600), updated.TwitchExpiresAtUtc);
+    }
 }

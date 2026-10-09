@@ -8,8 +8,8 @@ namespace EDNexus.Ebs.Services;
 /// Keeps every broadcaster's underlying Twitch grant alive without them ever having to re-auth: on a
 /// fixed interval, walks every issued <see cref="BroadcasterToken"/> and refreshes the Twitch access
 /// token for any whose expiry is within <see cref="EbsOptions.TwitchTokenRefreshBufferMinutes"/>. If
-/// Twitch rejects the refresh (the commander revoked access, or the refresh token itself expired),
-/// the token is marked invalid so <c>/api/update-state</c> starts rejecting it and the desktop client
+/// Twitch rejects the refresh token (a 400/401: the commander revoked access, or it expired), the
+/// token is marked invalid so <c>/api/update-state</c> starts rejecting it and the desktop client
 /// knows to prompt the commander to log in again — this service never throws or crashes the host on
 /// a single broadcaster's failure.
 /// </summary>
@@ -65,7 +65,6 @@ public sealed class TwitchTokenRefreshBackgroundService : BackgroundService
     /// <summary>Runs a single refresh pass. Exposed internally so tests can drive it deterministically without waiting on the loop's delay.</summary>
     internal async Task RefreshDueTokensAsync(CancellationToken ct)
     {
-        var now = _timeProvider.GetUtcNow();
         var buffer = TimeSpan.FromMinutes(Math.Max(0, _options.TwitchTokenRefreshBufferMinutes));
 
         foreach (var record in _store.GetAllTokens())
@@ -73,22 +72,25 @@ public sealed class TwitchTokenRefreshBackgroundService : BackgroundService
             if (!record.IsTwitchGrantValid)
                 continue;
 
+            // Per record, not per pass: a pass over many broadcasters (each a network call) can take
+            // long enough that a single timestamp would skew the expiry the next token is judged by.
+            var now = _timeProvider.GetUtcNow();
             if (record.TwitchExpiresAtUtc - now > buffer)
                 continue;
 
             try
             {
                 var refreshed = await _twitch.RefreshTokenAsync(record.TwitchRefreshToken, ct).ConfigureAwait(false);
-                var expiresAt = now.AddSeconds(refreshed.ExpiresIn);
+                var expiresAt = _timeProvider.GetUtcNow().AddSeconds(refreshed.ExpiresIn);
                 _store.UpdateTwitchTokens(
                     record.ChannelId,
                     refreshed.AccessToken,
                     string.IsNullOrWhiteSpace(refreshed.RefreshToken) ? record.TwitchRefreshToken : refreshed.RefreshToken,
                     expiresAt);
             }
-            catch (TwitchOAuthException ex)
+            catch (TwitchOAuthException ex) when (ex.IsGrantRejection)
             {
-                // Twitch explicitly rejected the refresh (revoked/expired grant) — it really is gone.
+                // Twitch explicitly rejected the refresh token (400/401: revoked/expired grant) — it really is gone.
                 _logger.LogWarning(
                     ex,
                     "Failed to refresh the Twitch grant for channel {ChannelId}; marking it invalid until the broadcaster re-authenticates.",
@@ -101,11 +103,11 @@ public sealed class TwitchTokenRefreshBackgroundService : BackgroundService
             }
             catch (Exception ex)
             {
-                // A transient failure (network blip, DNS, timeout, socket reset) refreshing THIS
-                // broadcaster must not abort the foreach and skip every other broadcaster still due
-                // this pass — that previously happened because only TwitchOAuthException was caught
-                // here, so any other exception propagated out of RefreshDueTokensAsync entirely. The
-                // grant is left valid so it's simply retried next cycle rather than marked invalid.
+                // A transient failure refreshing THIS broadcaster — network blip, DNS, timeout, socket
+                // reset, or a TwitchOAuthException that is not a grant rejection (Twitch 5xx/429, an
+                // unparseable body, or "invalid client" from a misconfigured secret) — must neither abort
+                // the foreach nor log the broadcaster out. The grant is left valid so it is simply
+                // retried next cycle; only a 400/401 for the refresh token marks it invalid.
                 _logger.LogWarning(
                     ex,
                     "Transient error refreshing the Twitch grant for channel {ChannelId}; will retry next cycle.",

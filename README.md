@@ -5,19 +5,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Signal-Thread-LLC/EDNexus/actions/workflows/ci.yml"><img src="https://github.com/Signal-Thread-LLC/EDNexus/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <a href="https://github.com/Signal-Thread-LLC/EDNexus/releases/latest"><img src="https://img.shields.io/github/v/release/Signal-Thread-LLC/EDNexus" alt="Latest release"></a>
-  <a href="https://signal-thread-llc.github.io/EDNexus/"><img src="https://img.shields.io/badge/homepage-signal--thread--llc.github.io%2FEDNexus-F07100" alt="Homepage"></a>
+  <a href="https://github.com/Signal-Thread/EDNexus/actions/workflows/ci.yml"><img src="https://github.com/Signal-Thread/EDNexus/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/Signal-Thread/EDNexus/releases/latest"><img src="https://img.shields.io/github/v/release/Signal-Thread-LLC/EDNexus" alt="Latest release"></a>
+  <a href="https://signal-thread.github.io/EDNexus/"><img src="https://img.shields.io/badge/homepage-signal--thread.github.io%2FEDNexus-F07100" alt="Homepage"></a>
 </p>
 
 A single, does-it-all **[Elite Dangerous](https://www.elitedangerous.com/) commander console** — a
 free, open-source tool that replaces the sprawl of separate market, trade route, engineering,
-exobiology, colonisation, and materials tools with one desktop app for Windows. (Linux and macOS
-are on the roadmap but not yet officially supported.)
+exobiology, colonisation, and materials tools with one desktop app for Windows. A Flatpak bundle
+for Linux (including Steam Deck) is attached to each release; macOS is not yet supported. The
+in-game overlay and voice callouts are Windows-only.
 
-**[📖 Homepage & downloads](https://signal-thread-llc.github.io/EDNexus/)** ·
-**[⬇ Latest release](https://github.com/Signal-Thread-LLC/EDNexus/releases/latest)** ·
-**[🐛 Report an issue](https://github.com/Signal-Thread-LLC/EDNexus/issues)**
+**[📖 Homepage & downloads](https://signal-thread.github.io/EDNexus/)** ·
+**[⬇ Latest release](https://github.com/Signal-Thread/EDNexus/releases/latest)** ·
+**[🐛 Report an issue](https://github.com/Signal-Thread/EDNexus/issues)**
 
 It works off the game's own data: a watcher tails the journal (`Journal.*.log`) and the sidecar
 status files (`Status.json`, `Cargo.json`, `Market.json`, …), turns them into a typed event stream,
@@ -36,8 +37,25 @@ and folds that into a single live commander state that every feature reads from.
 - **EDDN & Inara integration** — opt-in, anonymized contributions to the
   [Elite Dangerous Data Network](https://github.com/EDCD/EDDN), and opt-in sync of your commander
   profile to [Inara](https://inara.cz).
+- **Missions, community goals & Galnet** — held missions (including massacre stacks), active
+  community goals, and the Galnet news feed.
+- **Ranks** — Combat, Trade, Exploration, Exobiologist and Mercenary ranks with progress to the next tier.
+- **Mining** — prospector results, session yield, a "worth mining" price threshold (prices learned
+  from the markets you visit) and remembered surface mining spots.
+- **Radio** — a background internet-radio player with station, volume and mute remembered.
+- **In-game overlay & voice callouts** — a transparent click-through HUD over the game and spoken
+  callouts (fuel low, scan complete, shopping-list item acquired). Windows-only; both are off by default.
+- **Discord Rich Presence** — mirrors your system/ship/activity onto your own Discord client, with
+  options to hide the system and commander name.
+- **Twitch stream card** — publishes a viewer-facing card of your session to a Twitch extension
+  through the EDNexus Extension Backend Service (EBS). Opt-in; you choose which sections are shown.
+- **Plugin SDK (in development)** — `EDNexus.Plugins.Abstractions` and `EDNexus.Plugins.Hosting`
+  define the plugin contract and loader; the desktop app does not load plugins yet.
 - **Live journal parsing** — a watcher tails the game's own `Journal.*.log` and status sidecar files
   (no third-party account or API key required to get started).
+- **Auto-update (Windows)** — opt-in: downloads the new installer, checks it against the SHA-256
+  checksum published with the release, and only then offers to install it. Linux updates come
+  through Flatpak.
 
 ## Stack
 
@@ -58,11 +76,20 @@ every window.
 
 | Project | Role |
 |---|---|
-| `src/EDNexus.Core` | Engine: journal watcher → event bus → commander state, plus the reporting bridge |
+| `src/EDNexus.Core` | Engine: journal watcher → event bus → commander state, the feature services (colonisation, market, routes, mining, radio, Discord presence, Twitch stream card, …), the reporting bridge and the updater |
 | `src/EDNexus.App` | Avalonia dashboard |
 | `src/EDNexus.Cli` | Headless harness (`--once` replays the latest journal and prints state) |
+| `src/EDNexus.Ebs` | Twitch Extension Backend Service: relays the commander's stream card to viewers (ASP.NET, Docker image) |
+| `extension/` | The Twitch extension frontend (vanilla HTML/CSS/JS, no build step) |
+| `src/EDNexus.Plugins.Abstractions` | Plugin SDK contract (interfaces a plugin implements) |
+| `src/EDNexus.Plugins.Hosting` | Plugin package loader / sandbox host |
 | `src/EliteDangerous.Eddn` | Standalone, reusable EDDN upload client (no EDNexus dependency) |
 | `src/EliteDangerous.Inara` | Standalone, reusable Inara API client (no EDNexus dependency) |
+| `src/EliteDangerous.Spansh` | Standalone Spansh route/search client |
+| `src/EliteDangerous.Edsm` | Standalone EDSM client |
+| `src/EliteDangerous.Galnet` | Standalone Galnet news-feed client |
+| `src/EliteDangerous.RavenColonial` | Standalone RavenColonial (shared colonisation project) client |
+| `tests/` | xUnit test projects |
 
 ## Running
 
@@ -81,6 +108,12 @@ dotnet run --project src/EDNexus.Cli -- --once --plan fsd_increased_range 5 3
 The journal folder is auto-detected (Windows Saved Games, and the Steam/Proton prefix on Linux).
 Override it with the `EDNEXUS_JOURNAL_DIR` environment variable.
 
+Run the unit tests with:
+
+```sh
+dotnet test EDNexus.slnx
+```
+
 ## Privacy & crash reporting
 
 EDNexus can send **anonymized** crash and error reports (via [Sentry](https://sentry.io)) so bugs
@@ -98,6 +131,25 @@ you can change your mind any time in **Settings**.
 The Sentry DSN is **not stored in this repository**. It is injected at release-build time from a CI
 secret (`SENTRY_DSN`), so source builds have no DSN and reporting stays disabled. Developers can set
 `EDNEXUS_SENTRY_DSN` locally to test.
+
+## Everything EDNexus sends over the network
+
+EDNexus reads the game's journal locally and only talks to the services below. Nothing is sent
+that is not listed here.
+
+| What | Where | Sent when | Contents |
+|---|---|---|---|
+| Crash reports | Sentry | **Opt-in** (first-run prompt / Settings) | See above |
+| Market/scan/travel data | EDDN | **Opt-in**, live events only | Anonymized game-world data |
+| Commander sync | Inara | **Opt-in**, needs your Inara API key | Identity, credits, ranks, travel (see below) |
+| Stream card | EDNexus EBS (`ednexus.signal-and-thread.com`) → Twitch viewers | **Opt-in**: you log in with Twitch and switch the card on | A public snapshot of the sections you enable: commander name and rank, ship, location, carrier, exobiology, mining, missions, cargo. The credit balance is off by default. Cleared when you switch it off or sign out |
+| Discord Rich Presence | Your own Discord client (local IPC, not an upload by EDNexus) | When enabled in Settings | System/ship/activity; options hide the system and the commander name |
+| Colonisation lookups | RavenColonial | When you look up a shared colonisation project | Build/project ids, system name or id64 and market id |
+| Route & market search | Spansh, EDSM | When you run a search | The search/route parameters (systems, ranges, commodities) |
+| News | Galnet | When the Galnet card refreshes | A plain request for the public RSS feed |
+| Update check | GitHub (api.github.com / github.com) | Only if **Automatically download updates on startup** is on, or you press **Check for updates now** | A request for the latest release; no identifying data and no token is sent |
+
+Replaying an old journal (e.g. the CLI `--once` harness) never uploads anything.
 
 ## Data reporting (EDDN & Inara)
 
@@ -127,10 +179,14 @@ Installers are self-contained (no separate .NET install needed).
 
 - **Windows** — run `EDNexus-<version>-setup.exe`. Installs to
   `C:\Program Files\Signal & Thread\EDNexus\` (path is changeable in the wizard). Built with
-  [Inno Setup](https://jrsoftware.org/isinfo.php).
+  [Inno Setup](https://jrsoftware.org/isinfo.php). Requires Windows 10 (1607) or newer, 64-bit.
+- **Linux (including Steam Deck)** — install the `EDNexus-<version>.flatpak` bundle attached to the
+  release (`flatpak install --user ./EDNexus-<version>.flatpak`); see
+  [`packaging/flatpak/`](packaging/flatpak/). There is no in-app self-update on Linux; reinstall the
+  newer bundle or update through Flathub once listed. The overlay and voice callouts are not
+  available on Linux, and the radio needs the system's LibVLC.
 
-Linux (including Steam Deck) and macOS are not yet officially supported — see
-[`packaging/flatpak/`](packaging/flatpak/) for in-progress Flatpak packaging.
+macOS is not yet supported.
 
 Preferences are stored in **`%LOCALAPPDATA%\EDNexus`**, alongside the logs — never in the install
 directory, so the app folder can stay read-only.
@@ -157,10 +213,13 @@ packaging/flatpak/build-flatpak.sh 0.1.0
 ## Releases
 
 Tagging a release (`git tag v0.1.0 && git push --tags`) triggers `.github/workflows/release.yml`,
-which builds the Windows installer and the Linux self-contained tarball (the payload the Flatpak
-consumes) — injecting the DSN from the `SENTRY_DSN` secret (and uploading debug symbols when
+(after the test suite passes) builds the Windows installer, the Linux self-contained tarball (the
+payload the Flatpak consumes) and the `.flatpak` bundle, with a `.sha256` checksum beside every file —
+injecting the DSN from the `SENTRY_DSN` secret (and uploading debug symbols when
 `SENTRY_AUTH_TOKEN` is set) — and attaches them to a GitHub Release. See the workflow header for
-the required Actions secrets.
+the required Actions secrets. The Windows installer is not yet Authenticode-signed (the workflow has
+an optional signing step that activates when signing secrets are configured), so Windows SmartScreen
+may warn on first run.
 
 ## Roadmap
 
@@ -170,6 +229,11 @@ the required Actions secrets.
 - [x] Market / trade search + route plotting (Spansh, EDSM)
 - [x] Engineering (blueprint pinning, material guidance, Odyssey on-foot upgrades)
 - [x] Materials & exobiology tracking
-- [ ] Missions, community goals & Galnet news
-- [ ] Progression & rank trackers
-- [ ] In-game overlay + voice callouts
+- [x] Missions, community goals & Galnet news
+- [x] Progression & rank trackers
+- [x] In-game overlay + voice callouts (Windows)
+- [x] Mining, radio, Discord Rich Presence
+- [x] Twitch stream card (extension + EBS)
+- [ ] Plugin loading in the desktop app (SDK and host exist)
+- [ ] Signed Windows installer
+- [ ] macOS build

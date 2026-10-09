@@ -200,6 +200,75 @@ public class EbsCleanupQueueTests : IDisposable
         Assert.Equal(1, await queue.RetryPendingAsync());
     }
 
+    [Fact]
+    public void Discard_drops_a_pending_clear_for_that_card_but_not_a_revoke_or_another_token()
+    {
+        var (_, queue) = NewQueue();
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token");
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "other-token");
+        queue.Enqueue(EbsCleanupKind.Revoke, RevokeEndpoint, "ebs-token");
+
+        queue.Discard(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token");
+        queue.Discard(EbsCleanupKind.Revoke, RevokeEndpoint, "ebs-token");
+
+        Assert.Equal(2, queue.Pending.Count);
+        Assert.Equal(2, Store.Load().Twitch.PendingCleanups.Count);
+        Assert.Contains(queue.Pending, p => p.Kind == EbsCleanupKind.Revoke);
+        Assert.Contains(queue.Pending, p => p.Token == "other-token");
+    }
+
+    [Fact]
+    public void Discard_up_to_a_mark_keeps_a_clear_queued_after_the_mark()
+    {
+        var (_, queue) = NewQueue();
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "old-token");
+        var mark = queue.Mark();                                   // a publish begins here
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token"); // asked for while it is in flight
+
+        queue.Discard(EbsCleanupKind.ClearCard, ClearEndpoint, "old-token", mark);   // the publish succeeded
+        queue.Discard(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token", mark);
+
+        Assert.Single(queue.Pending);
+        Assert.Equal("ebs-token", queue.Pending[0].Token);
+        Assert.Single(Store.Load().Twitch.PendingCleanups);
+    }
+
+    [Fact]
+    public void A_clear_asked_for_again_after_the_mark_is_not_discarded_by_it()
+    {
+        var (_, queue) = NewQueue();
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token");   // left over from earlier
+        var mark = queue.Mark();
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token");   // the same card, asked again mid-publish
+
+        queue.Discard(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token", mark);
+
+        Assert.Single(queue.Pending);
+    }
+
+    [Fact]
+    public async Task A_save_that_failed_is_retried_on_the_next_round()
+    {
+        // The settings directory cannot be created while a file sits where it should be, so every
+        // save fails, as when the serializer trips over a collection the UI thread is editing.
+        var blocker = Path.Combine(_root, "blocked");
+        File.WriteAllText(blocker, "not a directory");
+        var path = Path.Combine(blocker, "settings.json");
+        var store = new SettingsStore(path);
+        var settings = new AppSettings();
+        using var queue = new EbsCleanupQueue(settings, store, _state, _auth);
+
+        queue.Enqueue(EbsCleanupKind.ClearCard, ClearEndpoint, "ebs-token");
+        Assert.False(File.Exists(path));
+
+        // The disk recovers; the entry must reach it without being re-enqueued.
+        File.Delete(blocker);
+        _state.RespondToClear = () => new StreamStatePublishResult(StreamStatePublishStatus.Failed, "EBS unreachable");
+        Assert.Equal(1, await queue.RetryPendingAsync());
+
+        Assert.Single(new SettingsStore(path).Load().Twitch.PendingCleanups);
+    }
+
     private sealed class FakeTime(DateTimeOffset now) : TimeProvider
     {
         public DateTimeOffset Now { get; set; } = now;

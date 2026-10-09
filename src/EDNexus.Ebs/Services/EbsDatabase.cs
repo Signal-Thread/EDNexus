@@ -14,7 +14,7 @@ public sealed class EbsDatabase
     public const string FileName = "ebs.db";
 
     /// <summary>Schema version stamped into <c>PRAGMA user_version</c>. Bump it and add a migration step when the schema changes.</summary>
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     private readonly string _connectionString;
 
@@ -23,15 +23,18 @@ public sealed class EbsDatabase
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         DatabasePath = databasePath;
-        _connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Pooling = true,
-        }.ToString();
+        _connectionString = BuildConnectionString(databasePath);
 
         Migrate();
     }
+
+    /// <summary>The connection string used for <paramref name="databasePath"/>; tests use it to clear exactly this file's connection pool.</summary>
+    internal static string BuildConnectionString(string databasePath) => new SqliteConnectionStringBuilder
+    {
+        DataSource = databasePath,
+        Mode = SqliteOpenMode.ReadWriteCreate,
+        Pooling = true,
+    }.ToString();
 
     /// <summary>Absolute path of the database file.</summary>
     public string DatabasePath { get; }
@@ -100,6 +103,14 @@ public sealed class EbsDatabase
                     updated_at TEXT NOT NULL
                 );
                 """;
+            command.ExecuteNonQuery();
+        }
+
+        if (version < 2)
+        {
+            // The periodic prune (SqliteChannelStateStore.PruneExpired) deletes by age; without an
+            // index that is a full-table scan under the writer lock.
+            command.CommandText = "CREATE INDEX IF NOT EXISTS ix_channel_state_updated_at ON channel_state (updated_at);";
             command.ExecuteNonQuery();
         }
 

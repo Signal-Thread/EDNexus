@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace EDNexus.Plugins.Abstractions;
 
 /// <summary>
@@ -46,10 +48,27 @@ public interface IJournalEvent
     string? GetLocalised(string field);
 
     /// <summary>
-    /// Deserializes the entire event payload into <typeparamref name="T"/>, or <see langword="null"/>
-    /// if it does not match the shape of <typeparamref name="T"/>. Use the scalar accessors instead
-    /// where possible — journal event shapes change between game updates, and reading only the
-    /// fields you need is more resilient than deserializing the whole payload.
+    /// The event's complete JSON payload, for fields the scalar accessors cannot reach (arrays,
+    /// nested objects). It is an immutable, detached <see cref="JsonElement"/>: valid for as long
+    /// as the plugin holds it, and it gives no handle back to the host.
     /// </summary>
-    T? Deserialize<T>();
+    /// <remarks>
+    /// <para>
+    /// Read it with <see cref="JsonElement"/>'s own navigation (<c>TryGetProperty</c>,
+    /// <c>EnumerateArray</c>, <c>GetInt64</c> and so on): journal event shapes change between game
+    /// updates, so reading only the fields you need is more resilient than binding the whole payload
+    /// to a type.
+    /// </para>
+    /// <para>
+    /// <b>Do not bind it with reflection-based <c>System.Text.Json</c></b>
+    /// (<c>Payload.Deserialize&lt;MyType&gt;()</c>, <c>JsonSerializer.Deserialize&lt;MyType&gt;(...)</c>
+    /// on a plugin-defined type). The serializer keeps a process-wide, strong cache entry for every
+    /// type it binds, which pins the plugin's <see cref="System.Runtime.Loader.AssemblyLoadContext"/>:
+    /// the plugin's assemblies then stay loaded and locked on disk after it is unloaded, so it cannot
+    /// be updated or reinstalled without restarting EDNexus. This SDK therefore has no
+    /// <c>Deserialize&lt;T&gt;</c> of its own. A source-generated <c>JsonSerializerContext</c>
+    /// defined in the plugin does not use that cache.
+    /// </para>
+    /// </remarks>
+    JsonElement Payload { get; }
 }

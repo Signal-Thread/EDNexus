@@ -11,15 +11,15 @@
 @import url("tokens.css");
 
 :root {
-  /* 0.38 measured 3.2:1 on the panel, under the 4.5:1 minimum, and this carries the section
-     headings at 9.5px and the empty-state message. 0.55 measures 5.7:1 on a dark player and 5.3:1
-     with a bright video behind the 92%-opaque panel — both still hold at the reconciled --ednx-ink. */
-  --ednx-bg: rgba(10, 11, 13, 0.92);
-  --ednx-bg-raised: rgba(255, 255, 255, 0.05);
-  --ednx-line: rgba(255, 255, 255, 0.1);
+  /* Colours come from tokens.css (rule 8). --ednx-ink-faint is rgba(…, 0.55): 0.38 measured 3.2:1
+     on the panel, under the 4.5:1 minimum; 0.55 measures 5.7:1 on a dark player and 5.3:1 with a
+     bright video behind the 92%-opaque panel. */
+  --ednx-bg: var(--ednx-overlay-bg);
+  --ednx-bg-raised: var(--ednx-overlay-raised);
+  --ednx-line: var(--ednx-overlay-line);
   --ednx-radius: 8px;
   --ednx-gap: 10px;
-  --ednx-panel-w: 310px;
+  --ednx-panel-w: 330px;
 }
 
 * { box-sizing: border-box; }
@@ -36,6 +36,24 @@ html, body {
 
 /* The overlay must be click-through everywhere the card is not. */
 .ednx-body { pointer-events: none; overflow: hidden; }
+
+/* Nothing to show (no commander publishing, or still connecting): the extension draws nothing, so a
+   channel that has it installed but is not playing shows no tab. `display: flex` on .ednx-root would
+   otherwise beat the user agent's [hidden] rule. */
+.ednx-root[hidden] { display: none; }
+
+/* Text for assistive tech only: the live region that announces connection and staleness changes. */
+.ednx-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 
 .ednx-root {
   position: absolute;
@@ -67,7 +85,8 @@ html, body {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  opacity: 0.72;
+  /* Readable over video, but still quieter than the open panel. */
+  opacity: 0.92;
   backdrop-filter: blur(6px);
   transition: opacity 140ms ease, transform 140ms ease, background-color 140ms ease;
 }
@@ -77,6 +96,13 @@ html, body {
 
 .ednx-handle:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: 2px; }
 
+/* A card the app has stopped feeding says so on the tab as well, not only in the open panel. */
+.ednx-root[data-stale="true"] .ednx-handle { border-left-color: var(--ednx-warning); }
+.ednx-root[data-stale="true"] .ednx-handle__mark { color: var(--ednx-warning); }
+.ednx-root[data-stale="true"] .ednx-handle__sub { color: var(--ednx-warning); }
+.ednx-root[data-state="error"] .ednx-handle { border-left-color: var(--ednx-bad); }
+.ednx-root[data-state="error"] .ednx-handle__mark { color: var(--ednx-bad); }
+
 /* While the panel is open the handle collapses to a sliver — the panel has its own close button. */
 .ednx-root[data-open="true"] .ednx-handle { display: none; }
 
@@ -85,7 +111,7 @@ html, body {
 .ednx-handle__text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 
 .ednx-handle__headline {
-  font-size: 12px;
+  font-size: var(--ednx-text-label);
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -93,7 +119,7 @@ html, body {
 }
 
 .ednx-handle__sub {
-  font-size: 10.5px;
+  font-size: var(--ednx-text-label);
   color: var(--ednx-ink-soft);
   white-space: nowrap;
   overflow: hidden;
@@ -122,7 +148,7 @@ html, body {
   border-radius: 0 var(--ednx-radius) var(--ednx-radius) 0;
   background: var(--ednx-bg);
   backdrop-filter: blur(10px);
-  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 10px 34px var(--ednx-overlay-shadow);
   animation: ednx-slide-in 160ms ease-out;
   overflow: hidden;
 }
@@ -149,7 +175,7 @@ html, body {
 .ednx-panel__title { display: flex; flex-direction: column; min-width: 0; }
 
 .ednx-panel__cmdr {
-  font-size: 13px;
+  font-size: var(--ednx-text-body);
   font-weight: 700;
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -158,7 +184,7 @@ html, body {
 }
 
 .ednx-panel__where {
-  font-size: 11px;
+  font-size: var(--ednx-text-label);
   color: var(--ednx-orange);
   white-space: nowrap;
   overflow: hidden;
@@ -187,6 +213,9 @@ html, body {
   padding: 2px 0;
 }
 
+/* The list scrolls, so keyboard users must be able to reach it to scroll it. */
+.ednx-sections:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: -2px; }
+
 .ednx-sections::-webkit-scrollbar { width: 6px; }
 .ednx-sections::-webkit-scrollbar-thumb { background: var(--ednx-line); border-radius: 3px; }
 
@@ -195,7 +224,7 @@ html, body {
 
 .ednx-section__title {
   margin: 0 0 6px;
-  font-size: 9.5px;
+  font-size: var(--ednx-text-label);
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -203,7 +232,7 @@ html, body {
 }
 
 /* Label/value rows — the backbone of most sections. */
-.ednx-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 11.5px; }
+.ednx-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: var(--ednx-text-label); }
 .ednx-rows dt { color: var(--ednx-ink-soft); white-space: nowrap; }
 .ednx-rows dd {
   margin: 0;
@@ -230,7 +259,7 @@ html, body {
 .ednx-meter__fill--low { background: var(--ednx-bad); }
 
 .ednx-ranks { display: flex; flex-direction: column; gap: 6px; }
-.ednx-rank__line { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; }
+.ednx-rank__line { display: flex; justify-content: space-between; gap: 8px; font-size: var(--ednx-text-label); }
 .ednx-rank__name { color: var(--ednx-ink-soft); }
 .ednx-rank__value { font-weight: 600; }
 
@@ -247,12 +276,12 @@ html, body {
   border-radius: 3px;
   background: var(--ednx-bg-raised);
   color: var(--ednx-ink-soft);
-  font-size: 10px;
+  font-size: var(--ednx-text-label);
 }
 
-.ednx-more { margin-top: 5px; font-size: 10.5px; color: var(--ednx-ink-faint); }
+.ednx-more { margin-top: 5px; font-size: var(--ednx-text-label); color: var(--ednx-ink-faint); }
 
-.ednx-empty { padding: 18px 12px; text-align: center; font-size: 11.5px; color: var(--ednx-ink-faint); }
+.ednx-empty { padding: 18px 12px; text-align: center; font-size: var(--ednx-text-label); color: var(--ednx-ink-faint); }
 
 /* ------------------------------------------------------------------ foot -- */
 
@@ -263,14 +292,14 @@ html, body {
   gap: 8px;
   padding: 6px 12px;
   border-top: 1px solid var(--ednx-line);
-  font-size: 10px;
+  font-size: var(--ednx-text-label);
   color: var(--ednx-ink-faint);
 }
 
-.ednx-brand { color: var(--ednx-ink-faint); text-decoration: none; letter-spacing: 0.06em; }
-.ednx-brand:hover { color: var(--ednx-orange); }
+.ednx-brand { margin-left: auto; color: var(--ednx-ink-faint); letter-spacing: 0.06em; }
 
 .ednx-stale { color: var(--ednx-warning); }
+.ednx-stale:empty { display: none; }
 
 /* Short players (mobile portrait, small theatre mode) get a shorter, narrower card. */
 @media (max-height: 420px) {

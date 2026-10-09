@@ -7,6 +7,13 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <!--
+      The assembly version tracks the SDK contract version (PluginSdk.CurrentVersionString, major.minor):
+      plugins record it as their reference to this assembly, and the host reads it from the plugin's
+      metadata to refuse a plugin built against a newer SDK than the host has. Bump both together
+      (PluginSdkTests.AssemblyVersion_TracksTheSdkVersion enforces it).
+    -->
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <!--
       This assembly is the stable contract surface third-party plugins compile against.
       It must never reference EDNexus.Core (or Avalonia) — see AGENTS.md and issue #52.
     -->

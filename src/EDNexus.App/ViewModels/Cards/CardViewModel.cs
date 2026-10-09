@@ -34,6 +34,7 @@ public sealed class DashboardContext
     private readonly Action<DateTimeOffset> _ensureMiningSessionDate;
     private readonly Action<DateTimeOffset, long> _recordMiningRefined;
     private readonly Action<RefinedUnit, int> _recordMiningSpot;
+    private readonly Func<bool> _sharedProjectLookupEnabled;
 
     public DashboardContext(
         Func<EngineHost> host,
@@ -50,7 +51,8 @@ public sealed class DashboardContext
         Action<DateTimeOffset> ensureMiningSessionDate,
         Action<DateTimeOffset, long> recordMiningRefined,
         Action<RefinedUnit, int> recordMiningSpot,
-        RadioPlayerSelector radio)
+        RadioPlayerSelector radio,
+        Func<bool>? sharedProjectLookupEnabled = null)
     {
         _host = host;
         Radio = radio;
@@ -67,6 +69,7 @@ public sealed class DashboardContext
         _ensureMiningSessionDate = ensureMiningSessionDate;
         _recordMiningRefined = recordMiningRefined;
         _recordMiningSpot = recordMiningSpot;
+        _sharedProjectLookupEnabled = sharedProjectLookupEnabled ?? (() => true);
     }
 
     /// <summary>The live engine host — always the current one, even after a reset-to-live rebuild.</summary>
@@ -115,6 +118,12 @@ public sealed class DashboardContext
 
     /// <summary>Record a unit refined from an SRV as a planetary mining spot worth returning to.</summary>
     public void RecordMiningSpot(RefinedUnit unit, int averagePrice) => _recordMiningSpot(unit, averagePrice);
+
+    /// <summary>
+    /// Whether the colonisation card may look the active depot up on the shared project tracker
+    /// (Raven Colonial). Doing so sends the system name and market id to that third-party service.
+    /// </summary>
+    public bool SharedProjectLookupEnabled => _sharedProjectLookupEnabled();
 }
 
 /// <summary>
@@ -131,7 +140,7 @@ public abstract partial class CardViewModel : CommunityToolkit.Mvvm.ComponentMod
     {
         Context = context;
         Id = id;
-        Title = title;
+        _baseTitle = title;
         _width = width;
         DefaultWidth = width;
     }
@@ -172,8 +181,76 @@ public abstract partial class CardViewModel : CommunityToolkit.Mvvm.ComponentMod
     /// <summary>Stable key, aligned with the dev-mode sample source keys (e.g. "location", "market").</summary>
     public string Id { get; }
 
-    /// <summary>Header text shown on the card.</summary>
-    public string Title { get; }
+    private readonly string _baseTitle;
+
+    /// <summary>
+    /// Header text shown on the card. Carries a "paused" marker while the card is
+    /// <see cref="IsFaulted"/>, so the failure is visible without every card template needing a
+    /// banner of its own.
+    /// </summary>
+    public string Title => IsFaulted ? $"{_baseTitle}  ⚠ paused" : _baseTitle;
+
+    /// <summary>How many consecutive failing updates it takes to pause a card.</summary>
+    public const int MaxConsecutiveFailures = 5;
+
+    private int _consecutiveFailures;
+
+    /// <summary>
+    /// True once <see cref="MaxConsecutiveFailures"/> updates in a row have thrown. A paused card is
+    /// no longer refreshed — it keeps its last good contents instead of taking the dashboard down on
+    /// every tick — until <see cref="ClearFault"/> (a reset-to-live) gives it another chance.
+    /// </summary>
+    public bool IsFaulted { get; private set; }
+
+    /// <summary>What went wrong the last time the card's update threw, or null.</summary>
+    public string? FaultMessage { get; private set; }
+
+    /// <summary>
+    /// Update the card from <paramref name="state"/>, containing any failure. The dashboard ticks
+    /// every 250 ms, so one card throwing on an odd state would otherwise take the whole app down.
+    /// </summary>
+    /// <param name="onFailure">Called for every failing update with the failure count so far and whether the card is now paused.</param>
+    /// <returns>True when the update ran cleanly (or the card is paused and was skipped).</returns>
+    public bool TryUpdate(CommanderState state, Action<CardViewModel, Exception, int, bool>? onFailure = null)
+    {
+        if (IsFaulted) return true;
+
+        try
+        {
+            Update(state);
+            _consecutiveFailures = 0;
+            return true;
+        }
+        catch (Exception ex) when (!UiExceptionPolicy.IsFatal(ex))
+        {
+            _consecutiveFailures++;
+            var pause = _consecutiveFailures >= MaxConsecutiveFailures;
+            if (pause)
+            {
+                IsFaulted = true;
+                FaultMessage = ex.Message;
+                OnPropertyChanged(nameof(IsFaulted));
+                OnPropertyChanged(nameof(FaultMessage));
+                OnPropertyChanged(nameof(Title));
+            }
+
+            onFailure?.Invoke(this, ex, _consecutiveFailures, pause);
+            return false;
+        }
+    }
+
+    /// <summary>Let a paused card update again (and forget its failure count).</summary>
+    public void ClearFault()
+    {
+        _consecutiveFailures = 0;
+        if (!IsFaulted) return;
+
+        IsFaulted = false;
+        FaultMessage = null;
+        OnPropertyChanged(nameof(IsFaulted));
+        OnPropertyChanged(nameof(FaultMessage));
+        OnPropertyChanged(nameof(Title));
+    }
 
     /// <summary>Whether this card supports the dev-mode 🎲 reshuffle (only cards with a sample source do).</summary>
     public virtual bool CanRandomize => true;

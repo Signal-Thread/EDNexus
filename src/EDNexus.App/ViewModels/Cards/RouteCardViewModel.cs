@@ -163,7 +163,7 @@ public sealed partial class RouteCardViewModel : CardViewModel
             SetRouteStep(Math.Min(1, RouteHops.Count - 1));   // first target after the origin
 
             // Straight-line context is a nice-to-have; a failed EDSM lookup must not spoil the plot.
-            _ = AnnotateDirectDistanceAsync(from, to);
+            AnnotateDirectDistanceAsync(from, to).Forget("Route: direct distance");
         }
         catch (Exception ex)
         {

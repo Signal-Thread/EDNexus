@@ -13,7 +13,7 @@ public static class DiscordPresenceMapper
 {
     /// <summary>The "Get EDNexus" button shown on every presence, per issue #49.</summary>
     public static readonly DiscordPresenceButton GetEdNexusButton =
-        new("Get EDNexus", "https://github.com/Signal-Thread-LLC/EDNexus");
+        new("Get EDNexus", "https://github.com/Signal-Thread/EDNexus");
 
     private const string DefaultLargeImageKey = "ednexus_logo";
     private const string DefaultLargeImageText = "EDNexus";

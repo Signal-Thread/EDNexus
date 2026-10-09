@@ -74,12 +74,16 @@ public sealed class SqliteChannelStateStoreTests : IDisposable
         time.Now += TimeSpan.FromHours(2);
         Assert.False(_data.CreateChannelStateStore(time, maxAge).TryGet("channel-1", out _));
 
-        // Pruned, not just hidden: lifting the limit does not bring it back.
+        // Hidden by the read, not yet deleted: lifting the limit still finds the row until the timer runs.
+        Assert.True(_data.CreateChannelStateStore(time).TryGet("channel-1", out _));
+
+        // The periodic prune is what actually deletes it.
+        Assert.Equal(1, _data.CreateChannelStateStore(time, maxAge).PruneExpired());
         Assert.False(_data.CreateChannelStateStore(time).TryGet("channel-1", out _));
     }
 
     [Fact]
-    public void Publishing_prunes_other_channels_expired_snapshots()
+    public void PruneExpired_deletes_only_the_expired_snapshots_and_never_runs_on_publish()
     {
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
         var maxAge = TimeSpan.FromHours(24);
@@ -89,9 +93,60 @@ public sealed class SqliteChannelStateStoreTests : IDisposable
         time.Now += TimeSpan.FromDays(2);
         store.Set("active", JsonSerializer.SerializeToElement(new { system = "Colonia" }));
 
-        // Read without a limit, so only a real delete explains the absence.
+        // Publishing no longer sweeps the table: the abandoned row is still there for an unlimited reader.
         var unlimited = _data.CreateChannelStateStore(time);
+        Assert.True(unlimited.TryGet("abandoned", out _));
+
+        Assert.Equal(1, store.PruneExpired());
         Assert.False(unlimited.TryGet("abandoned", out _));
         Assert.True(unlimited.TryGet("active", out _));
+        Assert.Equal(0, store.PruneExpired());
+    }
+
+    [Fact]
+    public void PruneExpired_is_a_no_op_without_a_max_age()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var store = _data.CreateChannelStateStore(time);
+        store.Set("channel-1", JsonSerializer.SerializeToElement(new { system = "Sol" }));
+        time.Now += TimeSpan.FromDays(365);
+
+        Assert.Equal(0, store.PruneExpired());
+        Assert.True(store.TryGet("channel-1", out _));
+    }
+
+    [Fact]
+    public async Task Reading_a_snapshot_never_needs_the_writer_lock()
+    {
+        // A read used to run a DELETE first, so every viewer request queued behind (or blocked) any writer.
+        var store = _data.CreateChannelStateStore(maxAge: TimeSpan.FromHours(24));
+        store.Set("channel-1", JsonSerializer.SerializeToElement(new { system = "Sol" }));
+
+        using var writer = _data.OpenDatabase().Open();
+        using (var begin = writer.CreateCommand())
+        {
+            begin.CommandText = "BEGIN IMMEDIATE;"; // holds the single writer lock
+            begin.ExecuteNonQuery();
+        }
+
+        var read = Task.Run(() => store.TryGet("channel-1", out _));
+
+        var finished = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.True(finished == read, "TryGet blocked behind the writer lock");
+        Assert.True(await read);
+    }
+
+    [Fact]
+    public void The_stored_row_is_exactly_the_compact_state_it_was_given()
+    {
+        var store = _data.CreateChannelStateStore();
+        using var document = JsonDocument.Parse("""{"a":1,"b":"two"}""");
+
+        store.Set("channel-1", document.RootElement);
+
+        using var connection = _data.OpenDatabase().Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT state_json FROM channel_state WHERE channel_id = 'channel-1';";
+        Assert.Equal("""{"a":1,"b":"two"}""", command.ExecuteScalar());
     }
 }

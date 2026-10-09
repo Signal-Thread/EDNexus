@@ -44,7 +44,16 @@ public sealed class InaraClient : IDisposable
             using var response = await _http.PostAsync(_options.Endpoint, content, ct).ConfigureAwait(false);
             var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
-                return InaraResponse.TransportError($"HTTP {(int)response.StatusCode}");
+            {
+                // A client error other than "slow down" (408/429) cannot succeed on a retry, so it is
+                // reported with its own status rather than as a transport failure that would be requeued.
+                var code = (int)response.StatusCode;
+                if (code is >= 400 and < 500 and not 408 and not 429)
+                    return new InaraResponse { Status = code, StatusText = $"HTTP {code}" };
+
+                var retryAfter = response.Headers.RetryAfter is { } ra ? ra.Delta ?? (ra.Date - DateTimeOffset.UtcNow) : null;
+                return InaraResponse.TransportError($"HTTP {(int)response.StatusCode}", retryAfter > TimeSpan.Zero ? retryAfter : null);
+            }
             return Parse(text);
         }
         catch (Exception ex)
@@ -85,12 +94,14 @@ public sealed class InaraClient : IDisposable
         {
             using var doc = JsonDocument.Parse(text);
             var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return InaraResponse.TransportError("unparseable response: not a JSON object");
 
             int status = 0;
             string? statusText = null;
-            if (root.TryGetProperty("header", out var header))
+            if (root.TryGetProperty("header", out var header) && header.ValueKind == JsonValueKind.Object)
             {
-                if (header.TryGetProperty("eventStatus", out var s) && s.TryGetInt32(out var sv)) status = sv;
+                if (header.TryGetProperty("eventStatus", out var s) && s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out var sv)) status = sv;
                 if (header.TryGetProperty("eventStatusText", out var st) && st.ValueKind == JsonValueKind.String)
                     statusText = st.GetString();
             }
@@ -99,7 +110,8 @@ public sealed class InaraClient : IDisposable
             if (root.TryGetProperty("events", out var evs) && evs.ValueKind == JsonValueKind.Array)
                 foreach (var ev in evs.EnumerateArray())
                 {
-                    var es = ev.TryGetProperty("eventStatus", out var e) && e.TryGetInt32(out var ev2) ? ev2 : 0;
+                    if (ev.ValueKind != JsonValueKind.Object) continue;
+                    var es = ev.TryGetProperty("eventStatus", out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out var ev2) ? ev2 : 0;
                     var et = ev.TryGetProperty("eventStatusText", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
                     events.Add(new InaraEventStatus(es, et));
                 }

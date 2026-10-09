@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Media;
 using EDNexus.Core.Overlay;
 
 namespace EDNexus.App.Views;
@@ -10,11 +11,23 @@ namespace EDNexus.App.Views;
 /// </summary>
 public partial class OverlayWindow : Window
 {
+    // Resolved once from Themes/Theme.axaml rather than parsed from a literal on every update.
+    private readonly IBrush? _fuelOkBrush;
+    private readonly IBrush? _fuelLowBrush;
+
     public OverlayWindow()
     {
         InitializeComponent();
         Position = new Avalonia.PixelPoint(24, 24);
+        _fuelOkBrush = ThemeBrush("Ink");
+        _fuelLowBrush = ThemeBrush("Bad");
     }
+
+    // Null when the theme dictionary is missing: the text then keeps its inherited foreground.
+    private IBrush? ThemeBrush(string key)
+        => this.TryFindResource(key, ActualThemeVariant, out var resource) && resource is IBrush brush
+            ? brush
+            : null;
 
     /// <summary>Push a fresh content snapshot onto the panel. Must be called on the UI thread.</summary>
     public void UpdateContent(OverlayContent content)
@@ -34,9 +47,7 @@ public partial class OverlayWindow : Window
         FuelLine.Text = content.FuelCapacity > 0
             ? $"Fuel: {content.FuelMain:N1} / {content.FuelCapacity:N1} t ({content.FuelPercent:P0})"
             : "Fuel: —";
-        FuelLine.Foreground = content.FuelLow
-            ? Avalonia.Media.Brush.Parse("#F0453B")
-            : Avalonia.Media.Brush.Parse("#E7E9EE");
+        FuelLine.Foreground = content.FuelLow ? _fuelLowBrush : _fuelOkBrush;
 
         // A sample run can be under way on a body the FSS never flagged, so the detail stands alone.
         var bioLines = new List<string>(2);

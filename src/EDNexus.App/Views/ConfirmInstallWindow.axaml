@@ -9,11 +9,13 @@
     <TextBlock Text="Install downloaded update?" Foreground="{StaticResource AmberBrush}"
                FontSize="17" FontWeight="SemiBold" />
     <TextBlock Foreground="{StaticResource Ink}" TextWrapping="Wrap" FontSize="13" LineHeight="20"
-               Text="EDNexus has downloaded an update to your temp folder. Installing will run the downloaded file. Make sure you trust this source. The app will not auto-run installers without your confirmation." />
+               Text="EDNexus downloaded an update and checked it against the SHA-256 checksum published with the release. The checksum shows the file arrived intact; it does not prove who published it. Installing runs the file with administrator rights, and EDNexus will close. The app never runs installers without your confirmation." />
     <Border Background="{StaticResource SurfaceField}" CornerRadius="6" Padding="14">
       <StackPanel Spacing="6">
         <TextBlock Text="File" Foreground="{StaticResource InkDim}" FontSize="11" FontWeight="SemiBold" />
         <TextBlock x:Name="FilePath" Foreground="{StaticResource Ink}" FontSize="12" TextWrapping="Wrap" />
+        <TextBlock Text="SHA-256 (verified)" Foreground="{StaticResource InkDim}" FontSize="11" FontWeight="SemiBold" Margin="0,6,0,0" />
+        <TextBlock x:Name="Checksum" Foreground="{StaticResource Ink}" FontSize="12" TextWrapping="Wrap" />
       </StackPanel>
     </Border>
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">

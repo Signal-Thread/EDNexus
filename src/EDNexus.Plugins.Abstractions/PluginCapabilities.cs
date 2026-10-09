@@ -9,23 +9,39 @@ public static class PluginCapabilities
 {
     /// <summary>
     /// Subscribe to the journal event feed (<see cref="IPluginContext.Events"/>). Data-equivalent
-    /// to <see cref="State"/>: the feed carries everything the commander state is derived from.
+    /// to <see cref="State"/>: the feed carries everything the commander state is derived from,
+    /// including the commander's name and credit balance (the <c>LoadGame</c>, <c>Commander</c> and
+    /// <c>Statistics</c> events). Consent text must say so; see <see cref="State"/>.
     /// </summary>
     public const string Events = "events";
 
     /// <summary>
     /// Read the commander state (<see cref="IPluginContext.State"/>). This is not live: it is the
-    /// state as of the last completed journal event.
+    /// state as of the last completed journal event. <b>It includes the commander's in-game name
+    /// (<see cref="IReadOnlyCommanderState.Name"/>) and credit balance
+    /// (<see cref="IReadOnlyCommanderState.Balance"/>)</b>, plus location, ship, cargo and
+    /// materials; there is no narrower capability for identity or credits. A plugin that declares
+    /// <c>state</c> (or <c>events</c>) together with <see cref="Network"/> can send all of it off
+    /// the machine, so the user must be told exactly that before granting the pair.
     /// </summary>
     public const string State = "state";
 
-    /// <summary>Contribute widgets to the dashboard (<see cref="IPluginContext.Ui"/>).</summary>
+    /// <summary>
+    /// Contribute widgets to the dashboard (<see cref="IPluginContext.Ui"/>). The host has no UI
+    /// contribution points yet: until it does, the bridge's UI registry refuses every call.
+    /// </summary>
     public const string UiDashboard = "ui.dashboard";
 
-    /// <summary>Contribute panels to the in-game overlay (<see cref="IPluginContext.Ui"/>).</summary>
+    /// <summary>
+    /// Contribute panels to the in-game overlay (<see cref="IPluginContext.Ui"/>). See
+    /// <see cref="UiDashboard"/>: not implemented by the bridge yet.
+    /// </summary>
     public const string UiOverlay = "ui.overlay";
 
-    /// <summary>Persist data in the plugin's scoped storage (<see cref="IPluginContext.Storage"/>).</summary>
+    /// <summary>
+    /// Persist data in the plugin's scoped storage (<see cref="IPluginContext.Storage"/>). The host
+    /// has no storage backend yet: until it does, the bridge's storage refuses every call.
+    /// </summary>
     public const string Storage = "storage";
 
     /// <summary>

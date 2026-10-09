@@ -4,7 +4,7 @@
 #   docker build -f src/EDNexus.Ebs/Dockerfile -t ednexus-ebs .
 #
 # Run (see .env.example for every setting; the two secrets are required):
-#   docker run --env-file src/EDNexus.Ebs/.env -p 8787:8787 ednexus-ebs
+#   docker run --env-file src/EDNexus.Ebs/.env -p 127.0.0.1:8787:8787 ednexus-ebs
 #
 # Or use the compose file next to this one:
 #   cd src/EDNexus.Ebs && cp .env.example .env && docker compose up -d

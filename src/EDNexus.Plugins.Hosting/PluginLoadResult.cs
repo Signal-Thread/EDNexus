@@ -31,6 +31,12 @@ public enum PluginLoadStatus
     /// reported at all: it blocks the pass that called it (see #62).
     /// </summary>
     Failed,
+
+    /// <summary>
+    /// The plugin passed every static check but the host's consent callback did not allow it to run
+    /// (see <see cref="PluginHost"/>). No plugin code ran.
+    /// </summary>
+    Denied,
 }
 
 /// <summary>The outcome for one folder under the plugins root.</summary>
@@ -108,11 +114,12 @@ public sealed record PluginDiscoveryReport(
 /// <summary>What <see cref="PluginHost.Unload"/> did.</summary>
 public sealed class PluginUnloadResult
 {
-    internal PluginUnloadResult(string id, IReadOnlyList<string> errors, WeakReference loadContext)
+    internal PluginUnloadResult(string id, IReadOnlyList<string> errors, WeakReference loadContext, bool stuck = false)
     {
         Id = id;
         Errors = errors;
         LoadContext = loadContext;
+        Stuck = stuck;
     }
 
     /// <summary>The plugin that was unloaded.</summary>
@@ -123,6 +130,15 @@ public sealed class PluginUnloadResult
     /// is released regardless.
     /// </summary>
     public IReadOnlyList<string> Errors { get; }
+
+    /// <summary>
+    /// True when a plugin event handler was still running when the unload wait expired
+    /// (<see cref="PluginHost.UnloadTimeout"/>). The plugin's code is still executing, so its load
+    /// context stays alive (and its assemblies locked) until that handler returns; the app should
+    /// treat the plugin as <b>not</b> cleanly unloaded, e.g. refuse to replace its files. Also
+    /// described in <see cref="Errors"/>.
+    /// </summary>
+    public bool Stuck { get; }
 
     /// <summary>
     /// The unloaded load context. It is collected once nothing references the plugin's types any

@@ -351,10 +351,11 @@ public class PluginHostTests
     // ---- incompatible ----------------------------------------------------------------------
 
     [Theory]
-    [InlineData("2.0", null, "targets SDK 2.0")]
-    [InlineData("1.1", null, "targets SDK 1.1")]
+    [InlineData("3.0", null, "targets SDK 3.0")]
+    [InlineData("2.1", null, "targets SDK 2.1")]
+    [InlineData("1.0", null, "targets SDK 1.0")]   // built before 2.0 removed IJournalEvent.Deserialize<T>
     [InlineData("0.9", null, "targets SDK 0.9")]
-    [InlineData("1.0", "99.0.0", "requires EDNexus 99.0.0")]
+    [InlineData("2.0", "99.0.0", "requires EDNexus 99.0.0")]
     public void LoadAll_IncompatiblePlugin_IsSkippedWithAReasonAndOthersStillLoad(string sdkVersion, string? minAppVersion, string expected)
     {
         using var dir = new TempDir();
@@ -375,9 +376,9 @@ public class PluginHostTests
     public void LoadAll_GatesAgainstTheHostSdkVersion()
     {
         using var dir = new TempDir();
-        WriteStandard(dir.Path, "com.test.alpha", "Alpha", sdkVersion: "1.3");
+        WriteStandard(dir.Path, "com.test.alpha", "Alpha", sdkVersion: "2.3");
         var contexts = new RecordingContexts();
-        using var host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), contexts.Factory) { HostSdkVersion = new Version(1, 3) };
+        using var host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, contexts.Factory) { HostSdkVersion = new Version(2, 3) };
 
         Assert.Equal(PluginLoadStatus.Loaded, Single(host.LoadAll(), "com.test.alpha").Status);
     }
@@ -445,7 +446,7 @@ public class PluginHostTests
     {
         using var dir = new TempDir();
         WriteStandard(dir.Path, "com.test.alpha", "Alpha");
-        using var host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), _ => throw new InvalidOperationException("no bridge"));
+        using var host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, (_, _) => throw new InvalidOperationException("no bridge"));
 
         var result = Single(host.LoadAll(), "com.test.alpha");
 
@@ -780,11 +781,11 @@ public class PluginHostTests
         WriteStandard(dir.Path, "com.test.zulu", "Zulu");
         var contexts = new RecordingContexts();
         PluginHost? host = null;
-        host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), manifest =>
+        host = new PluginHost(dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, (manifest, granted) =>
         {
             if (manifest.Id == "com.test.alpha")
                 host!.LoadAll();
-            return contexts.Factory(manifest);
+            return contexts.Factory(manifest, granted);
         });
         using (host)
         {

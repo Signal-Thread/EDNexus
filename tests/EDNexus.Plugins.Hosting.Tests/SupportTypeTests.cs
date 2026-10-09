@@ -164,7 +164,7 @@ public class PluginPathRulesTests
 
 public class PluginCompatibilityTests
 {
-    private static PluginManifest Manifest(string sdk = "1.0", string? minApp = null)
+    private static PluginManifest Manifest(string sdk = PluginSdk.CurrentVersionString, string? minApp = null)
         => new("a.b", "N", "1.0.0", sdk) { MinAppVersion = minApp, EntryAssembly = "A.dll", EntryType = "A.P" };
 
     private static readonly SemanticVersion App = SemanticVersion.Parse("1.5.0");
@@ -174,11 +174,12 @@ public class PluginCompatibilityTests
         => Assert.Null(PluginCompatibility.Check(Manifest(PluginSdk.CurrentVersionString), App));
 
     [Theory]
-    [InlineData("1.0", 1, 0, true)]
-    [InlineData("1.0", 1, 3, true)]   // host has a newer minor — additive, fine
-    [InlineData("1.4", 1, 3, false)]  // plugin needs members the host lacks
-    [InlineData("2.0", 1, 9, false)]  // breaking major
-    [InlineData("0.9", 1, 0, false)]
+    [InlineData("2.0", 2, 0, true)]
+    [InlineData("2.0", 2, 3, true)]   // host has a newer minor — additive, fine
+    [InlineData("2.4", 2, 3, false)]  // plugin needs members the host lacks
+    [InlineData("3.0", 2, 9, false)]  // breaking major
+    [InlineData("1.0", 2, 0, false)]  // a 1.x plugin: 2.0 removed IJournalEvent.Deserialize<T>
+    [InlineData("0.9", 2, 0, false)]
     public void SdkVersion_IsGatedByMajorAndMinor(string declared, int hostMajor, int hostMinor, bool compatible)
     {
         var reason = PluginCompatibility.Check(Manifest(declared), App, new Version(hostMajor, hostMinor));

@@ -7,8 +7,9 @@ namespace EDNexus.Ebs.Services;
 /// <see cref="IChannelStateStore"/> backed by <see cref="EbsDatabase"/>, so
 /// <c>GET /api/initial-state/{channelId}</c> still answers with the last published state after the
 /// EBS restarts instead of 404ing until the broadcaster's next update. Rows older than the
-/// configured maximum age are treated as absent and pruned, so a snapshot whose clear never
-/// arrived does not stay public forever.
+/// configured maximum age are treated as absent (the age is compared in code, so a read is a pure
+/// SELECT that never takes the SQLite writer lock) and are deleted by <see cref="PruneExpired"/>,
+/// which runs on a timer — so a snapshot whose clear never arrived does not stay public forever.
 /// </summary>
 public sealed class SqliteChannelStateStore : IChannelStateStore
 {
@@ -38,22 +39,27 @@ public sealed class SqliteChannelStateStore : IChannelStateStore
         command.Parameters.AddWithValue("$state", state.GetRawText());
         command.Parameters.AddWithValue("$updated", Timestamp(_timeProvider.GetUtcNow()));
         command.ExecuteNonQuery();
-
-        PruneExpired(connection, channelId: null);
     }
 
     /// <inheritdoc />
     public bool TryGet(string channelId, out JsonElement state)
     {
         using var connection = _database.Open();
-        PruneExpired(connection, channelId);
-
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT state_json FROM channel_state WHERE channel_id = $channel;";
+        command.CommandText = "SELECT state_json, updated_at FROM channel_state WHERE channel_id = $channel;";
         command.Parameters.AddWithValue("$channel", channelId);
 
-        if (command.ExecuteScalar() is not string json)
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
         {
+            state = default;
+            return false;
+        }
+
+        var json = reader.GetString(0);
+        if (_maxAge is { } maxAge && IsExpired(reader.GetString(1), maxAge))
+        {
+            // Past the limit counts as gone even before the timer has deleted the row.
             state = default;
             return false;
         }
@@ -73,20 +79,25 @@ public sealed class SqliteChannelStateStore : IChannelStateStore
         command.ExecuteNonQuery();
     }
 
-    /// <summary>Deletes snapshots past the maximum age: one channel's, or every channel's when null.</summary>
-    private void PruneExpired(Microsoft.Data.Sqlite.SqliteConnection connection, string? channelId)
+    /// <inheritdoc />
+    public int PruneExpired()
     {
-        if (_maxAge is not { } maxAge) return;
+        if (_maxAge is not { } maxAge) return 0;
 
+        using var connection = _database.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = channelId is null
-            ? "DELETE FROM channel_state WHERE updated_at < $cutoff;"
-            : "DELETE FROM channel_state WHERE channel_id = $channel AND updated_at < $cutoff;";
-        // Round-trip ("O") UTC timestamps are fixed-width, so they compare correctly as text.
+        // Round-trip ("O") UTC timestamps are fixed-width, so they compare correctly as text — and
+        // that is what lets ix_channel_state_updated_at serve this range delete.
+        command.CommandText = "DELETE FROM channel_state WHERE updated_at < $cutoff;";
         command.Parameters.AddWithValue("$cutoff", Timestamp(_timeProvider.GetUtcNow() - maxAge));
-        if (channelId is not null) command.Parameters.AddWithValue("$channel", channelId);
-        command.ExecuteNonQuery();
+        return command.ExecuteNonQuery();
     }
+
+    // An unparseable timestamp is treated as expired: nothing this service wrote can be one, and
+    // failing closed keeps an unreadable row from being served forever.
+    private bool IsExpired(string updatedAt, TimeSpan maxAge) =>
+        !DateTimeOffset.TryParse(updatedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+        || _timeProvider.GetUtcNow() - parsed > maxAge;
 
     private static string Timestamp(DateTimeOffset value) =>
         value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
