@@ -202,6 +202,16 @@ public sealed class Bootstrap
         Store.Save(Settings);
     }
 
+    /// <summary>
+    /// Persist whether the commander's own colonisation deliveries are reported to the shared Raven
+    /// Colonial project. Off by default; it sends the commander name and what was delivered.
+    /// </summary>
+    public void ApplyShareDeliveries(bool enabled)
+    {
+        Settings.Colonisation.ShareDeliveries = enabled;
+        Store.Save(Settings);
+    }
+
     /// <summary>Persist the Mining option that announces known spots on arriving in a system.</summary>
     public void ApplyMiningSpotAnnouncements(bool enabled)
     {

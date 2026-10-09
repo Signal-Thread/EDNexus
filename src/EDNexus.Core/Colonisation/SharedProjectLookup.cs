@@ -58,7 +58,8 @@ public interface ISharedProjectLookup
 /// <remarks>
 /// Read-only on purpose. The API declares no authentication, so a delivery pushed up would be
 /// attributed by nothing more than a commander name in the URL — writing under that model is a
-/// decision for the project owner, not a detail to slip into a read-side adapter.
+/// decision for the commander, not a detail to slip into a read-side adapter. The opt-in write lives
+/// in <see cref="RavenColonialContributor"/> and <see cref="RavenContributionSync"/>.
 /// </remarks>
 public sealed class RavenColonialProjectLookup : ISharedProjectLookup
 {
@@ -73,16 +74,8 @@ public sealed class RavenColonialProjectLookup : ISharedProjectLookup
     {
         if (string.IsNullOrWhiteSpace(systemName) || marketId <= 0) return null;
 
-        // Two steps, because the by-depot endpoint is keyed on the game's id64 and the depot snapshot
-        // does not carry one: list what the system has, then pull the one whose market matches.
-        var listed = await _client.GetSystemProjectsAsync(systemName, ct).ConfigureAwait(false);
-        if (!listed.IsOk || listed.Value is not { } refs) return null;
-
-        var match = refs.FirstOrDefault(r => r.MarketId == marketId);
-        if (match is null) return null;
-
-        var result = await _client.GetProjectAsync(match.BuildId, ct).ConfigureAwait(false);
-        if (!result.IsOk || result.Value is not { } project) return null;
+        var found = await RavenProjectMatcher.FindAsync(_client, systemName, marketId, ct).ConfigureAwait(false);
+        if (found.Project is not { } project) return null;
 
         var remaining = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var (commodity, units) in project.Remaining)
