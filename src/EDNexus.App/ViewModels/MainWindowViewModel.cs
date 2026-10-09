@@ -466,7 +466,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         {
             var psi = new ProcessStartInfo
             {
-                FileName = UpdatePath,
+                FileName = installerPath,
                 UseShellExecute = true
             };
             Process.Start(psi)?.Dispose();
@@ -474,13 +474,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         catch (Exception ex)
         {
             // Launch failed (e.g. UAC declined) — stay open so the user isn't left with nothing running.
-            Trace.TraceWarning($"Update: failed to launch installer {UpdatePath}: {ex.Message}");
+            Trace.TraceWarning($"Update: failed to launch installer {installerPath}: {ex.Message}");
             return;
         }
 
         // The installer can't replace EDNexus's files while this process holds them open, so exit
         // once it's launched. Shutdown raises ShutdownRequested, which disposes the engine.
-        Trace.TraceInformation($"Update: launched installer {UpdatePath}; shutting down so it can complete");
+        Trace.TraceInformation($"Update: launched installer {installerPath}; shutting down so it can complete");
         (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
     }
 
