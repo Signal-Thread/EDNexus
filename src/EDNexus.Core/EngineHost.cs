@@ -39,6 +39,7 @@ public sealed class EngineHost : IDisposable
     private readonly JournalWatcher? _watcher;
     private readonly ReporterHost? _reporters;
     private readonly DiscordPresenceController? _discordPresence;
+    private readonly RavenContributionSync? _ravenContributions;
     private readonly TwitchStreamCardService? _twitchCard;
     private readonly StreamStateApiClient? _twitchCardClient;
     private readonly HttpClient _http;
@@ -193,8 +194,21 @@ public sealed class EngineHost : IDisposable
         NewsRead = new NewsReadTracker();
 
         // Read-only: squadmates deliver while you fly, so this one is never cached.
-        SharedProjects = new RavenColonialProjectLookup(new RavenColonialClient(
-            new RavenColonialClientOptions { SoftwareName = "EDNexus", SoftwareVersion = version }, _http));
+        var raven = new RavenColonialClient(
+            new RavenColonialClientOptions { SoftwareName = "EDNexus", SoftwareVersion = version }, _http);
+        SharedProjects = new RavenColonialProjectLookup(raven);
+
+        // The only write to Raven Colonial: the commander's own deliveries, and only when they opt in.
+        // Like the reporters it is wired only when settings exist (so the CLI's replay never transmits),
+        // reads its switches live, and goes silent while developer mode fabricates events. Both toggles
+        // gate it because both talk to the same service.
+        if (settings is not null)
+        {
+            _ravenContributions = new RavenContributionSync(
+                Bus, State, new RavenColonialContributor(raven),
+                isEnabled: () => settings.Colonisation.ShareDeliveries && settings.Colonisation.SharedProjectLookup,
+                isSuppressed: reportingSuppressed);
+        }
 
         if (settings is not null)
         {
@@ -350,6 +364,7 @@ public sealed class EngineHost : IDisposable
         // Flush any queued reports before tearing down the shared HttpClient.
         try { _reporters?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3)); }
         catch (AggregateException) { /* best effort */ }
+        _ravenContributions?.Dispose();   // before _http goes: cancels any delivery still in flight
         _discordPresence?.Dispose();
         _twitchCard?.Dispose();
         _twitchCardClient?.Dispose();

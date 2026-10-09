@@ -1,14 +1,16 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 namespace EliteDangerous.RavenColonial;
 
 /// <summary>
 /// Queries the Raven Colonial read APIs (a project by id, a project by construction depot, and the
-/// projects in a system) and parses the replies into plain records. This is pure transport: matching
-/// a project to what the commander is docked at, and deciding what to show, belongs to the caller.
+/// projects in a system) and parses the replies into plain records, and can report a commander's
+/// delivery to a project (<see cref="ContributeAsync"/>). This is pure transport: matching a project
+/// to what the commander is docked at, and deciding what to show or send, belongs to the caller.
 /// Following the EDSM, Spansh and Galnet clients' convention it never throws for network/HTTP
 /// problems; failures surface as <see cref="RavenResult{T}.Failure"/>, and an unknown project as an
 /// OK result with a null value. A single instance is safe to reuse across queries.
@@ -17,6 +19,12 @@ namespace EliteDangerous.RavenColonial;
 /// The API declares no authentication — every read here is public, which is why this client carries
 /// no credentials. Its numeric fields are declared as integer-or-string in the published schema, so
 /// every number is read leniently rather than assuming a JSON number.
+/// <para>
+/// The one write, <see cref="ContributeAsync"/>, is unauthenticated too: the commander is only a path
+/// segment, so anyone can post a delivery in anyone's name. That is Raven Colonial's design, not
+/// something this client can mitigate, which is why callers must only send a commander's own
+/// deliveries, and only when the commander has opted in.
+/// </para>
 /// </remarks>
 public sealed class RavenColonialClient : IDisposable
 {
@@ -99,6 +107,57 @@ public sealed class RavenColonialClient : IDisposable
         }).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Reports a commander's own delivery to a project: <c>POST /api/project/{buildId}/contribute/{cmdr}</c>
+    /// with a JSON object of commodity name to units delivered. Never throws; a rejected, failed or
+    /// unreachable call is a <see cref="RavenResult{T}.Failure"/>.
+    /// </summary>
+    /// <param name="buildId">The project's <see cref="RavenProject.BuildId"/>.</param>
+    /// <param name="cmdr">The commander the delivery is credited to. The endpoint takes it on trust.</param>
+    /// <param name="deltas">
+    /// Commodity name to units delivered. Names must be spelled the way the project's own
+    /// <see cref="RavenProject.Remaining"/> keys are; this client does not guess. Blank names and
+    /// amounts of zero or less are dropped, and when nothing is left no request is made.
+    /// </param>
+    /// <returns>
+    /// OK with a receipt of what was actually sent, or a failure. A blank or dot-segment
+    /// <paramref name="buildId"/> or <paramref name="cmdr"/>, and an empty <paramref name="deltas"/>,
+    /// fail without touching the network.
+    /// </returns>
+    public async Task<RavenResult<RavenContribution>> ContributeAsync(
+        string buildId, string cmdr, IReadOnlyDictionary<string, int> deltas, CancellationToken ct = default)
+    {
+        if (!IsSafeSegment(buildId)) return RavenResult<RavenContribution>.Failure("invalid build id");
+        if (!IsSafeSegment(cmdr)) return RavenResult<RavenContribution>.Failure("invalid commander name");
+
+        var send = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (deltas is not null)
+            foreach (var (name, units) in deltas)
+            {
+                if (string.IsNullOrWhiteSpace(name) || units <= 0) continue;
+                var key = name.Trim();
+                send[key] = send.TryGetValue(key, out var already) ? already + units : units;
+            }
+        if (send.Count == 0) return RavenResult<RavenContribution>.Failure("nothing to contribute");
+
+        var url = $"{Base}/api/project/{Uri.EscapeDataString(buildId.Trim())}/contribute/{Uri.EscapeDataString(cmdr.Trim())}";
+        var json = JsonSerializer.Serialize(send);
+
+        try
+        {
+            // A fresh request per attempt: a request message (and its content) can only be sent once.
+            using var response = await SendWithRetryAsync(
+                token => _http.PostAsync(url, new StringContent(json, Encoding.UTF8, "application/json"), token), ct)
+                .ConfigureAwait(false);
+
+            return response.IsSuccessStatusCode
+                ? RavenResult<RavenContribution>.Ok(new RavenContribution(buildId.Trim(), send))
+                : RavenResult<RavenContribution>.Failure($"HTTP {(int)response.StatusCode}");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { return RavenResult<RavenContribution>.Failure(ex.Message); }   // incl. an HttpClient timeout
+    }
+
     private string Base => _options.BaseUrl.TrimEnd('/');
 
     /// <summary>Shared GET + parse plumbing: never throws, mapping every failure onto a Failure result.</summary>
@@ -107,7 +166,7 @@ public sealed class RavenColonialClient : IDisposable
     {
         try
         {
-            using var response = await GetWithRetryAsync(url, ct).ConfigureAwait(false);
+            using var response = await SendWithRetryAsync(token => _http.GetAsync(url, token), ct).ConfigureAwait(false);
 
             // "No project here" is an ordinary answer for a depot nobody is tracking, not a fault.
             if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent)
@@ -125,13 +184,15 @@ public sealed class RavenColonialClient : IDisposable
     }
 
     /// <summary>
-    /// GET with a single retry when the server says it is busy (429/503): waits the server's
-    /// <c>Retry-After</c> (or <see cref="RavenColonialClientOptions.TransientRetryDelay"/>) if that is within
+    /// Sends a request (built afresh by <paramref name="send"/> for each attempt) with a single retry
+    /// when the server says it is busy (429/503): waits the server's <c>Retry-After</c> (or
+    /// <see cref="RavenColonialClientOptions.TransientRetryDelay"/>) if that is within
     /// <see cref="RavenColonialClientOptions.MaxRetryAfter"/>, and otherwise hands the busy response straight back.
     /// </summary>
-    private async Task<HttpResponseMessage> GetWithRetryAsync(string url, CancellationToken ct)
+    private async Task<HttpResponseMessage> SendWithRetryAsync(
+        Func<CancellationToken, Task<HttpResponseMessage>> send, CancellationToken ct)
     {
-        var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
+        var response = await send(ct).ConfigureAwait(false);
         if (response.StatusCode is not (HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable))
             return response;
 
@@ -140,7 +201,7 @@ public sealed class RavenColonialClient : IDisposable
 
         response.Dispose();
         if (wait > TimeSpan.Zero) await Task.Delay(wait, ct).ConfigureAwait(false);
-        return await _http.GetAsync(url, ct).ConfigureAwait(false);
+        return await send(ct).ConfigureAwait(false);
     }
 
     private static TimeSpan? ReadRetryAfter(HttpResponseMessage response)

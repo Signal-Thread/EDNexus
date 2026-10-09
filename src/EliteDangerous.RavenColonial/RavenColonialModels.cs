@@ -44,8 +44,13 @@ public sealed record RavenProjectRef(
     bool Complete,
     string? Architect);
 
+/// <summary>What <see cref="RavenColonialClient.ContributeAsync"/> actually sent for an accepted delivery.</summary>
+/// <param name="BuildId">The project the delivery was posted to.</param>
+/// <param name="Sent">Commodity name to units, after blank names and non-positive amounts were dropped.</param>
+public sealed record RavenContribution(string BuildId, IReadOnlyDictionary<string, int> Sent);
+
 /// <summary>
-/// The result of a Raven Colonial lookup. Mirrors the EDSM, Spansh and Galnet clients' convention:
+/// The result of a Raven Colonial call. Mirrors the EDSM, Spansh and Galnet clients' convention:
 /// transport, HTTP and parse failures never throw — they surface as <see cref="IsOk"/> false with an
 /// <see cref="Error"/>, and a successful-but-unknown project comes back as <see cref="IsOk"/> true
 /// with a null <see cref="Value"/>.
