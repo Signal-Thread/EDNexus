@@ -3,45 +3,156 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EDNexus — Commander console for Elite Dangerous</title>
-<meta name="description" content="EDNexus is a free, open-source commander console for Elite Dangerous — market &amp; trade routes, engineering, exobiology, colonisation, mining, missions, radio, an in-game overlay and a Twitch stream card, all in one app. See what is built and what is planned.">
-<meta name="keywords" content="Elite Dangerous, Elite Dangerous tool, EDDN, journal parser, Elite Dangerous commander console, Elite Dangerous market tool, Elite Dangerous trade route planner, Elite Dangerous engineering, Elite Dangerous exobiology, Elite Dangerous colonisation tracker, Inara, Odyssey">
+<title>EDNexus: Elite Dangerous Commander Console and Journal Tools</title>
+<meta name="description" content="Free Elite Dangerous companion app: trade routes, engineering, exobiology, colonisation, mining, missions and a Twitch card in one tool. Windows and Linux.">
+<meta name="keywords" content="Elite Dangerous, Elite Dangerous companion app, Elite Dangerous tools, EDDN, Elite Dangerous trade route planner, Elite Dangerous exobiology, Elite Dangerous colonisation tracker, Elite Dangerous engineering, Inara, Odyssey, journal parser">
 <meta name="robots" content="index, follow">
 <link rel="canonical" href="https://signal-thread.github.io/EDNexus/">
+<meta name="theme-color" content="#0E1013">
+<meta name="color-scheme" content="dark">
 <link rel="icon" type="image/svg+xml" href="assets/logo/ednexus-icon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png">
 
 <meta property="og:type" content="website">
+<meta property="og:locale" content="en_US">
 <meta property="og:site_name" content="EDNexus">
-<meta property="og:title" content="EDNexus — Commander console for Elite Dangerous">
-<meta property="og:description" content="A single, does-it-all commander console for Elite Dangerous — market, routes, exobiology, colonisation, mining, missions and more in one app.">
+<meta property="og:title" content="EDNexus: Elite Dangerous Commander Console and Journal Tools">
+<meta property="og:description" content="Free Elite Dangerous companion app: trade routes, engineering, exobiology, colonisation, mining, missions and a Twitch card in one tool. Windows and Linux.">
 <meta property="og:url" content="https://signal-thread.github.io/EDNexus/">
-<meta property="og:image" content="https://signal-thread.github.io/EDNexus/assets/logo/ednexus-lockup.svg">
+<meta property="og:image" content="https://signal-thread.github.io/EDNexus/assets/og-image.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="EDNexus: commander console for Elite Dangerous, with trade routes, engineering, exobiology, colonisation, mining, missions and a Twitch stream card.">
 
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="EDNexus — Commander console for Elite Dangerous">
-<meta name="twitter:description" content="A single, does-it-all commander console for Elite Dangerous — market, routes, exobiology, colonisation, mining, missions and more in one app.">
-<meta name="twitter:image" content="https://signal-thread.github.io/EDNexus/assets/logo/ednexus-lockup.svg">
+<meta name="twitter:title" content="EDNexus: Elite Dangerous Commander Console and Journal Tools">
+<meta name="twitter:description" content="Free Elite Dangerous companion app: trade routes, engineering, exobiology, colonisation, mining, missions and a Twitch card in one tool. Windows and Linux.">
+<meta name="twitter:image" content="https://signal-thread.github.io/EDNexus/assets/og-image.png">
+<meta name="twitter:image:alt" content="EDNexus: commander console for Elite Dangerous.">
 
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "EDNexus",
-  "url": "https://signal-thread.github.io/EDNexus/",
-  "description": "A single, does-it-all commander console for Elite Dangerous — market, routes, exobiology, colonisation, mining, missions and more in one app.",
-  "applicationCategory": "UtilitiesApplication",
-  "operatingSystem": "Windows, Linux",
-  "offers": {
-    "@type": "Offer",
-    "price": "0",
-    "priceCurrency": "USD"
-  },
-  "downloadUrl": "https://github.com/Signal-Thread/EDNexus/releases",
-  "codeRepository": "https://github.com/Signal-Thread/EDNexus",
-  "author": {
-    "@type": "Organization",
-    "name": "Signal & Thread LLC"
-  }
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://signal-thread.github.io/EDNexus/#org",
+      "name": "Signal & Thread LLC",
+      "url": "https://signal-thread.github.io/EDNexus/",
+      "logo": "https://signal-thread.github.io/EDNexus/assets/icons/icon-192.png",
+      "sameAs": [
+        "https://github.com/Signal-Thread"
+      ]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://signal-thread.github.io/EDNexus/#website",
+      "url": "https://signal-thread.github.io/EDNexus/",
+      "name": "EDNexus",
+      "inLanguage": "en",
+      "publisher": {
+        "@id": "https://signal-thread.github.io/EDNexus/#org"
+      }
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://signal-thread.github.io/EDNexus/#app",
+      "name": "EDNexus",
+      "url": "https://signal-thread.github.io/EDNexus/",
+      "description": "A commander console for Elite Dangerous: market and trade routes, engineering, exobiology, colonisation, mining, missions, an in-game overlay and a Twitch stream card in one app.",
+      "applicationCategory": "UtilitiesApplication",
+      "applicationSubCategory": "Elite Dangerous companion app",
+      "operatingSystem": "Windows, Linux",
+      "isAccessibleForFree": true,
+      "image": "https://signal-thread.github.io/EDNexus/assets/og-image.png",
+      "downloadUrl": "https://github.com/Signal-Thread/EDNexus/releases/latest",
+      "softwareHelp": "https://github.com/Signal-Thread/EDNexus#readme",
+      "codeRepository": "https://github.com/Signal-Thread/EDNexus",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "author": {
+        "@id": "https://signal-thread.github.io/EDNexus/#org"
+      },
+      "featureList": [
+        "Market and trade route search",
+        "Engineering material shopping lists",
+        "Exobiology tracking and species prediction",
+        "Colonisation depot tracker with Raven Colonial lookups",
+        "Mining tracker",
+        "Missions, community goals and Galnet",
+        "In-game overlay and voice callouts (Windows)",
+        "Twitch stream card",
+        "Optional EDDN and Inara contributions"
+      ]
+    },
+    {
+      "@type": "FAQPage",
+      "@id": "https://signal-thread.github.io/EDNexus/#faq",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Is EDNexus free?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. EDNexus is free to download and use, there is no account to create, and the source code is on GitHub."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does it need an account or an API key?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. It reads the journal files Elite Dangerous writes on your own computer. Syncing to Inara needs your own Inara API key and is optional, as are EDDN contributions and crash reports."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does it read the game's memory or change the game?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. EDNexus only reads the journal and status files the game writes for third-party tools. There is no memory reading and no injection."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Which platforms does it support?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Windows (installer) and Linux (Flatpak bundle). The in-game overlay and spoken callouts are Windows-only. macOS is not supported yet."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What can it do?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Trade and route plotting, engineering material shopping lists, exobiology tracking and species prediction, colonisation depot tracking with Raven Colonial lookups, mining, missions, community goals, Galnet news, ranks, a radio player, Discord Rich Presence and an optional Twitch stream card."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What data leaves my computer?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "EDDN and Inara uploads, crash reports and the Twitch stream card are optional and off until you turn them on. Features that look things up (Spansh, EDSM, Raven Colonial, Galnet and the update check) send only what the lookup needs. The README lists everything."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does it work with Odyssey and the colonisation update?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. On-foot engineering upgrades, the on-foot inventory, exobiology and the colonisation tracker are built in."
+          }
+        }
+      ]
+    }
+  ]
 }
 </script>
 
@@ -84,11 +195,13 @@
     border-bottom: 1px solid var(--border);
   }
   header.hero img.lockup { max-width: 440px; width: 100%; height: auto; }
+  header.hero h1 { font-size: 1.9rem; line-height: 1.25; margin: 24px 0 0; }
+  header.hero h1 .accent { color: var(--accent); }
   header.hero p.tagline {
     color: var(--muted);
     font-size: 1.15rem;
     max-width: 620px;
-    margin: 20px auto 0;
+    margin: 14px auto 0;
   }
   .cta { margin-top: 32px; display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
   .btn {
@@ -177,6 +290,12 @@
 
   .fine { color: var(--muted); font-size: 0.9rem; }
 
+  details.faq { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin: 0 0 12px; }
+  details.faq summary { cursor: pointer; padding: 14px 18px; font-weight: 600; list-style-position: inside; }
+  details.faq summary:hover { color: var(--accent-bright); }
+  details.faq[open] summary { border-bottom: 1px solid var(--border); }
+  details.faq p { margin: 0; padding: 14px 18px; color: var(--muted); }
+
   footer {
     padding: 32px 0 56px;
     text-align: center;
@@ -189,22 +308,23 @@
 
 <header class="hero">
   <div class="wrap">
-    <img class="lockup" src="assets/logo/ednexus-lockup.svg" alt="EDNexus — commander console for Elite Dangerous">
-    <h1 class="visually-hidden">EDNexus — Commander Console for Elite Dangerous</h1>
+    <img class="lockup" src="assets/logo/ednexus-lockup.svg" width="880" height="280" alt="EDNexus logo">
+    <h1>Commander console for <span class="accent">Elite Dangerous</span></h1>
     <p class="tagline">
       A single, does-it-all commander console for <strong>Elite Dangerous</strong> — built to replace
       the sprawl of separate market, route, exobiology, colonisation, and materials tools with one
       app.
     </p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/Signal-Thread/EDNexus/releases">Download</a>
-      <a class="btn secondary" href="https://github.com/Signal-Thread/EDNexus">View on GitHub</a>
+      <a class="btn primary" href="https://github.com/Signal-Thread/EDNexus/releases/latest">Download EDNexus</a>
+      <a class="btn secondary" href="https://github.com/Signal-Thread/EDNexus">EDNexus on GitHub</a>
     </div>
     <nav class="sections" aria-label="Sections">
       <a href="#how-it-works">How it works</a>
       <a href="#features">Features</a>
       <a href="#roadmap">Roadmap</a>
       <a href="#data">Your data</a>
+      <a href="#faq">FAQ</a>
       <a href="#install">Get started</a>
     </nav>
   </div>
@@ -430,6 +550,20 @@
         <p>Opt-in, with a per-section choice. The card is public while it is up, and it is taken down when you quit the game or the app.</p>
       </div>
     </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <h2>Frequently asked <span class="accent">questions</span></h2>
+    <p class="lead">Quick answers about what EDNexus is and what it does.</p>
+    <details class="faq"><summary>Is EDNexus free?</summary><p>Yes. EDNexus is free to download and use, there is no account to create, and the source code is on GitHub.</p></details>
+    <details class="faq"><summary>Does it need an account or an API key?</summary><p>No. It reads the journal files Elite Dangerous writes on your own computer. Syncing to Inara needs your own Inara API key and is optional, as are EDDN contributions and crash reports.</p></details>
+    <details class="faq"><summary>Does it read the game's memory or change the game?</summary><p>No. EDNexus only reads the journal and status files the game writes for third-party tools. There is no memory reading and no injection.</p></details>
+    <details class="faq"><summary>Which platforms does it support?</summary><p>Windows (installer) and Linux (Flatpak bundle). The in-game overlay and spoken callouts are Windows-only. macOS is not supported yet.</p></details>
+    <details class="faq"><summary>What can it do?</summary><p>Trade and route plotting, engineering material shopping lists, exobiology tracking and species prediction, colonisation depot tracking with Raven Colonial lookups, mining, missions, community goals, Galnet news, ranks, a radio player, Discord Rich Presence and an optional Twitch stream card.</p></details>
+    <details class="faq"><summary>What data leaves my computer?</summary><p>EDDN and Inara uploads, crash reports and the Twitch stream card are optional and off until you turn them on. Features that look things up (Spansh, EDSM, Raven Colonial, Galnet and the update check) send only what the lookup needs. The README lists everything.</p></details>
+    <details class="faq"><summary>Does it work with Odyssey and the colonisation update?</summary><p>Yes. On-foot engineering upgrades, the on-foot inventory, exobiology and the colonisation tracker are built in.</p></details>
   </div>
 </section>
 
