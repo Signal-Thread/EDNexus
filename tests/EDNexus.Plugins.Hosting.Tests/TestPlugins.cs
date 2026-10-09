@@ -97,7 +97,7 @@ internal static class TestPlugins
         string id,
         string entryAssembly,
         string entryType,
-        string sdkVersion = "1.0",
+        string sdkVersion = PluginSdk.CurrentVersionString,
         string? minAppVersion = null,
         string capabilities = "\"events\"") => $$"""
         {
@@ -132,7 +132,7 @@ internal static class TestPlugins
     /// Installs the standard plugin in namespace <paramref name="ns"/> as id <paramref name="id"/>
     /// in folder <paramref name="folder"/> (default: the id).
     /// </summary>
-    public static string WriteStandard(string root, string id, string ns, string? folder = null, string sdkVersion = "1.0", string? minAppVersion = null, string capabilities = "\"events\"")
+    public static string WriteStandard(string root, string id, string ns, string? folder = null, string sdkVersion = PluginSdk.CurrentVersionString, string? minAppVersion = null, string capabilities = "\"events\"")
         => WriteFolder(root, folder ?? id, Manifest(id, ns + ".dll", ns + ".Plugin", sdkVersion, minAppVersion, capabilities), (ns + ".dll", Standard(ns)));
 }
 

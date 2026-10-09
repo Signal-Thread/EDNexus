@@ -8,11 +8,11 @@ namespace EDNexus.Plugins.Abstractions;
 /// without the host or the plugin needing a compile-time reference to each other.
 /// </summary>
 /// <param name="version">
-/// The SDK contract version, formatted as <c>"major.minor"</c> (e.g. <c>"1.0"</c>).
+/// The SDK contract version, formatted as <c>"major.minor"</c> (e.g. <c>"2.0"</c>).
 /// </param>
 [AttributeUsage(AttributeTargets.Assembly)]
 public sealed class PluginSdkVersionAttribute(string version) : Attribute
 {
-    /// <summary>The SDK contract version this assembly declares, e.g. <c>"1.0"</c>.</summary>
+    /// <summary>The SDK contract version this assembly declares, e.g. <c>"2.0"</c>.</summary>
     public string Version { get; } = version;
 }

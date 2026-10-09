@@ -13,7 +13,7 @@ internal static class TestPackages
           "version": "1.2.0",
           "author": "Acme",
           "description": "Counts jumps.",
-          "sdkVersion": "1.0",
+          "sdkVersion": "2.0",
           "minAppVersion": "0.0.1",
           "entryAssembly": "Acme.JumpCounter.dll",
           "entryType": "Acme.JumpCounter.JumpCounterPlugin",
@@ -26,7 +26,7 @@ internal static class TestPackages
           "id": "{{id}}",
           "name": "Jump Counter",
           "version": "1.2.0",
-          "sdkVersion": "1.0",
+          "sdkVersion": "2.0",
           "entryAssembly": "{{entryAssembly}}",
           "entryType": "Acme.JumpCounter.JumpCounterPlugin",
           "capabilities": ["events"]

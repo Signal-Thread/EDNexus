@@ -284,8 +284,8 @@ public class PluginHostSafetyTests
         """, referenceAbstractions: false);
 
     [Theory]
-    [InlineData("1.5.0.0", "1.5")]     // a newer minor than the host's 1.0
-    [InlineData("2.0.0.0", "2.0")]     // a different major
+    [InlineData("2.5.0.0", "2.5")]     // a newer minor than the host's 2.0
+    [InlineData("3.0.0.0", "3.0")]     // a different major
     public void LoadAll_PluginBuiltAgainstANewerSdkThanItsManifestAdmits_IsIncompatible(string builtAgainst, string reported)
     {
         using var dir = new TempDir();
@@ -300,8 +300,8 @@ public class PluginHostSafetyTests
                 public void Shutdown() { }
             }
             """, referenceAbstractions: false, sdk);
-        // The manifest claims SDK 1.0, which this host provides; the assembly's own reference says otherwise.
-        WriteFolder(dir.Path, "com.test.liar", Manifest("com.test.liar", "Liar.dll", "Liar.Plugin", sdkVersion: "1.0"), ("Liar.dll", plugin));
+        // The manifest claims the SDK this host provides; the assembly's own reference says otherwise.
+        WriteFolder(dir.Path, "com.test.liar", Manifest("com.test.liar", "Liar.dll", "Liar.Plugin", sdkVersion: PluginSdk.CurrentVersionString), ("Liar.dll", plugin));
         var contexts = new RecordingContexts();
         using var host = contexts.Host(dir.Path);
 
@@ -309,7 +309,7 @@ public class PluginHostSafetyTests
 
         Assert.Equal(PluginLoadStatus.Incompatible, result.Status);
         Assert.Contains($"built against SDK {reported}", result.ReasonSummary);
-        Assert.Contains("provides SDK 1.0", result.ReasonSummary);
+        Assert.Contains($"provides SDK {PluginSdk.CurrentVersionString}", result.ReasonSummary);
         Assert.Empty(contexts.Granted);
         Assert.DoesNotContain(AssemblyLoadContext.All, c => c.Name == "EDNexus plugin com.test.liar");
     }
