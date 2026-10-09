@@ -142,7 +142,7 @@ public class DiscordPresenceMapperTests
     {
         var payload = DiscordPresenceMapper.Map(new CommanderState(), SessionStart);
 
-        Assert.Contains(payload.Buttons, b => b is { Label: "Get EDNexus", Url: "https://github.com/Signal-Thread-LLC/EDNexus" });
+        Assert.Contains(payload.Buttons, b => b is { Label: "Get EDNexus", Url: "https://github.com/Signal-Thread/EDNexus" });
     }
 
     [Fact]

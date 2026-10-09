@@ -45,6 +45,12 @@ public sealed class InaraClient : IDisposable
             var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
+                // A client error other than "slow down" (408/429) cannot succeed on a retry, so it is
+                // reported with its own status rather than as a transport failure that would be requeued.
+                var code = (int)response.StatusCode;
+                if (code is >= 400 and < 500 and not 408 and not 429)
+                    return new InaraResponse { Status = code, StatusText = $"HTTP {code}" };
+
                 var retryAfter = response.Headers.RetryAfter is { } ra ? ra.Delta ?? (ra.Date - DateTimeOffset.UtcNow) : null;
                 return InaraResponse.TransportError($"HTTP {(int)response.StatusCode}", retryAfter > TimeSpan.Zero ? retryAfter : null);
             }

@@ -129,6 +129,41 @@ public class SettingsStorePersistenceTests : IDisposable
     }
 
     [Fact]
+    public void A_file_that_could_not_be_read_at_startup_is_not_overwritten_by_a_later_save()
+    {
+        Directory.CreateDirectory(Dir);
+        var original = """{"Reporting":{"Inara":{"ApiKey":"keep-me"}}}""";
+        File.WriteAllText(SettingsPath, original);
+        var store = NewStore();
+
+        AppSettings loaded;
+        using (new FileStream(SettingsPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            loaded = store.Load();                       // locked for the whole startup read (incl. retries)
+
+        loaded.Reporting.Inara.ApiKey = "changed-in-memory";
+        var saved = store.TrySave(loaded);               // the lock is gone, but the session ran on defaults
+
+        Assert.False(saved);
+        Assert.Equal(original, File.ReadAllText(SettingsPath));
+        Assert.False(File.Exists(SettingsPath + ".bak"));
+    }
+
+    [Fact]
+    public async Task A_brief_lock_on_startup_is_waited_out()
+    {
+        Directory.CreateDirectory(Dir);
+        File.WriteAllText(SettingsPath, """{"Reporting":{"Inara":{"ApiKey":"keep-me"}}}""");
+
+        var locked = new FileStream(SettingsPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var release = Task.Run(async () => { await Task.Delay(150); locked.Dispose(); });
+
+        var loaded = NewStore().Load();
+        await release;
+
+        Assert.Equal("keep-me", loaded.Reporting.Inara.ApiKey);
+    }
+
+    [Fact]
     public void A_missing_file_yields_defaults_and_persists_the_install_id()
     {
         var loaded = NewStore().Load();

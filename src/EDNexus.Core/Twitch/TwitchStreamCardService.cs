@@ -108,8 +108,9 @@ public sealed class TwitchStreamCardService : IDisposable
     private int _armed;
     /// <summary>0 after a <c>Shutdown</c> journal event until the game starts again. Starts at 1: no event means no evidence of an exit.</summary>
     private int _gameRunning = 1;
-    /// <summary>True once the card has been taken off the air for the current closed-game period, so it is not cleared again on every wake.</summary>
+    /// <summary>True once the card has been taken off the air for the current closed-game period, so it is not cleared again on every wake. Read and written from the pump, journal and UI threads: use <see cref="ClosedCleared"/>.</summary>
     private bool _closedCleared;
+    private bool ClosedCleared { get => Volatile.Read(ref _closedCleared); set => Volatile.Write(ref _closedCleared, value); }
 
     private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
@@ -218,7 +219,7 @@ public sealed class TwitchStreamCardService : IDisposable
     public void GameExited()
     {
         if (Interlocked.Exchange(ref _gameRunning, 0) == 0) return;
-        _closedCleared = false;
+        ClosedCleared = false;
         MarkDirty();
     }
 
@@ -375,7 +376,7 @@ public sealed class TwitchStreamCardService : IDisposable
             {
                 _lastPublishedKey = key;
                 _lastPublishedAt = _clock();
-                _closedCleared = false;
+                ClosedCleared = false;
             }
         }
         finally { _sendGate.Release(); }
@@ -401,10 +402,10 @@ public sealed class TwitchStreamCardService : IDisposable
 
     private async Task<StreamStatePublishResult?> ClearForClosedGameAsync(string token, CancellationToken ct)
     {
-        if (_closedCleared) return null;
+        if (ClosedCleared) return null;
 
         var result = await ClearAndRecordAsync(_endpoint(), token, ct).ConfigureAwait(false);
-        if (IsClearDone(result)) _closedCleared = true;
+        if (IsClearDone(result)) ClosedCleared = true;
         return result;
     }
 
@@ -441,7 +442,7 @@ public sealed class TwitchStreamCardService : IDisposable
         // Not gated on developer mode: a real card from before it was switched on may still be up.
         var token = _token();
         if (string.IsNullOrWhiteSpace(token)) return true;
-        if (_closedCleared && _lastPublishedKey is null) return true;
+        if (ClosedCleared && _lastPublishedKey is null) return true;
 
         var endpoint = _endpoint();
         using var cts = new CancellationTokenSource(timeout);

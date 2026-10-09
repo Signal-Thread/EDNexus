@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://signal-thread-llc.github.io/EDNexus/sitemap.xml
+Sitemap: https://signal-thread.github.io/EDNexus/sitemap.xml

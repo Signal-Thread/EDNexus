@@ -275,6 +275,10 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public void RefreshDiscordPresence() => _discordPresence?.Refresh();
 
+    /// <summary>Guards the hand-off from replay to watching against <see cref="Dispose"/> (see <see cref="BeginWatching"/>).</summary>
+    private readonly object _lifecycle = new();
+    private bool _disposedFlag;
+
     /// <summary>Warm state from the latest journal, then watch live on a background task.</summary>
     public void Start()
     {
@@ -296,6 +300,18 @@ public sealed class EngineHost : IDisposable
 
     private void BeginWatching(JournalWatcher watcher)
     {
+        // Shares the gate with Dispose: a replay that outlives the host (a rebuild disposing it while
+        // StartAsync is still replaying) must not go on to start a watcher over a cancelled/disposed
+        // token source. The replay itself is deliberately outside the gate so Dispose never waits on it.
+        lock (_lifecycle)
+        {
+            if (_disposedFlag) return;
+            StartWatching(watcher, _cts.Token);
+        }
+    }
+
+    private void StartWatching(JournalWatcher watcher, CancellationToken ct)
+    {
         // Now that the commander picture is warm, put it in front of viewers. The card service is
         // built in the constructor, before any of this has happened, so it deliberately publishes
         // nothing until asked.
@@ -304,7 +320,7 @@ public sealed class EngineHost : IDisposable
         watcher.Error += OnWatcherError;
         // The watcher catches its own per-tick failures, so this fires only if the loop itself dies.
         // Observing the task keeps that from being swallowed silently while the UI says "Watching".
-        _runTask = Task.Run(() => watcher.RunAsync(_cts.Token));
+        _runTask = Task.Run(() => watcher.RunAsync(ct));
         _runTask.ContinueWith(
             t => OnWatcherError(t.Exception!.GetBaseException()),
             CancellationToken.None,
@@ -323,7 +339,12 @@ public sealed class EngineHost : IDisposable
 
     public void Dispose()
     {
-        _cts.Cancel();
+        lock (_lifecycle)
+        {
+            if (_disposedFlag) return;
+            _disposedFlag = true;
+            _cts.Cancel();
+        }
         try { _runTask?.Wait(TimeSpan.FromSeconds(2)); }
         catch (AggregateException) { /* cancellation */ }
         // Flush any queued reports before tearing down the shared HttpClient.

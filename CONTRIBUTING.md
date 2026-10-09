@@ -14,7 +14,7 @@ Requires the **.NET 10 SDK**. The journal folder is auto-detected; override with
 
 ## Workflow
 
-1. Pick or open an issue. Roadmap work lives under the [Epic](https://github.com/Signal-Thread-LLC/EDNexus/issues/7) and per-phase issues.
+1. Pick or open an issue. Roadmap work lives under the [Epic](https://github.com/Signal-Thread/EDNexus/issues/7) and per-phase issues.
 2. Branch from `main` (e.g. `phase-3-colonisation`).
 3. Make the change, following the conventions in [`AGENTS.md`](AGENTS.md).
 4. Validate against real journal data, and run `dotnet test EDNexus.slnx`. Warnings are build

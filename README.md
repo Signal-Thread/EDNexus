@@ -5,9 +5,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Signal-Thread-LLC/EDNexus/actions/workflows/ci.yml"><img src="https://github.com/Signal-Thread-LLC/EDNexus/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <a href="https://github.com/Signal-Thread-LLC/EDNexus/releases/latest"><img src="https://img.shields.io/github/v/release/Signal-Thread-LLC/EDNexus" alt="Latest release"></a>
-  <a href="https://signal-thread-llc.github.io/EDNexus/"><img src="https://img.shields.io/badge/homepage-signal--thread--llc.github.io%2FEDNexus-F07100" alt="Homepage"></a>
+  <a href="https://github.com/Signal-Thread/EDNexus/actions/workflows/ci.yml"><img src="https://github.com/Signal-Thread/EDNexus/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/Signal-Thread/EDNexus/releases/latest"><img src="https://img.shields.io/github/v/release/Signal-Thread-LLC/EDNexus" alt="Latest release"></a>
+  <a href="https://signal-thread.github.io/EDNexus/"><img src="https://img.shields.io/badge/homepage-signal--thread.github.io%2FEDNexus-F07100" alt="Homepage"></a>
 </p>
 
 A single, does-it-all **[Elite Dangerous](https://www.elitedangerous.com/) commander console** — a
@@ -16,9 +16,9 @@ exobiology, colonisation, and materials tools with one desktop app for Windows. 
 for Linux (including Steam Deck) is attached to each release; macOS is not yet supported. The
 in-game overlay and voice callouts are Windows-only.
 
-**[📖 Homepage & downloads](https://signal-thread-llc.github.io/EDNexus/)** ·
-**[⬇ Latest release](https://github.com/Signal-Thread-LLC/EDNexus/releases/latest)** ·
-**[🐛 Report an issue](https://github.com/Signal-Thread-LLC/EDNexus/issues)**
+**[📖 Homepage & downloads](https://signal-thread.github.io/EDNexus/)** ·
+**[⬇ Latest release](https://github.com/Signal-Thread/EDNexus/releases/latest)** ·
+**[🐛 Report an issue](https://github.com/Signal-Thread/EDNexus/issues)**
 
 It works off the game's own data: a watcher tails the journal (`Journal.*.log`) and the sidecar
 status files (`Status.json`, `Cargo.json`, `Market.json`, …), turns them into a typed event stream,

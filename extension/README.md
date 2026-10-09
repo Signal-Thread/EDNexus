@@ -226,7 +226,7 @@ The **`Twitch extension bundle`** workflow (`.github/workflows/extension-package
   attaches that file to the GitHub release, which needs no unwrapping. From a terminal:
 
   ```powershell
-  gh run download --repo Signal-Thread-LLC/EDNexus --name ednexus-twitch-extension
+  gh run download --repo Signal-Thread/EDNexus --name ednexus-twitch-extension
   ```
 - **Check the layout before uploading** — `video_overlay.html` must be at the root, with no wrapping
   folder, no `dev/`, no `README.md`:

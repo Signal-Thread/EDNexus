@@ -74,7 +74,7 @@ public sealed class UpdateChecker
     /// <param name="retryDelay">Pause before the single retry of a transient API failure.</param>
     /// <param name="maxInstallerBytes">Refuse installers larger than this.</param>
     public UpdateChecker(HttpClient http, SemVer current, UpdatePlatform platform, string downloadDir,
-        string repo = "Signal-Thread-LLC/EDNexus", TimeSpan? retryDelay = null, long maxInstallerBytes = DefaultMaxInstallerBytes)
+        string repo = "Signal-Thread/EDNexus", TimeSpan? retryDelay = null, long maxInstallerBytes = DefaultMaxInstallerBytes)
     {
         _http = http;
         _current = current;

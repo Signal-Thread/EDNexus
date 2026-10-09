@@ -234,7 +234,7 @@ Unauthenticated, rate-limited per client IP, and cacheable for a few seconds (se
 
 ### `GET /`
 
-Redirects to the project site, https://signal-thread-llc.github.io/EDNexus/.
+Redirects to the project site, https://signal-thread.github.io/EDNexus/.
 
 ### `GET /healthz`
 

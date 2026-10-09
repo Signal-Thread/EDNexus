@@ -238,20 +238,25 @@ public sealed partial class JournalWatcher
     /// <summary>Decodes and publishes one line. Returns true when it was a well-formed journal entry.</summary>
     private bool EmitLine(MemoryStream line, bool historical)
     {
+        JournalEntry e;
         try
         {
             var text = Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length)
                 .TrimEnd('\r', '\n').TrimStart('﻿');
-            if (!JournalEntry.TryParse(text, historical, out var e)) return false;
-            _bus.Publish(e);
-            return true;
+            if (!JournalEntry.TryParse(text, historical, out e)) return false;
         }
         catch (Exception ex)
         {
-            // One bad line (or a throwing observer of the bus) must never stop the pump.
+            // One bad line must never stop the pump.
             ReportError(ex);
             return false;
         }
+
+        // The line parsed, so it counts as consumed even if an observer of the bus throws: an
+        // unterminated tail that stayed "unconsumed" would be re-read and re-published every tick.
+        try { _bus.Publish(e); }
+        catch (Exception ex) { ReportError(ex); }
+        return true;
     }
 
     private void EmitStatusFileSafe(string name, bool historical)

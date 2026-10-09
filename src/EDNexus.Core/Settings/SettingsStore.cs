@@ -63,6 +63,26 @@ public sealed class SettingsStore
     private string BackupPath => _path + ".bak";
 
     /// <summary>
+    /// Set when the settings file exists but could not be read at startup (an antivirus scan, another
+    /// instance mid-replace). The session then runs on the backup or defaults, so a later save would
+    /// replace the real file with those; saving is refused for the session instead.
+    /// </summary>
+    private volatile bool _primaryUnreadable;
+
+    /// <summary>A transient lock usually clears within a fraction of a second, so try a few times before giving up.</summary>
+    private static string ReadAllTextWithRetry(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try { return File.ReadAllText(path); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 3)
+            {
+                Thread.Sleep(100 * (attempt + 1));
+            }
+        }
+    }
+
+    /// <summary>
     /// Reads the settings file, never throwing. A file that exists but cannot be parsed is moved aside
     /// to <c>settings.json.corrupt-&lt;timestamp&gt;</c> (so the next save can't overwrite it) and the last
     /// good backup, if any, is used instead. Returns null when nothing usable exists.
@@ -75,7 +95,7 @@ public sealed class SettingsStore
 
         try
         {
-            var parsed = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_path));
+            var parsed = JsonSerializer.Deserialize<AppSettings>(ReadAllTextWithRetry(_path));
             if (parsed is not null) return parsed;
             // "null" is valid JSON but not a settings document: treat like any other damage.
             QuarantineDamagedFile("the file held JSON null");
@@ -90,6 +110,7 @@ public sealed class SettingsStore
             // exactly as it is, and run on the backup or defaults for this session.
             System.Diagnostics.Trace.TraceWarning($"Settings: could not read {_path}: {ex.Message}");
             safeToPersist = false;
+            _primaryUnreadable = true;
         }
 
         return TryLoadBackup();
@@ -169,6 +190,16 @@ public sealed class SettingsStore
     {
         lock (_writeGate)
         {
+            if (_primaryUnreadable)
+            {
+                // The file on disk is the real settings and could not be read at startup; what is in
+                // memory is a backup or defaults. Writing it would replace (and then, via the next
+                // save's backup, destroy) the original — the Inara key, Twitch token and pending
+                // cleanups — so nothing is saved until the app is restarted with a readable file.
+                System.Diagnostics.Trace.TraceWarning($"Settings: not saving; {_path} could not be read at startup and would be overwritten.");
+                return false;
+            }
+
             string? tmp = null;
             try
             {

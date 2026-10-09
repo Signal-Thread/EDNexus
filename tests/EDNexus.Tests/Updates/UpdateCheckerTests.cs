@@ -49,7 +49,7 @@ public class SemVerTests
 
 public sealed class UpdateCheckerTests : IDisposable
 {
-    private const string Repo = "Signal-Thread-LLC/EDNexus";
+    private const string Repo = "Signal-Thread/EDNexus";
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "ednexus-update-tests-" + Guid.NewGuid().ToString("N"));
 
     public void Dispose()
@@ -244,7 +244,7 @@ public sealed class UpdateCheckerTests : IDisposable
     public async Task AssetsFromOtherHosts_AreIgnored()
     {
         var gh = new FakeGitHub();
-        gh.Json("v0.2.0", ("EDNexus-0.2.0-setup.exe", "https://evil.example/Signal-Thread-LLC/EDNexus/releases/download/v0.2.0/EDNexus-0.2.0-setup.exe"));
+        gh.Json("v0.2.0", ("EDNexus-0.2.0-setup.exe", "https://evil.example/Signal-Thread/EDNexus/releases/download/v0.2.0/EDNexus-0.2.0-setup.exe"));
         var res = await Make(gh).CheckAsync();
         Assert.Equal(UpdateStatus.NoInstaller, res.Status);
     }

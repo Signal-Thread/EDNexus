@@ -296,7 +296,7 @@ app.UseRateLimiter();
 
 // Anyone who lands on the bare EBS host (e.g. following the OAuth redirect URI's origin) gets the
 // project site rather than a 404.
-app.MapGet("/", () => Results.Redirect("https://signal-thread-llc.github.io/EDNexus/"));
+app.MapGet("/", () => Results.Redirect("https://signal-thread.github.io/EDNexus/"));
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 

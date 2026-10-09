@@ -1,3 +1,4 @@
+using System.Net;
 using EliteDangerous.Inara;
 using Xunit;
 
@@ -51,6 +52,23 @@ public class InaraClientTests
         Assert.False(response.IsOk);
         Assert.True(response.IsHardError);
         Assert.Equal("Invalid API key", response.StatusText);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, false)]
+    [InlineData(HttpStatusCode.RequestEntityTooLarge, false)]
+    [InlineData(HttpStatusCode.RequestTimeout, true)]
+    [InlineData(HttpStatusCode.TooManyRequests, true)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, true)]
+    public async Task Only_slow_down_and_server_errors_are_transient(HttpStatusCode status, bool transient)
+    {
+        var handler = new RecordingHandler(status: status, body: "");
+        using var client = new InaraClient(Options, new HttpClient(handler));
+
+        var response = await client.SendAsync(Identity, new[] { InaraEvent.SetCommanderCredits(DateTimeOffset.UtcNow, 1) });
+
+        Assert.False(response.IsOk);
+        Assert.Equal(transient, response.IsTransient);
     }
 
     [Fact]
