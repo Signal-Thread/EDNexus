@@ -179,6 +179,10 @@
               <CheckBox x:Name="OverlayToggle" Content="Show in-game overlay" Foreground="{StaticResource Ink}" />
               <TextBlock Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
                          Text="A small, click-through, always-on-top panel over the game (borderless/windowed) showing your next jump, fuel, bio signals on the current body, and any colonisation shortfall. Windows only — a no-op on other platforms." />
+
+              <CheckBox x:Name="OverlayGameOnlyToggle" Content="Only show while Elite Dangerous is in front" Foreground="{StaticResource Ink}" />
+              <TextBlock Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
+                         Text="Keeps the overlay off other apps, including other overlays such as EDCopilot. Turn this off to keep it always on top. If other windows are being minimised or losing focus on a system jump, leave this on or turn the overlay off." />
             </StackPanel>
           </Border>
 
@@ -198,6 +202,8 @@
               <CheckBox x:Name="FuelLowToggle" Content="Fuel low" Foreground="{StaticResource Ink}" />
               <CheckBox x:Name="ScanCompleteToggle" Content="Scan complete" Foreground="{StaticResource Ink}" />
               <CheckBox x:Name="ShoppingListToggle" Content="Shopping-list item acquired" Foreground="{StaticResource Ink}" />
+              <TextBlock Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
+                         Text="One more callout fires when you arrive in a system: known planetary mining spots. It is set under Mining (&quot;Call out known planetary mining spots on arrival&quot;) and also needs Speak callouts on." />
 
               <Button x:Name="TestVoiceButton" Content="Test voice" Click="OnTestVoice"
                       Padding="10" HorizontalAlignment="Left" />

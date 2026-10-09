@@ -47,4 +47,25 @@ public sealed record OverlayContent(
 
     /// <summary>True when there is an active construction site with at least one outstanding commodity.</summary>
     public bool HasColonisationShortfall => ColonisationShortfalls.Count > 0;
+
+    /// <summary>
+    /// Whether <paramref name="other"/> would draw exactly the same overlay: every field equal, with the
+    /// shortfall lines compared by value. The built-in record equality compares that list by reference,
+    /// and a fresh list is built every tick, so it cannot tell an unchanged snapshot from a changed one.
+    /// The overlay uses this to skip redundant updates, so an idle overlay touches nothing.
+    /// </summary>
+    public bool SameAs(OverlayContent? other)
+    {
+        if (ReferenceEquals(this, other)) return true;
+        if (other is null) return false;
+
+        return StarSystem == other.StarSystem
+            && NextJumpSystem == other.NextJumpSystem
+            && FuelMain.Equals(other.FuelMain)
+            && FuelCapacity.Equals(other.FuelCapacity)
+            && BioSignalBody == other.BioSignalBody
+            && BioSignalCount == other.BioSignalCount
+            && BioSignalDetail == other.BioSignalDetail
+            && ColonisationShortfalls.SequenceEqual(other.ColonisationShortfalls);
+    }
 }

@@ -10,12 +10,16 @@
         CanResize="False"
         Topmost="True"
         WindowStartupLocation="Manual"
-        SizeToContent="WidthAndHeight"
+        Width="360" Height="330"
         Focusable="False">
   <!-- Click-through is applied in code-behind (Win32 WS_EX_TRANSPARENT) once the native handle
-       exists, so the game underneath always keeps mouse/keyboard focus. -->
+       exists, so the game underneath always keeps mouse/keyboard focus.
+       The window has a FIXED size on purpose: it used to size itself to its content, so every jump (a new
+       system name, the "next jump" line appearing, a changed shortfall list) was a native resize of a
+       topmost window over the game, which the game and other overlays can react to. The visible panel is
+       the Border below, which grows and shrinks inside the transparent, click-through window instead. -->
   <Border Background="{StaticResource OverlayScrim}" CornerRadius="8" Padding="14" BorderBrush="{StaticResource AmberBrush}" BorderThickness="1"
-          MinWidth="230">
+          MinWidth="230" HorizontalAlignment="Left" VerticalAlignment="Top">
     <StackPanel Spacing="5">
       <TextBlock Text="EDNEXUS" Foreground="{StaticResource AmberBrush}" FontSize="11" FontWeight="Bold" LetterSpacing="2" />
       <TextBlock x:Name="SystemLine" Foreground="{StaticResource Ink}" FontSize="13" />

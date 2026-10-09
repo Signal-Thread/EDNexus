@@ -165,6 +165,13 @@ public sealed class OverlaySettings
 {
     /// <summary>When true, the overlay window is shown over the game. Default off.</summary>
     public bool Enabled { get; set; }
+
+    /// <summary>
+    /// When true (the default), the overlay is shown only while Elite Dangerous (or EDNexus itself) is the
+    /// app in front, instead of sitting on top of every other window, including other overlays such as
+    /// EDCopilot's. Turn off to keep it always on top.
+    /// </summary>
+    public bool OnlyWhenGameFocused { get; set; } = true;
 }
 
 /// <summary>

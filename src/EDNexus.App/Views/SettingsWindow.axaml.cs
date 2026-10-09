@@ -69,6 +69,7 @@ public partial class SettingsWindow : Window
             MiningSpotsSummary.Text += $" {boot.Settings.Mining.KnownSpots.Count:N0} spots recorded so far.";
 
         OverlayToggle.IsChecked = boot.Settings.Overlay.Enabled;
+        OverlayGameOnlyToggle.IsChecked = boot.Settings.Overlay.OnlyWhenGameFocused;
 
         VoiceToggle.IsChecked = boot.Settings.Voice.Enabled;
         VoiceNameCombo.ItemsSource = boot.Voice.AvailableVoices;
@@ -252,6 +253,7 @@ public partial class SettingsWindow : Window
             _boot.ApplyShareDeliveries(RavenLookupToggle.IsChecked == true && ShareDeliveriesToggle.IsChecked == true);
             _boot.ApplyMiningThreshold(miningThreshold);
             _boot.ApplyMiningSpotAnnouncements(MiningSpotAnnounceToggle.IsChecked == true);
+            _boot.ApplyOverlayOnlyWhenGameFocused(OverlayGameOnlyToggle.IsChecked == true);
             _boot.ApplyOverlayChoice(OverlayToggle.IsChecked == true);
             _boot.ApplyVoiceChoice(
                 VoiceToggle.IsChecked == true,

@@ -11,4 +11,5 @@ public sealed class NullOverlay : IOverlay
     public void Show() { }
     public void Hide() { }
     public void Update(OverlayContent content) { }
+    public void SetOnlyWhenGameFocused(bool value) { }
 }
