@@ -59,7 +59,11 @@ public static class DiscordPresenceMapper
 
         var detailsText = BuildDetails(state, options.ShowCommander);
 
-        var largeImageKey = ShipImageKey(state.Ship) ?? DefaultLargeImageKey;
+        // Always the EDNexus logo. A per-ship key (e.g. "krait_mk_ii") only renders if an asset with exactly
+        // that key was uploaded to the Discord application, and the journal's localised ship names are not
+        // stable enough to pre-generate for every ship, so a missing one showed a broken image. The ship is
+        // still named, in the hover text here and in the details line.
+        var largeImageKey = DefaultLargeImageKey;
         var largeImageText = state.Ship ?? DefaultLargeImageText;
 
         var smallImageKey = docked ? "docked" : "cruising";
@@ -107,24 +111,5 @@ public static class DiscordPresenceMapper
         return !showCommander || string.IsNullOrWhiteSpace(state.ShipIdent)
             ? $"Flying {state.Ship}"
             : $"Flying {state.Ship} ({state.ShipIdent})";
-    }
-
-    /// <summary>
-    /// Discord asset keys are lowercase-with-underscores identifiers uploaded to the application's Art
-    /// Assets page; this derives one from the journal's ship name (e.g. "Federal Corvette" →
-    /// "federal_corvette") so a matching asset just needs to be uploaded under that key.
-    /// </summary>
-    private static string? ShipImageKey(string? ship)
-    {
-        if (string.IsNullOrWhiteSpace(ship)) return null;
-
-        var sb = new StringBuilder(ship.Length);
-        foreach (var c in ship.ToLower(CultureInfo.InvariantCulture))
-        {
-            if (char.IsLetterOrDigit(c)) sb.Append(c);
-            else if (sb.Length > 0 && sb[^1] != '_') sb.Append('_');
-        }
-        var key = sb.ToString().Trim('_');
-        return key.Length > 0 ? key : null;
     }
 }

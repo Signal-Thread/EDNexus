@@ -106,13 +106,15 @@ public class DiscordPresenceMapperTests
     }
 
     [Fact]
-    public void Ship_name_is_slugged_into_a_large_image_key()
+    public void The_ship_is_named_in_the_hover_text_but_the_large_image_stays_the_logo()
     {
+        // A per-ship asset key would render blank unless that exact asset was uploaded, so the large
+        // image is always the logo that ships with the app; the ship is named in the text.
         var state = new CommanderState { Ship = "Federal Corvette" };
 
         var payload = DiscordPresenceMapper.Map(state, SessionStart);
 
-        Assert.Equal("federal_corvette", payload.LargeImageKey);
+        Assert.Equal("ednexus_logo", payload.LargeImageKey);
         Assert.Equal("Federal Corvette", payload.LargeImageText);
     }
 

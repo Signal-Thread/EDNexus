@@ -227,7 +227,7 @@ public sealed class EngineHost : IDisposable
             var discord = settings.Discord;
             _discordPresence = new DiscordPresenceController(State, () =>
             {
-                try { return new DiscordRpcClientAdapter(discord.ApplicationId); }
+                try { return new DiscordRpcClientAdapter(DiscordPresenceService.ResolveApplicationId(discord.ApplicationId)); }
                 catch { return NoOpDiscordRpcClient.Instance; }   // unsupported platform, etc.
             }, reportingSuppressed);
             _discordPresence.Apply(discord);
