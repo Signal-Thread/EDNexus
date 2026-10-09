@@ -7,7 +7,7 @@ public class PluginSdkTests
     [Fact]
     public void CurrentVersion_MatchesCurrentVersionString()
     {
-        Assert.Equal(new Version(1, 0), PluginSdk.CurrentVersion);
+        Assert.Equal(new Version(2, 0), PluginSdk.CurrentVersion);
     }
 
     [Fact]
@@ -45,9 +45,10 @@ public class PluginSdkTests
     }
 
     [Theory]
-    [InlineData(1, 0, true)] // exact match
-    [InlineData(1, 1, false)] // plugin built against a newer minor than the host implements
-    [InlineData(2, 0, false)] // breaking major bump
+    [InlineData(2, 0, true)] // exact match
+    [InlineData(2, 1, false)] // plugin built against a newer minor than the host implements
+    [InlineData(3, 0, false)] // a newer major
+    [InlineData(1, 0, false)] // 1.x plugins may call IJournalEvent.Deserialize<T>, removed in 2.0
     [InlineData(0, 9, false)] // older major is a mismatch too — majors must match exactly
     public void IsCompatible_ChecksMajorExactAndMinorNotNewer(int major, int minor, bool expected)
     {

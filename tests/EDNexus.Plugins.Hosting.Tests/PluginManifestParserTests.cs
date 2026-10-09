@@ -41,7 +41,7 @@ public class PluginManifestParserTests
         Assert.Equal("1.2.0", m.Version);
         Assert.Equal("Acme", m.Author);
         Assert.Equal("Counts jumps.", m.Description);
-        Assert.Equal("1.0", m.SdkVersion);
+        Assert.Equal("2.0", m.SdkVersion);
         Assert.Equal("0.0.1", m.MinAppVersion);
         Assert.Equal("Acme.JumpCounter.dll", m.EntryAssembly);
         Assert.Equal("Acme.JumpCounter.JumpCounterPlugin", m.EntryType);

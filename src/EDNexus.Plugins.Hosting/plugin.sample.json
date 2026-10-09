@@ -4,7 +4,7 @@
   "version": "1.2.0",
   "author": "Acme Plugins",
   "description": "Counts hyperspace jumps this session and shows them on the dashboard.",
-  "sdkVersion": "1.0",
+  "sdkVersion": "2.0",
   "minAppVersion": "0.0.1",
   "entryAssembly": "Acme.JumpCounter.dll",
   "entryType": "Acme.JumpCounter.JumpCounterPlugin",
