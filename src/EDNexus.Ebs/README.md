@@ -340,3 +340,10 @@ Settings come from the `.env` file next to `docker-compose.yml` (`env_file: .env
 which already contains the public Client ID and Extension ID, and fill in the two secrets. A `.env` that only
 contains the secrets is the most common way to hit this.
 
+After editing `.env`, **recreate** the container: `docker compose up -d --force-recreate`. A plain
+`docker restart` / `docker compose restart` (and the `restart: unless-stopped` retries) reuse the environment the
+container was created with, so the corrected values are not picked up and the service stays down.
+
+A value that cannot be converted to its type (for example `Ebs__MaxStatePayloadBytes=abc`) is reported the same
+way, naming the setting, with the same exit code.
+
