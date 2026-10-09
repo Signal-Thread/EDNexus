@@ -46,6 +46,9 @@ public sealed class Bootstrap
         TwitchCleanup.Start();
         Twitch = BuildTwitchAuth();
 
+        // The overlay's visibility rule must be in force before it is first shown.
+        Overlay.SetOnlyWhenGameFocused(Settings.Overlay.OnlyWhenGameFocused);
+
         // Apply the saved voice choice up front so the very first callout already uses it.
         Voice.SetVoice(Settings.Voice.VoiceName);
         Voice.SetVolume(Settings.Voice.Volume);
@@ -217,6 +220,17 @@ public sealed class Bootstrap
     {
         Settings.Mining.AnnounceKnownSpots = enabled;
         Store.Save(Settings);
+    }
+
+    /// <summary>
+    /// Persist whether the overlay is shown only while Elite Dangerous (or EDNexus) is in front, and apply it
+    /// to the live window.
+    /// </summary>
+    public void ApplyOverlayOnlyWhenGameFocused(bool enabled)
+    {
+        Settings.Overlay.OnlyWhenGameFocused = enabled;
+        Store.Save(Settings);
+        Overlay.SetOnlyWhenGameFocused(enabled);
     }
 
     /// <summary>Persist the overlay's on/off state and show/hide the live window to match.</summary>

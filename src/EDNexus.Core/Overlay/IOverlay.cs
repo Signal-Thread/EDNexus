@@ -23,4 +23,10 @@ public interface IOverlay
 
     /// <summary>Push a fresh content snapshot to the overlay. A no-op while hidden or unsupported.</summary>
     void Update(OverlayContent content);
+
+    /// <summary>
+    /// Whether the overlay should be on screen only while Elite Dangerous (or EDNexus) is the app in front
+    /// (see <see cref="OverlayVisibilityPolicy"/>). Takes effect immediately; a no-op when unsupported.
+    /// </summary>
+    void SetOnlyWhenGameFocused(bool value);
 }
