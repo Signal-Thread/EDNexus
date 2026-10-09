@@ -640,9 +640,16 @@ public sealed class RadioPlayerService : IRadioPlayer, IDisposable, IAsyncDispos
                     try { player?.Stop(); } catch { /* best effort */ } // outside _gate (#144)
                 }
 
-                lock (_gate) { if (attempt != _playAttempt || _disposed) return; }
-                SetError($"The station did not start playing within {(int)_connectTimeout.TotalSeconds} seconds. " +
-                         "It may be offline, or your connection may be blocking it.");
+                // The check and the write share one lock section: a newer play can start between the
+                // Stop above and here, and a stale watchdog must not stamp its timeout over it.
+                lock (_gate)
+                {
+                    if (attempt != _playAttempt || _disposed) return;
+                    _status = RadioPlaybackStatus.Error;
+                    _lastError = $"The station did not start playing within {(int)_connectTimeout.TotalSeconds} seconds. " +
+                                 "It may be offline, or your connection may be blocking it.";
+                }
+                RaiseChanged();
             }
             catch (Exception ex)
             {
