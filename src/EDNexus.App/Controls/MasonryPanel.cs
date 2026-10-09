@@ -6,7 +6,8 @@ namespace EDNexus.App.Controls;
 
 /// <summary>
 /// Lays children out in as many equal-width columns as the available width allows, dropping each
-/// one into whichever column is currently shortest.
+/// one into whichever column is shortest *when it first needs a column* and keeping it there after
+/// that, so cards never trade places as their heights change.
 /// </summary>
 /// <remarks>
 /// A <see cref="WrapPanel"/> would tie every item in a row to the height of the tallest one, which
@@ -74,6 +75,16 @@ public class MasonryPanel : Panel
         get => GetValue(RowSpacingProperty);
         set => SetValue(RowSpacingProperty, value);
     }
+
+    // The column the packer chose for each auto-placed child, remembered per column count. Without it
+    // the "shortest column" choice is re-made on every layout pass, so a card whose height changes
+    // (a status line, a goal's progress) tips the balance and two cards trade places on their own.
+    // A choice is made once, when a child first needs one at a given column count, and kept after
+    // that; it is dropped only when the child itself goes away. Keyed by the child's data context
+    // (the card), not the container, so it survives the containers being recreated.
+    private readonly Dictionary<int, Dictionary<object, int>> _stableColumns = [];
+
+    private static object StableKey(Control child) => child.DataContext ?? child;
 
     // Where each child landed, by index: first column, offset down it, and how many columns it
     // claimed. Column -1 means the child is collapsed and takes no space.
@@ -164,6 +175,10 @@ public class MasonryPanel : Panel
         _columnHeights = new double[columns];
         _placements = new (int, double, int)[Children.Count];
 
+        if (!_stableColumns.TryGetValue(columns, out var stable))
+            _stableColumns[columns] = stable = [];
+        ForgetRemovedChildren();
+
         for (var i = 0; i < Children.Count; i++)
         {
             var child = Children[i];
@@ -177,9 +192,21 @@ public class MasonryPanel : Panel
             child.Measure(new Size(SpanWidth(span), double.PositiveInfinity));
 
             var assigned = GetColumn(child);
-            var column = assigned >= 0
-                ? Math.Clamp(assigned, 0, columns - span)
-                : BestColumn(span);
+            int column;
+            if (assigned >= 0)
+            {
+                column = Math.Clamp(assigned, 0, columns - span);
+            }
+            else if (stable.TryGetValue(StableKey(child), out var kept) && kept + span <= columns)
+            {
+                column = kept;                // placed before: stay put whatever the heights are now
+            }
+            else
+            {
+                column = BestColumn(span);    // first time at this column count: shortest column
+                stable[StableKey(child)] = column;
+            }
+
             var top = TopOf(column, span);
             if (top > 0) top += RowSpacing;   // no leading gap at the top of a column
 
@@ -201,6 +228,22 @@ public class MasonryPanel : Panel
         }
 
         return new Size(width, height);
+    }
+
+    /// <summary>
+    /// Drops remembered columns for children no longer in the panel. A child that is merely hidden
+    /// keeps its entry, so showing it again puts it back where it was.
+    /// </summary>
+    private void ForgetRemovedChildren()
+    {
+        var present = new HashSet<object>(Children.Count);
+        foreach (var child in Children) present.Add(StableKey(child));
+
+        foreach (var perCount in _stableColumns.Values)
+        {
+            foreach (var key in perCount.Keys.Where(k => !present.Contains(k)).ToList())
+                perCount.Remove(key);
+        }
     }
 
     private int ColumnCount(double availableWidth, int visibleChildren)
