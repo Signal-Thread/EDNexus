@@ -5,6 +5,7 @@ using System.Text.Json;
 using EDNexus.Ebs.Options;
 using EDNexus.Ebs.Services;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -382,16 +383,59 @@ public class EbsHardeningTests
         { "Ebs:TrustedProxies:0", "not-an-ip", "Ebs:TrustedProxies" },
     };
 
+    /// <summary>The configuration a valid host starts with (see <see cref="EbsHostFactory"/>), plus <paramref name="key"/>.</summary>
+    private static IConfiguration ConfigurationWith(string key, string? value) =>
+        new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Twitch:ExtensionSecret"] = EbsHostFactory.ExtensionSecret,
+            ["Twitch:ClientId"] = "test-client-id",
+            ["Twitch:ClientSecret"] = "test-client-secret",
+            ["Twitch:ExtensionId"] = "test-extension-id",
+            [key] = value,
+        }).Build();
+
+    // The validation rules, exercised through the same Bind + validator registration Program uses but
+    // without booting a host: a host that fails to start surfaces through WebApplicationFactory's
+    // deferred-host plumbing, which now and then reports an ObjectDisposedException instead of the
+    // validation failure, so a theory over every rule must not depend on that.
     [Theory]
     [MemberData(nameof(InvalidConfiguration))]
     public void Invalid_configuration_is_refused_at_startup(string key, string? value, string expectedInMessage)
     {
-        using var factory = new EbsHostFactory(new() { [key] = value });
+        var configuration = ConfigurationWith(key, value);
+        var services = new ServiceCollection();
+        services.AddOptions<TwitchEbsOptions>().Bind(configuration.GetSection(TwitchEbsOptions.SectionName));
+        services.AddSingleton<IValidateOptions<TwitchEbsOptions>, TwitchEbsOptionsValidator>();
+        services.AddOptions<EbsOptions>().Bind(configuration.GetSection(EbsOptions.SectionName));
+        services.AddSingleton<IValidateOptions<EbsOptions>, EbsOptionsValidator>();
+        using var provider = services.BuildServiceProvider();
 
-        var exception = Record.Exception(() => factory.CreateClient());
+        var exception = Record.Exception(() =>
+        {
+            _ = provider.GetRequiredService<IOptions<TwitchEbsOptions>>().Value;
+            _ = provider.GetRequiredService<IOptions<EbsOptions>>().Value;
+        });
 
-        Assert.NotNull(exception);
-        Assert.Contains(expectedInMessage, exception.ToString());
+        var validation = Assert.IsType<OptionsValidationException>(exception);
+        Assert.Contains(expectedInMessage, validation.Message);
+    }
+
+    [Fact]
+    public void Invalid_configuration_stops_the_host_from_starting()
+    {
+        // One end-to-end check that the validators are wired to run at startup (ValidateOnStart). The
+        // framework's failed-start reporting is racy (see above), so look for the validation failure
+        // across a few attempts rather than on the first.
+        Exception? last = null;
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            using var factory = new EbsHostFactory(new() { ["Twitch:ExtensionId"] = "" });
+            last = Record.Exception(() => factory.CreateClient());
+            Assert.NotNull(last);
+            if (last.ToString().Contains("Twitch:ExtensionId")) return;
+        }
+
+        Assert.Fail($"The host never reported the invalid ExtensionId; last error: {last}");
     }
 
     [Theory]
