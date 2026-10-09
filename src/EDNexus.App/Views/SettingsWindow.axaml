@@ -74,9 +74,13 @@
           <Border Background="{StaticResource SurfaceField}" CornerRadius="6" Padding="16">
             <StackPanel Spacing="10">
               <CheckBox x:Name="RavenLookupToggle" Content="Look up shared colonisation projects on Raven Colonial"
-                        Foreground="{StaticResource Ink}" />
+                        Foreground="{StaticResource Ink}" IsCheckedChanged="OnRavenLookupChanged" />
               <TextBlock Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
                          Text="When you dock at a construction site, the system name and market id are sent to Raven Colonial to find a shared project for it. Turn this off to keep colonisation lookups on this machine." />
+              <CheckBox x:Name="ShareDeliveriesToggle" Content="Also share my deliveries with that project"
+                        Foreground="{StaticResource Ink}" />
+              <TextBlock Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
+                         Text="Sends your commander NAME and what you delivered to Raven Colonial after each delivery. Its endpoint is unauthenticated: anyone can post under any name, and your deliveries are added to the project's totals as sent. If another tool (SrvSurvey, for example) also reports your deliveries to the same project, they will be counted twice. Needs the lookup above." />
             </StackPanel>
           </Border>
         </StackPanel>

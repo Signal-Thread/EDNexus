@@ -62,6 +62,8 @@ public partial class SettingsWindow : Window
             : "";
 
         RavenLookupToggle.IsChecked = boot.Settings.Colonisation.SharedProjectLookup;
+        ShareDeliveriesToggle.IsChecked = boot.Settings.Colonisation.ShareDeliveries;
+        ShareDeliveriesToggle.IsEnabled = RavenLookupToggle.IsChecked == true;
         MiningSpotAnnounceToggle.IsChecked = boot.Settings.Mining.AnnounceKnownSpots;
         if (boot.Settings.Mining.KnownSpots.Count > 0)
             MiningSpotsSummary.Text += $" {boot.Settings.Mining.KnownSpots.Count:N0} spots recorded so far.";
@@ -246,6 +248,8 @@ public partial class SettingsWindow : Window
                 InaraApiKey.Text ?? string.Empty);
             _boot.ApplyAutoDownloadChoice(AutoDownloadToggle.IsChecked == true);
             _boot.ApplySharedProjectLookup(RavenLookupToggle.IsChecked == true);
+            // An opt-in to send data is never kept alive behind a disabled checkbox.
+            _boot.ApplyShareDeliveries(RavenLookupToggle.IsChecked == true && ShareDeliveriesToggle.IsChecked == true);
             _boot.ApplyMiningThreshold(miningThreshold);
             _boot.ApplyMiningSpotAnnouncements(MiningSpotAnnounceToggle.IsChecked == true);
             _boot.ApplyOverlayChoice(OverlayToggle.IsChecked == true);
@@ -324,6 +328,10 @@ public partial class SettingsWindow : Window
         DiscordShowSystemToggle.IsEnabled = enabled;
         DiscordShowCommanderToggle.IsEnabled = enabled;
     }
+
+    // Sharing deliveries talks to the same service as the lookup, so it only makes sense with the lookup on.
+    private void OnRavenLookupChanged(object? sender, RoutedEventArgs e)
+        => ShareDeliveriesToggle.IsEnabled = RavenLookupToggle.IsChecked == true;
 
     private void OnRevealApiKeyChanged(object? sender, RoutedEventArgs e)
         => InaraApiKey.RevealPassword = RevealApiKey.IsChecked == true;

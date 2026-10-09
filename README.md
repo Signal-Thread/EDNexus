@@ -144,12 +144,28 @@ that is not listed here.
 | Commander sync | Inara | **Opt-in**, needs your Inara API key | Identity, credits, ranks, travel (see below) |
 | Stream card | EDNexus EBS (`ednexus.signal-and-thread.com`) → Twitch viewers | **Opt-in**: you log in with Twitch and switch the card on | A public snapshot of the sections you enable: commander name and rank, ship, location, carrier, exobiology, mining, missions, cargo. The credit balance is off by default. Cleared when you switch it off or sign out |
 | Discord Rich Presence | Your own Discord client (local IPC, not an upload by EDNexus) | When enabled in Settings | System/ship/activity; options hide the system and the commander name |
-| Colonisation lookups | RavenColonial | When you look up a shared colonisation project | Build/project ids, system name or id64 and market id |
+| Colonisation lookups (read) | Raven Colonial | When you dock at a construction depot, unless switched off in Settings → Data reporting | The depot's system name and market id, then the matched project's id |
+| Colonisation deliveries (write) | Raven Colonial | **Opt-in, default off**; each live delivery you make at a depot that has a shared project, and only while the lookup above is also on | **Your commander name**, the project id, and the commodities and tons you delivered (see below) |
 | Route & market search | Spansh, EDSM | When you run a search | The search/route parameters (systems, ranges, commodities) |
 | News | Galnet | When the Galnet card refreshes | A plain request for the public RSS feed |
 | Update check | GitHub (api.github.com / github.com) | Only if **Automatically download updates on startup** is on, or you press **Check for updates now** | A request for the latest release; no identifying data and no token is sent |
 
 Replaying an old journal (e.g. the CLI `--once` harness) never uploads anything.
+
+**Sharing your colonisation deliveries (Raven Colonial).** Turning on *Also share my deliveries with that
+project* (Settings → Data reporting) reports each delivery you make at a construction depot to the shared
+[Raven Colonial](https://ravencolonial.com) project for that depot, so squadmates see the remaining need fall.
+Two caveats, both on Raven Colonial's side rather than something EDNexus can fix:
+
+- **It is unauthenticated.** The commander is just a name in the request URL, so Raven Colonial cannot tell your
+  delivery from one somebody else posted under your name (or you under theirs). Only enable it for projects you
+  are comfortable being open to that.
+- **It can double-count.** Raven Colonial adds up whatever it is sent. If another tool that also reports
+  deliveries (SrvSurvey, for example) is running against the same project, each delivery is counted twice.
+  Use one reporter per project.
+
+Only live deliveries are sent (never a replayed journal, never developer-mode data), commodities the project does
+not list are skipped, and a failed send is logged and not queued for a later re-send.
 
 ## Data reporting (EDDN & Inara)
 
