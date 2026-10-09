@@ -50,6 +50,21 @@ public sealed class RadioPlayerService : IRadioPlayer, IDisposable, IAsyncDispos
     private static readonly TimeSpan DefaultNativeTeardownTimeout = TimeSpan.FromSeconds(3);
     private readonly TimeSpan _nativeTeardownTimeout;
 
+    // Bringing LibVLC up (loading the native library, scanning its plugins) can take many seconds on a
+    // cold start and can stall outright (antivirus, a damaged install, a slow disk). It runs on a
+    // worker with a bound so the play request fails with a message instead of hanging, and it never
+    // runs under _gate: the UI thread reads Snapshot under _gate on every refresh tick, so holding it
+    // across the start-up froze the whole window.
+    private static readonly TimeSpan DefaultEngineStartTimeout = TimeSpan.FromSeconds(20);
+    private readonly TimeSpan _engineStartTimeout;
+    private readonly Func<RadioEngineHandle> _engineFactory;
+    private Task<RadioEngineHandle>? _engineInit; // guarded by _gate; reused if a start outlives its timeout
+
+    // A station that never connects would otherwise sit in "Buffering" forever.
+    private static readonly TimeSpan DefaultConnectTimeout = TimeSpan.FromSeconds(30);
+    private readonly TimeSpan _connectTimeout;
+    private int _playAttempt; // guarded by _gate; lets a stale connect watchdog recognise it was superseded
+
     // Volume changes arrive in bursts (a slider drag fires one per step). They apply to the player
     // and the in-memory settings immediately, but the disk write is coalesced: one save once the
     // burst goes quiet, flushed on Dispose so a change made just before shutdown isn't lost.
@@ -94,8 +109,14 @@ public sealed class RadioPlayerService : IRadioPlayer, IDisposable, IAsyncDispos
         SettingsStore? store,
         TimeSpan? saveDelay,
         Action<Action>? postSave,
-        TimeSpan nativeTeardownTimeout)
+        TimeSpan nativeTeardownTimeout,
+        Func<RadioEngineHandle>? engineFactory = null,
+        TimeSpan? engineStartTimeout = null,
+        TimeSpan? connectTimeout = null)
     {
+        _engineFactory = engineFactory ?? CreateNativeEngine;
+        _engineStartTimeout = engineStartTimeout ?? DefaultEngineStartTimeout;
+        _connectTimeout = connectTimeout ?? DefaultConnectTimeout;
         _settings = settings;
         _store = store;
         _saveDelay = saveDelay ?? DefaultSaveDelay;
@@ -472,11 +493,19 @@ public sealed class RadioPlayerService : IRadioPlayer, IDisposable, IAsyncDispos
                 var player = EnsureEngine();
                 if (player is null) return; // EnsureEngine already recorded the error.
 
-                lock (_gate) _status = RadioPlaybackStatus.Buffering;
+                int attempt;
+                LibVLC libVlc;
+                lock (_gate)
+                {
+                    _status = RadioPlaybackStatus.Buffering;
+                    attempt = ++_playAttempt;
+                    libVlc = _libVlc!;
+                }
                 RaiseChanged();
 
-                using var media = new Media(_libVlc!, new Uri(station.StreamUrl));
+                using var media = new Media(libVlc, new Uri(station.StreamUrl));
                 player.Play(media);
+                ArmConnectWatchdog(attempt);
             }
         }
         catch (Exception ex)
@@ -492,45 +521,134 @@ public sealed class RadioPlayerService : IRadioPlayer, IDisposable, IAsyncDispos
     }
 
     /// <summary>
-    /// Lazily initializes the LibVLC engine and media player, wiring their events into our status.
-    /// Returns null (having already recorded the error) if the native runtime isn't available —
-    /// e.g. no system libvlc on Linux, or a corrupt install — so callers can bail without crashing.
+    /// Lazily brings up the LibVLC engine and media player, wiring their events into our status.
+    /// Returns null (having already recorded the error) if the native runtime is not available (no
+    /// system libvlc on Linux, a corrupt install), is disposed, or does not start within
+    /// <see cref="_engineStartTimeout"/>, so callers can bail without crashing. Called with
+    /// <see cref="_transportGate"/> held (one start at a time) but NOT <see cref="_gate"/>.
     /// </summary>
     private MediaPlayer? EnsureEngine()
     {
+        Task<RadioEngineHandle> init;
         lock (_gate)
         {
+            if (_disposed) return null;
             if (_mediaPlayer is not null) return _mediaPlayer;
+            init = _engineInit ??= StartEngineInit();
+        }
 
+        RadioEngineHandle handle;
+        try
+        {
+            if (!init.Wait(_engineStartTimeout))
+            {
+                // Leave the start running: if it does finish, the next play adopts it.
+                SetError($"The radio engine did not start within {(int)_engineStartTimeout.TotalSeconds} seconds. " +
+                         "Check that VLC's files are intact and not blocked by security software, then try again.");
+                return null;
+            }
+
+            handle = init.Result;
+        }
+        catch (Exception ex)
+        {
+            // Missing/broken native libvlc, unsupported platform, etc. Never let this take the
+            // process down; the radio card should just show an error state. A later play tries again.
+            lock (_gate) { if (ReferenceEquals(_engineInit, init)) _engineInit = null; }
+            SetError($"Radio engine unavailable: {ex.GetBaseException().Message}");
+            return null;
+        }
+
+        var player = handle.Player;
+        player.Playing += (_, _) => { lock (_gate) { _status = RadioPlaybackStatus.Playing; _lastError = null; } RaiseChanged(); };
+        player.Paused += (_, _) => { lock (_gate) _status = RadioPlaybackStatus.Paused; RaiseChanged(); };
+        // A Stopped event follows a stop we issued after an error; it must not wipe that error.
+        player.Stopped += (_, _) => { lock (_gate) { if (_status != RadioPlaybackStatus.Error) _status = RadioPlaybackStatus.Stopped; } RaiseChanged(); };
+        player.Buffering += (_, _) => { lock (_gate) if (_status is not (RadioPlaybackStatus.Playing or RadioPlaybackStatus.Error)) _status = RadioPlaybackStatus.Buffering; RaiseChanged(); };
+        player.EncounteredError += (_, _) => SetError("The stream could not be played (network error or invalid stream).");
+
+        bool adopted;
+        lock (_gate)
+        {
+            adopted = !_disposed && _mediaPlayer is null;
+            if (adopted)
+            {
+                _libVlc = handle.Lib;
+                _mediaPlayer = player;
+                player.Volume = _volume;
+                player.Mute = _muted;
+            }
+        }
+
+        if (!adopted)
+        {
+            handle.Release(); // disposed while it was starting
+            return null;
+        }
+
+        return player;
+    }
+
+    /// <summary>Starts building the engine on a worker thread, and frees it if it finishes only after <see cref="Dispose"/>.</summary>
+    private Task<RadioEngineHandle> StartEngineInit()
+    {
+        var task = Task.Run(_engineFactory);
+        task.ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            bool orphaned;
+            lock (_gate) orphaned = _disposed && !ReferenceEquals(_mediaPlayer, t.Result.Player);
+            if (orphaned) t.Result.Release();
+        }, TaskScheduler.Default);
+        return task;
+    }
+
+    private static RadioEngineHandle CreateNativeEngine()
+    {
+        LibVLCSharp.Shared.Core.Initialize();
+        var lib = new LibVLC(enableDebugLogs: false);
+        try
+        {
+            return new RadioEngineHandle(lib, new MediaPlayer(lib));
+        }
+        catch
+        {
+            lib.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// After <see cref="_connectTimeout"/>, ends a play that is still only "Buffering": the station is
+    /// down, blocked, or not answering, and the card should say so instead of spinning for ever.
+    /// Superseded (a newer play, a pause or stop, a suspend) or already playing, it does nothing.
+    /// </summary>
+    private void ArmConnectWatchdog(int attempt)
+    {
+        _ = Task.Delay(_connectTimeout).ContinueWith(_ =>
+        {
             try
             {
-                LibVLCSharp.Shared.Core.Initialize();
-                _libVlc = new LibVLC(enableDebugLogs: false);
-                var player = new MediaPlayer(_libVlc)
+                MediaPlayer? player;
+                lock (_transportGate)
                 {
-                    Volume = _volume,
-                    Mute = _muted,
-                };
-                player.Playing += (_, _) => { lock (_gate) { _status = RadioPlaybackStatus.Playing; _lastError = null; } RaiseChanged(); };
-                player.Paused += (_, _) => { lock (_gate) _status = RadioPlaybackStatus.Paused; RaiseChanged(); };
-                player.Stopped += (_, _) => { lock (_gate) _status = RadioPlaybackStatus.Stopped; RaiseChanged(); };
-                player.Buffering += (_, _) => { lock (_gate) if (_status != RadioPlaybackStatus.Playing) _status = RadioPlaybackStatus.Buffering; RaiseChanged(); };
-                player.EncounteredError += (_, _) => SetError("The stream could not be played (network error or invalid stream).");
+                    lock (_gate)
+                    {
+                        if (_disposed || _suspended || attempt != _playAttempt || _status != RadioPlaybackStatus.Buffering) return;
+                        player = LivePlayerLocked();
+                    }
+                    try { player?.Stop(); } catch { /* best effort */ } // outside _gate (#144)
+                }
 
-                _mediaPlayer = player;
-                return player;
+                lock (_gate) { if (attempt != _playAttempt || _disposed) return; }
+                SetError($"The station did not start playing within {(int)_connectTimeout.TotalSeconds} seconds. " +
+                         "It may be offline, or your connection may be blocking it.");
             }
             catch (Exception ex)
             {
-                // Missing/broken native libvlc, unsupported platform, etc. — never let this take
-                // the process down; the radio card should just show an error state.
-                _lastError = $"Radio engine unavailable: {ex.Message}";
-                _status = RadioPlaybackStatus.Error;
-                _libVlc = null;
-                _mediaPlayer = null;
-                return null;
+                SetError(ex.Message);
             }
-        }
+        }, TaskScheduler.Default);
     }
 
     /// <summary>
@@ -677,5 +795,24 @@ public sealed class RadioPlayerService : IRadioPlayer, IDisposable, IAsyncDispos
     {
         Dispose();
         return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
+/// A started LibVLC engine: the library and the player built on it. Disposed once, whoever gets there
+/// first (a start that finishes after the service was disposed has nobody to adopt it).
+/// </summary>
+internal sealed class RadioEngineHandle(LibVLC lib, MediaPlayer player)
+{
+    private int _released;
+
+    public LibVLC Lib { get; } = lib;
+    public MediaPlayer Player { get; } = player;
+
+    public void Release()
+    {
+        if (Interlocked.Exchange(ref _released, 1) != 0) return;
+        try { Player.Dispose(); } catch { /* best effort */ }
+        try { Lib.Dispose(); } catch { /* best effort */ }
     }
 }
