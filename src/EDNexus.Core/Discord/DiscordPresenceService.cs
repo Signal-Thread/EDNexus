@@ -18,11 +18,30 @@ namespace EDNexus.Core.Discord;
 public sealed class DiscordPresenceService : IDisposable
 {
     /// <summary>
-    /// Placeholder Discord application (Client) ID. Replace with EDNexus's own application, created at
-    /// https://discord.com/developers/applications, before shipping — this id has no art assets
-    /// registered against it, so large/small images will simply not render until it is replaced.
+    /// EDNexus's own Discord application (Client) ID, registered at
+    /// https://discord.com/developers/applications. Rich Presence images (<c>ednexus_logo</c>,
+    /// <c>docked</c>, <c>cruising</c>, ship keys) only render once art assets with those keys are uploaded
+    /// to that application; presence works without them, just without pictures.
     /// </summary>
-    public const string DefaultApplicationId = "0000000000000000000";
+    public const string DefaultApplicationId = "1557985945393827911";
+
+    /// <summary>
+    /// The all-zeros placeholder earlier builds shipped as the default. It is not a real application, so
+    /// Discord rejects it and no presence is ever shown; it was also saved into every commander's
+    /// <c>settings.json</c>, so it must be recognised and replaced rather than honoured.
+    /// </summary>
+    public const string PlaceholderApplicationId = "0000000000000000000";
+
+    /// <summary>
+    /// The application id to connect with: the commander's override when they set a real one, otherwise
+    /// <see cref="DefaultApplicationId"/>. A blank value or the old placeholder (persisted by earlier
+    /// builds) counts as "not set".
+    /// </summary>
+    public static string ResolveApplicationId(string? configured)
+    {
+        var id = configured?.Trim();
+        return string.IsNullOrEmpty(id) || id == PlaceholderApplicationId ? DefaultApplicationId : id;
+    }
 
     /// <summary>Discord's own guidance: don't push presence updates more than once every 15 seconds.</summary>
     public static readonly TimeSpan DefaultMinInterval = TimeSpan.FromSeconds(15);
