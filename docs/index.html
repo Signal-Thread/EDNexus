@@ -262,16 +262,6 @@
   .tag.win { color: var(--muted); }
   .tag.dev { color: var(--accent-bright); border-color: var(--accent); }
 
-  .roadmap { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-  .roadmap h3 { margin: 0 0 4px; font-size: 1.05rem; }
-  .roadmap .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 12px; }
-  .roadmap ul { list-style: none; margin: 0; padding: 0; }
-  .roadmap li { padding: 6px 0; border-top: 1px solid var(--border); font-size: 0.93rem; }
-  .roadmap li:first-child { border-top: none; }
-  .roadmap li a { font-weight: 600; text-decoration: none; margin-right: 6px; }
-  .roadmap li a:hover { text-decoration: underline; }
-  .roadmap li .note { color: var(--muted); }
-  .state { color: var(--good); font-weight: 600; font-size: 0.8rem; margin-left: 4px; }
 
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
@@ -295,6 +285,7 @@
   details.faq summary:hover { color: var(--accent-bright); }
   details.faq[open] summary { border-bottom: 1px solid var(--border); }
   details.faq p { margin: 0; padding: 14px 18px; color: var(--muted); }
+  details.faq pre { margin: 14px 18px; }
 
   footer {
     padding: 32px 0 56px;
@@ -322,7 +313,7 @@
     <nav class="sections" aria-label="Sections">
       <a href="#how-it-works">How it works</a>
       <a href="#features">Features</a>
-      <a href="#roadmap">Roadmap</a>
+      <a href="#roadmap">Coming soon</a>
       <a href="#data">Your data</a>
       <a href="#faq">FAQ</a>
       <a href="#install">Get started</a>
@@ -334,11 +325,9 @@
   <div class="wrap">
     <h2>How it <span class="accent">works</span></h2>
     <p class="lead">
-      EDNexus works off the game's own data — no memory reading, no injection. A watcher tails the
-      journal (<code>Journal.*.log</code>) and the sidecar status files (<code>Status.json</code>,
-      <code>Cargo.json</code>, <code>Market.json</code>, …), turns them into a typed event stream, and folds
-      that into a single live commander state that every feature reads from. Nothing needs an account or
-      an API key to get started.
+      EDNexus works from the files Elite Dangerous already writes on your own computer, so there is nothing to
+      hook into the game and no account to create. It follows what you do as you play and keeps one live picture
+      of your commander that every feature draws from.
     </p>
   </div>
 </section>
@@ -376,8 +365,8 @@
 
       <div class="card">
         <h3>Exobiology</h3>
-        <p>Genus and species scan progress as you sample, an offline species prediction engine, per-genus sampling distances and bundled payout values.</p>
-        <p class="fine">The bundled data is community-derived and still being verified.</p>
+        <p>Track your sampling progress by species, see which organisms a planet is likely to hold, and know the distances and payouts before you land.</p>
+        <p class="fine">Reference data is community-derived and still being verified.</p>
       </div>
 
       <div class="card">
@@ -397,7 +386,7 @@
 
       <div class="card">
         <h3>Radio</h3>
-        <p>A background internet-radio player with your station, volume and mute remembered. Start-up is guarded against a slow or stuck audio engine.</p>
+        <p>Built-in internet radio that plays in the background and remembers your station and volume.</p>
       </div>
 
       <div class="card">
@@ -407,7 +396,7 @@
 
       <div class="card">
         <h3>Twitch stream card <span class="tag opt">opt-in</span></h3>
-        <p>Publishes a viewer-facing card of your session (location, ship, exobiology, missions, …) to a Twitch extension through the EDNexus backend service. You choose which sections are shown; your credit balance is hidden unless you turn it on. The card comes down when you quit the game.</p>
+        <p>Publishes a viewer-facing card of your session (location, ship, exobiology, missions, …) to a Twitch extension so your viewers can follow along. You choose which sections are shown; your credit balance is hidden unless you turn it on. The card comes down when you quit the game.</p>
         <p class="fine">The EDNexus side is built; the extension itself is awaiting Twitch's review.</p>
       </div>
 
@@ -423,108 +412,66 @@
 
       <div class="card">
         <h3>Auto-update <span class="tag opt">opt-in</span></h3>
-        <p>Downloads the new installer, checks it against the SHA-256 checksum published with the release, and only then offers to install it. Linux updates come through Flatpak.</p>
+        <p>Downloads new versions for you, verifies them, and only installs when you say so. Linux updates come through Flatpak.</p>
       </div>
 
       <div class="card">
-        <h3>Developer mode <span class="tag dev">built in</span></h3>
-        <p>Every card can be exercised without the game running, using randomly generated but valid journal events. Nothing generated this way is ever uploaded or published.</p>
+        <h3>Demo mode <span class="tag dev">built in</span></h3>
+        <p>Try every card with sample data, no game running. Nothing generated this way is ever shared with anyone.</p>
       </div>
 
-      <div class="card">
-        <h3>Plugin SDK <span class="tag dev">in development</span></h3>
-        <p>The plugin contract and loader exist as libraries, with deny-by-default consent and a read-only view of commander state. The app does not load plugins yet — see the roadmap.</p>
-      </div>
     </div>
   </div>
 </section>
 
 <section id="roadmap">
   <div class="wrap">
-    <h2>What's <span class="accent">next</span></h2>
+    <h2>Coming <span class="accent">soon</span></h2>
     <p class="lead">
-      Planned work is tracked on the <a href="https://github.com/Signal-Thread/EDNexus/issues">GitHub issue board</a>.
-      This is a snapshot of it, grouped by theme — it changes quickly, so the board is the source of truth.
-      Epics link to their child issues.
+      EDNexus is growing quickly. Here is the direction we are heading in. Plans change as we hear from
+      commanders, so there are no dates and nothing here is a promise.
     </p>
 
-    <div class="roadmap">
+    <div class="grid">
       <div class="card">
-        <h3>In progress</h3>
-        <p class="sub">Open pull requests.</p>
-        <ul>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/pull/202">#202</a> Keep dashboard cards in their column when card heights change <span class="note">(fixes <a href="https://github.com/Signal-Thread/EDNexus/issues/180">#180</a>)</span></li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/pull/193">#193</a> Opt-in push of your colonisation deliveries to Raven Colonial <span class="note">(part of <a href="https://github.com/Signal-Thread/EDNexus/issues/89">#89</a>)</span></li>
-        </ul>
+        <h3>A calmer, tidier dashboard</h3>
+        <p>Pages for the way you play: group the cards you use for trading, exploring, colonising or streaming, and keep every card exactly where you put it. Fewer, richer cards, a compact view, and the option to pop cards out onto a second monitor.</p>
       </div>
 
       <div class="card">
-        <h3>Dashboard layout rework</h3>
-        <p class="sub">Too many cards on one screen: workspaces, fewer richer cards, a stable layout. Epic <a href="https://github.com/Signal-Thread/EDNexus/issues/194">#194</a>.</p>
-        <ul>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/195">#195</a> Workspace model (pages) with per-workspace card layout</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/196">#196</a> Workspace UI: tabs or side rail, and a card picker</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/197">#197</a> Consolidate related cards into fewer, richer ones</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/198">#198</a> Compact mode and one-line collapsed summaries</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/199">#199</a> Hints that never move anything (badges; opt-in auto-switch)</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/200">#200</a> Pop-out cards for a second monitor</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/201">#201</a> Defaults, migration and reset</li>
-        </ul>
+        <h3>Help when you are off the ship</h3>
+        <p>More guidance on foot and in the SRV: sampling help while you collect biological samples, a compass to places you want to find, and tools to survey what you discover.</p>
       </div>
 
       <div class="card">
-        <h3>On-planet, position-aware tools</h3>
-        <p class="sub">Knowing where you are standing: sampling guides, targets, surveys. Built from the game's own data. Epic <a href="https://github.com/Signal-Thread/EDNexus/issues/182">#182</a>.</p>
-        <ul>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/183">#183</a> Surface position model and great-circle maths <span class="note">(foundation)</span></li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/184">#184</a> Overlay widgets that can draw compasses and rings</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/185">#185</a> Exobiology sampling guide: distance to previous samples</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/186">#186</a> Ground target tracking: bearing and distance</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/187">#187</a> Exploration tracker: live scan values and session distance</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/188">#188</a> Guardian site surveys</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/189">#189</a> Ram Tah mission helper</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/190">#190</a> Spherical and boxel survey tools</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/191">#191</a> Settlement maps and points of interest</li>
-        </ul>
+        <h3>Explore with confidence</h3>
+        <p>A live view of what your scans are worth and how far you have travelled, with planet details at a glance.</p>
       </div>
 
       <div class="card">
-        <h3>Plugin system</h3>
-        <p class="sub">Third-party extensions against a stable SDK. Epic <a href="https://github.com/Signal-Thread/EDNexus/issues/67">#67</a>. The host libraries exist; the app does not load plugins yet.</p>
-        <ul>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/56">#56</a> Lifecycle and fault isolation (enable/disable/quarantine)</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/57">#57</a> Capability / permission model</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/61">#61</a> Plugin management UI</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/60">#60</a> Per-plugin storage and config</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/58">#58</a> / <a href="https://github.com/Signal-Thread/EDNexus/issues/59">#59</a> Dashboard and overlay contributions</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/62">#62</a> Threading and UI-dispatch contract</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/66">#66</a> Trust and security model (consent, signing)</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/63">#63</a> <a href="https://github.com/Signal-Thread/EDNexus/issues/64">#64</a> <a href="https://github.com/Signal-Thread/EDNexus/issues/65">#65</a> CLI loading, sample plugin, developer docs</li>
-        </ul>
+        <h3>Smarter colonisation</h3>
+        <p>Closer ties with community colonisation tools, so your squadron's progress and your own hauling stay in step.</p>
       </div>
 
       <div class="card">
-        <h3>Data sources &amp; integrations</h3>
-        <p class="sub">More places to get useful data from. Epic <a href="https://github.com/Signal-Thread/EDNexus/issues/87">#87</a>.</p>
-        <ul>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/89">#89</a> Raven Colonial: pushing deliveries is in review; adopting a project by id is next</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/96">#96</a> Exobiology points of interest, and verifying the bundled data</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/98">#98</a> More Spansh routers and finders (road to riches, tourist, body search)</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/99">#99</a> Inara read side: commander profile and community goals</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/95">#95</a> EliteBGS faction influence <span class="note">(blocked on the service's API being down)</span></li>
-        </ul>
+        <h3>Built with the community</h3>
+        <p>A plugin system so players and developers can add their own cards, overlays and data sources, with you in control of what each one can see.</p>
       </div>
 
       <div class="card">
-        <h3>Twitch, updates &amp; polish</h3>
-        <ul>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/39">#39</a> Twitch extension go-live <span class="note">(waiting on Twitch's review)</span></li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/104">#104</a> Signed update assets, so updates prove who published them</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/124">#124</a> Radio: multimedia keyboard keys</li>
-          <li><a href="https://github.com/Signal-Thread/EDNexus/issues/88">#88</a> Odyssey (on-foot) features epic: inventory view, loadouts, on-foot exobiology</li>
-        </ul>
+        <h3>On your stream</h3>
+        <p>Your session on your Twitch channel for viewers to follow, as soon as the extension is approved.</p>
+      </div>
+
+      <div class="card">
+        <h3>More sources, safer updates</h3>
+        <p>More route finders and data sources, even more trustworthy updates, and media-key control for the radio.</p>
       </div>
     </div>
+
+    <p class="fine" style="margin-top:20px">
+      Have an idea? Tell us on <a href="https://github.com/Signal-Thread/EDNexus">GitHub</a>.
+    </p>
   </div>
 </section>
 
@@ -579,7 +526,7 @@
       </tbody>
     </table>
     <p class="fine" style="margin-top:12px">macOS is not yet supported.</p>
-    <p class="fine" style="margin-top:20px">Building from source:</p>
+    <details class="faq" style="margin-top:20px"><summary>For developers: building from source</summary>
     <pre><code># Live dashboard
 dotnet run --project src/EDNexus.App
 
@@ -588,8 +535,9 @@ dotnet run --project src/EDNexus.Cli -- --once
 
 # Run the tests
 dotnet test EDNexus.slnx</code></pre>
+    </details>
     <div class="cta" style="justify-content:flex-start">
-      <a class="btn secondary" href="https://github.com/Signal-Thread/EDNexus/issues">View open issues</a>
+      <a class="btn secondary" href="https://github.com/Signal-Thread/EDNexus">Follow EDNexus on GitHub</a>
     </div>
   </div>
 </section>
