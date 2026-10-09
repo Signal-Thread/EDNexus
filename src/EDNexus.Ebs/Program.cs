@@ -436,7 +436,24 @@ app.MapGet("/api/initial-state/{channelId}", (HttpContext httpContext, string ch
     .RequireRateLimiting("initial-state")
     .RequireCors("extension-frontend");
 
-app.Run();
+try
+{
+    app.Run();
+}
+catch (OptionsValidationException ex)
+{
+    // Missing or invalid settings are an operator mistake, not a crash. Say exactly what to fix and
+    // exit with a configuration error code, instead of an unhandled-exception stack trace that also
+    // sets off crash reporters (e.g. Datadog crash tracking) for something that is not a bug.
+    Console.Error.WriteLine("EDNexus EBS cannot start: the configuration is invalid.");
+    foreach (var failure in ex.Failures) Console.Error.WriteLine("  - " + failure);
+    Console.Error.WriteLine(
+        "Set the missing values as environment variables (for example Twitch__ClientId and Twitch__ExtensionId) " +
+        "or in the .env file; see .env.example and the README.");
+    return 78; // EX_CONFIG
+}
+
+return 0;
 
 static bool IsAllowedFrontendOrigin(string origin, HashSet<string> additionalOrigins)
 {

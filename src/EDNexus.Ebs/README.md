@@ -319,3 +319,24 @@ Fly.io, etc.). Wherever it runs, mount a persistent volume at `/data` (see [Pers
 **Production caveat:** SQLite suits the single EBS instance we deploy. A multi-instance
 (horizontally scaled) deployment needs a shared backing store, e.g. Postgres or Redis, behind
 `IBroadcasterTokenStore` / `IChannelStateStore`, plus a shared Data Protection key ring.
+
+## Troubleshooting
+
+### The container exits immediately with "configuration is invalid"
+
+The service checks its settings at start-up and refuses to run with a missing or invalid one, rather than
+failing later at the first Twitch login. The log lists each problem, then the process exits with code `78`
+(a configuration error, not a crash), and `restart: unless-stopped` will keep retrying until the settings are
+fixed. The usual causes:
+
+| Message | Fix |
+|---|---|
+| `Twitch:ClientId must be set` | Set `Twitch__ClientId` (the extension's Client ID from the Twitch developer console) |
+| `Twitch:ExtensionId must be set` | Set `Twitch__ExtensionId` (usually the same value as the Client ID) |
+| `Twitch:ClientSecret must be set` / `Twitch:ExtensionSecret ...` | Set the two secrets; the extension secret is base64 and must decode to at least 16 bytes |
+| `Twitch:OAuthRedirectUri ...` | Use an absolute `https://` URL (plain `http` only for localhost) that matches the one registered with Twitch |
+
+Settings come from the `.env` file next to `docker-compose.yml` (`env_file: .env`). Start from `.env.example`,
+which already contains the public Client ID and Extension ID, and fill in the two secrets. A `.env` that only
+contains the secrets is the most common way to hit this.
+

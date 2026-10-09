@@ -395,7 +395,7 @@ public class EbsHardeningTests
         }).Build();
 
     // The validation rules, exercised through the same Bind + validator registration Program uses but
-    // without booting a host: a host that fails to start surfaces through WebApplicationFactory's
+    // without booting a host (StartupFailureTests runs the real service end to end): a host that fails to start surfaces through WebApplicationFactory's
     // deferred-host plumbing, which now and then reports an ObjectDisposedException instead of the
     // validation failure, so a theory over every rule must not depend on that.
     [Theory]
@@ -418,24 +418,6 @@ public class EbsHardeningTests
 
         var validation = Assert.IsType<OptionsValidationException>(exception);
         Assert.Contains(expectedInMessage, validation.Message);
-    }
-
-    [Fact]
-    public void Invalid_configuration_stops_the_host_from_starting()
-    {
-        // One end-to-end check that the validators are wired to run at startup (ValidateOnStart). The
-        // framework's failed-start reporting is racy (see above), so look for the validation failure
-        // across a few attempts rather than on the first.
-        Exception? last = null;
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            using var factory = new EbsHostFactory(new() { ["Twitch:ExtensionId"] = "" });
-            last = Record.Exception(() => factory.CreateClient());
-            Assert.NotNull(last);
-            if (last.ToString().Contains("Twitch:ExtensionId")) return;
-        }
-
-        Assert.Fail($"The host never reported the invalid ExtensionId; last error: {last}");
     }
 
     [Theory]
