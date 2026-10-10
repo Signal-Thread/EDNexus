@@ -36,16 +36,48 @@
 
   <!--
     Native LibVLC runtime for the radio player. Windows/macOS ship the engine via these NuGet
-    packages (harmless to reference from either build host — each only contributes its own
-    runtimes/<rid> assets, which are filtered by target RID at publish time). Linux has no
-    equivalent package and instead loads the system-installed libvlc (e.g. `apt install vlc` /
-    `libvlc-dev`) at runtime — RadioPlayerService degrades to a reported error state rather than
-    crashing when it's missing.
+    packages. Linux has no equivalent package and instead loads the system-installed libvlc (e.g.
+    `apt install vlc` / `libvlc-dev`) at runtime: RadioPlayerService degrades to a reported error state
+    rather than crashing when it's missing.
+
+    The packages are NOT filtered by target RID on their own: VideoLAN.LibVLC.Windows copies the x64, x86
+    AND arm64 engines (about 100 MB each) next to the app whatever you publish, and VideoLAN.LibVLC.Mac
+    drops a macOS libvlc.dylib (40 MB) into a Windows build. A win-x64 install was 541 MB, 180 MB of it
+    VLC builds for CPUs it never runs on. So only the engine the target needs is referenced and enabled.
+    RuntimeIdentifier is empty for a plain dev build, in which case the machine we are building on decides.
   -->
+  <PropertyGroup>
+    <_VlcProcArch>$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)</_VlcProcArch>
+
+    <_VlcWindows Condition="'$(RuntimeIdentifier)' != '' AND $(RuntimeIdentifier.StartsWith('win'))">true</_VlcWindows>
+    <_VlcWindows Condition="'$(RuntimeIdentifier)' == '' AND $([MSBuild]::IsOSPlatform('Windows'))">true</_VlcWindows>
+    <_VlcMac Condition="'$(RuntimeIdentifier)' != '' AND $(RuntimeIdentifier.StartsWith('osx'))">true</_VlcMac>
+    <_VlcMac Condition="'$(RuntimeIdentifier)' == '' AND $([MSBuild]::IsOSPlatform('OSX'))">true</_VlcMac>
+
+    <!-- Read by VideoLAN.LibVLC.Windows.targets: an unset value means "yes" there, so say no explicitly. -->
+    <VlcWindowsX64Enabled Condition="'$(_VlcWindows)' == 'true' AND ('$(RuntimeIdentifier)' == 'win-x64' OR ('$(RuntimeIdentifier)' == '' AND '$(_VlcProcArch)' == 'X64'))">true</VlcWindowsX64Enabled>
+    <VlcWindowsX86Enabled Condition="'$(_VlcWindows)' == 'true' AND ('$(RuntimeIdentifier)' == 'win-x86' OR ('$(RuntimeIdentifier)' == '' AND '$(_VlcProcArch)' == 'X86'))">true</VlcWindowsX86Enabled>
+    <VlcWindowsArm64Enabled Condition="'$(_VlcWindows)' == 'true' AND ('$(RuntimeIdentifier)' == 'win-arm64' OR ('$(RuntimeIdentifier)' == '' AND '$(_VlcProcArch)' == 'Arm64'))">true</VlcWindowsArm64Enabled>
+    <VlcWindowsX64Enabled Condition="'$(VlcWindowsX64Enabled)' == ''">false</VlcWindowsX64Enabled>
+    <VlcWindowsX86Enabled Condition="'$(VlcWindowsX86Enabled)' == ''">false</VlcWindowsX86Enabled>
+    <VlcWindowsArm64Enabled Condition="'$(VlcWindowsArm64Enabled)' == ''">false</VlcWindowsArm64Enabled>
+  </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
-    <PackageReference Include="VideoLAN.LibVLC.Mac" Version="3.1.3.1" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" Condition="'$(_VlcWindows)' == 'true'" />
+    <PackageReference Include="VideoLAN.LibVLC.Mac" Version="3.1.3.1" Condition="'$(_VlcMac)' == 'true'" />
   </ItemGroup>
+
+  <!--
+    SkiaSharp and HarfBuzzSharp ship their native debug symbols (libSkiaSharp.pdb is 80 MB, libHarfBuzzSharp.pdb
+    20 MB) in the same runtimes/ folder as the DLLs, and a publish copies them to the install. Nothing at
+    runtime reads them, and we do not symbolicate those native frames. EDNexus's own .pdb files stay.
+  -->
+  <Target Name="DropThirdPartyNativeSymbolsFromPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(Extension)' == '.pdb' AND ('%(Filename)' == 'libSkiaSharp' OR '%(Filename)' == 'libHarfBuzzSharp')" />
+    </ItemGroup>
+  </Target>
 
   <!--
     Sentry DSN is injected at release build time from a CI secret and baked into assembly metadata
