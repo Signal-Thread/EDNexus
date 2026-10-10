@@ -45,22 +45,22 @@
     drops a macOS libvlc.dylib (40 MB) into a Windows build. A win-x64 install was 541 MB, 180 MB of it
     VLC builds for CPUs it never runs on. So only the engine the target needs is referenced and enabled.
     RuntimeIdentifier is empty for a plain dev build, in which case the machine we are building on decides.
+
+    Windows is x64 only: Elite Dangerous itself is an x64-only game (no ARM64 client, and its 32-bit client is
+    long gone), and the installer publishes win-x64. On Windows on ARM an x64 process runs emulated and loads
+    the x64 engine, so the x86 and arm64 engines are never wanted.
   -->
   <PropertyGroup>
-    <_VlcProcArch>$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)</_VlcProcArch>
-
     <_VlcWindows Condition="'$(RuntimeIdentifier)' != '' AND $(RuntimeIdentifier.StartsWith('win'))">true</_VlcWindows>
     <_VlcWindows Condition="'$(RuntimeIdentifier)' == '' AND $([MSBuild]::IsOSPlatform('Windows'))">true</_VlcWindows>
     <_VlcMac Condition="'$(RuntimeIdentifier)' != '' AND $(RuntimeIdentifier.StartsWith('osx'))">true</_VlcMac>
     <_VlcMac Condition="'$(RuntimeIdentifier)' == '' AND $([MSBuild]::IsOSPlatform('OSX'))">true</_VlcMac>
 
     <!-- Read by VideoLAN.LibVLC.Windows.targets: an unset value means "yes" there, so say no explicitly. -->
-    <VlcWindowsX64Enabled Condition="'$(_VlcWindows)' == 'true' AND ('$(RuntimeIdentifier)' == 'win-x64' OR ('$(RuntimeIdentifier)' == '' AND '$(_VlcProcArch)' == 'X64'))">true</VlcWindowsX64Enabled>
-    <VlcWindowsX86Enabled Condition="'$(_VlcWindows)' == 'true' AND ('$(RuntimeIdentifier)' == 'win-x86' OR ('$(RuntimeIdentifier)' == '' AND '$(_VlcProcArch)' == 'X86'))">true</VlcWindowsX86Enabled>
-    <VlcWindowsArm64Enabled Condition="'$(_VlcWindows)' == 'true' AND ('$(RuntimeIdentifier)' == 'win-arm64' OR ('$(RuntimeIdentifier)' == '' AND '$(_VlcProcArch)' == 'Arm64'))">true</VlcWindowsArm64Enabled>
+    <VlcWindowsX64Enabled Condition="'$(_VlcWindows)' == 'true'">true</VlcWindowsX64Enabled>
     <VlcWindowsX64Enabled Condition="'$(VlcWindowsX64Enabled)' == ''">false</VlcWindowsX64Enabled>
-    <VlcWindowsX86Enabled Condition="'$(VlcWindowsX86Enabled)' == ''">false</VlcWindowsX86Enabled>
-    <VlcWindowsArm64Enabled Condition="'$(VlcWindowsArm64Enabled)' == ''">false</VlcWindowsArm64Enabled>
+    <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
+    <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" Condition="'$(_VlcWindows)' == 'true'" />
