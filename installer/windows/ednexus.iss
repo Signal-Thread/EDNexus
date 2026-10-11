@@ -45,6 +45,16 @@ ArchitecturesInstallIn64BitMode=x64compatible
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
+; An in-place upgrade only overwrites files the new build still ships; it never removes ones it no
+; longer does. These were shipped by builds up to v0.0.22 and are dead weight (~320 MB) now, so they
+; are cleared before the new files are copied. Add an entry here whenever a build stops shipping a file.
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\libvlc\win-x86"
+Type: filesandordirs; Name: "{app}\libvlc\win-arm64"
+Type: files; Name: "{app}\libvlc.dylib"
+Type: files; Name: "{app}\libSkiaSharp.pdb"
+Type: files; Name: "{app}\libHarfBuzzSharp.pdb"
+
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
