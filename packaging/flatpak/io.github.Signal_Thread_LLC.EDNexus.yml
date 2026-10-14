@@ -11,9 +11,12 @@ sdk: org.freedesktop.Sdk
 command: ednexus
 
 finish-args:
-  # Display: Avalonia prefers Wayland and falls back to X11; DRI enables GPU acceleration.
-  - --socket=wayland
-  - --socket=fallback-x11
+  # Display: Avalonia on Linux only has an X11 backend (it runs through XWayland on Wayland
+  # desktops), so the sandbox must always get the X11 socket. Do NOT use `fallback-x11` here: it
+  # means "X11 only when Wayland is unavailable", so on any Wayland session (GNOME/KDE default,
+  # WSLg) the sandbox got no DISPLAY and startup died with "XOpenDisplay failed".
+  # DRI enables GPU acceleration.
+  - --socket=x11
   - --share=ipc
   - --device=dri
   # EDNexus uploads to EDDN and queries Inara / EDSM / Spansh.
