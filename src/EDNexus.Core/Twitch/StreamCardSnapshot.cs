@@ -87,12 +87,21 @@ public sealed record StreamCardShip(
     [property: JsonPropertyName("jump")] double? JumpRange = null);
 
 /// <param name="Station">Where they are docked, named the way a commander would name it.</param>
+/// <param name="Mode">
+/// What the commander is doing, as a stable lower-case token: <c>docked</c>, <c>landed</c>,
+/// <c>space</c>, <c>surface</c> (flying low), <c>supercruise</c>, <c>hyperspace</c>, <c>srv</c> or
+/// <c>foot</c>. Null until the game has said. Added after <see cref="Docked"/>, which stays for older
+/// frontends; an older frontend ignores both new fields.
+/// </param>
+/// <param name="Status">The same thing in words, for a viewer ("In supercruise", "Jumping to Colonia").</param>
 public sealed record StreamCardLocation(
     [property: JsonPropertyName("system")] string? System,
     [property: JsonPropertyName("body")] string? Body = null,
     [property: JsonPropertyName("docked")] bool Docked = false,
     [property: JsonPropertyName("station")] string? Station = null,
-    [property: JsonPropertyName("stationType")] string? StationType = null);
+    [property: JsonPropertyName("stationType")] string? StationType = null,
+    [property: JsonPropertyName("mode")] string? Mode = null,
+    [property: JsonPropertyName("status")] string? Status = null);
 
 /// <param name="JumpRange">Jump range (ly) at the current load.</param>
 public sealed record StreamCardCarrier(

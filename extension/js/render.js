@@ -92,7 +92,9 @@
       ['Body', text(loc.body)],
       ['Docked at', loc.docked ? text(loc.station) : null],
       ['Station', loc.docked ? text(loc.stationType) : null],
-      ['Status', loc.docked ? 'Docked' : 'In flight'],
+      // `status` is the app's own words for what the commander is doing ("In supercruise", "Landed").
+      // An older app sends only `docked`, so fall back to that rather than show nothing.
+      ['Status', text(loc.status) || (loc.docked ? 'Docked' : 'In flight')],
     ]);
     if (!list) return null;
     body.appendChild(list);

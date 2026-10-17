@@ -396,4 +396,154 @@ public class StreamCardMapperTests
         state.StarSystem = "Nervi";
         Assert.NotEqual(first.ContentFingerprint(), StreamCardMapper.Map(state, now: Now).ContentFingerprint());
     }
+
+    // --- flight mode: what the commander is doing, not only whether they are docked ----------------
+
+    [Fact]
+    public void Supercruise_is_in_the_headline_and_the_location_section()
+    {
+        var state = new CommanderState { StarSystem = "Nervi", Flight = FlightMode.Supercruise };
+
+        var card = StreamCardMapper.Map(state, now: Now);
+
+        Assert.Equal("Supercruise · Nervi", card.Headline);
+        Assert.Equal("supercruise", card.Location!.Mode);
+        Assert.Equal("In supercruise", card.Location.Status);
+    }
+
+    [Fact]
+    public void Landed_names_the_body()
+    {
+        var state = new CommanderState { StarSystem = "Nervi", Body = "Nervi 2 a", Flight = FlightMode.Landed };
+
+        var card = StreamCardMapper.Map(state, now: Now);
+
+        Assert.Equal("Landed · Nervi / Nervi 2 a", card.Headline);
+        Assert.Equal("landed", card.Location!.Mode);
+        Assert.Equal("Landed", card.Location.Status);
+    }
+
+    [Theory]
+    [InlineData(FlightMode.InSpace, "Flying · Nervi", "space")]
+    [InlineData(FlightMode.NearSurface, "Flying low · Nervi", "surface")]
+    [InlineData(FlightMode.Srv, "In the SRV · Nervi", "srv")]
+    [InlineData(FlightMode.OnFoot, "On foot · Nervi", "foot")]
+    public void Each_other_mode_has_its_own_label_and_token(FlightMode mode, string headline, string token)
+    {
+        var card = StreamCardMapper.Map(new CommanderState { StarSystem = "Nervi", Flight = mode }, now: Now);
+
+        Assert.Equal(headline, card.Headline);
+        Assert.Equal(token, card.Location!.Mode);
+    }
+
+    [Fact]
+    public void A_hyperspace_jump_headlines_the_destination_not_the_system_left_behind()
+    {
+        var state = new CommanderState
+        {
+            StarSystem = "Nervi",
+            Flight = FlightMode.Hyperspace,
+            JumpDestination = "Colonia",
+        };
+
+        var card = StreamCardMapper.Map(state, now: Now);
+
+        Assert.Equal("Jumping to Colonia", card.Headline);
+        Assert.Equal("Jumping to Colonia", card.Location!.Status);
+        Assert.Equal("hyperspace", card.Location.Mode);
+    }
+
+    [Fact]
+    public void A_hyperspace_jump_with_no_known_destination_still_says_so()
+    {
+        var state = new CommanderState { StarSystem = "Nervi", Flight = FlightMode.Hyperspace };
+
+        var card = StreamCardMapper.Map(state, now: Now);
+
+        Assert.Equal("Hyperspace jump", card.Headline);
+        Assert.Equal("In hyperspace", card.Location!.Status);
+    }
+
+    [Fact]
+    public void Docked_keeps_its_headline_whatever_the_flight_mode_says()
+    {
+        var state = new CommanderState
+        {
+            Docked = true,
+            StationName = "Jameson Memorial",
+            Flight = FlightMode.Docked,
+        };
+
+        var card = StreamCardMapper.Map(state, now: Now);
+
+        Assert.Equal("Docked at Jameson Memorial", card.Headline);
+        Assert.Equal("docked", card.Location!.Mode);
+    }
+
+    [Fact]
+    public void With_no_flight_mode_yet_the_card_reads_exactly_as_it_always_did()
+    {
+        // Before the first Status.json: the headline and location are the old ones, and the new
+        // fields are absent rather than guessed.
+        var state = new CommanderState { StarSystem = "Nervi", Body = "Nervi 2 a" };
+
+        var card = StreamCardMapper.Map(state, now: Now);
+
+        Assert.Equal("Nervi / Nervi 2 a", card.Headline);
+        Assert.Null(card.Location!.Mode);
+        Assert.Null(card.Location.Status);
+        var json = JsonSerializer.Serialize(card, StreamCardSnapshot.SerializerOptions);
+        Assert.DoesNotContain("\"mode\"", json);
+        Assert.DoesNotContain("\"status\"", json);
+    }
+
+    [Fact]
+    public void Hiding_the_location_hides_the_flight_state_and_the_jump_destination_too()
+    {
+        // Where the commander is heading is where they will be: exactly what hiding Location withholds.
+        var state = new CommanderState
+        {
+            StarSystem = "Nervi",
+            Body = "Nervi 2 a",
+            Flight = FlightMode.Hyperspace,
+            JumpDestination = "Colonia",
+        };
+
+        var card = StreamCardMapper.Map(state, visibility: StreamCardVisibility.Default with { Location = false }, now: Now);
+        var json = JsonSerializer.Serialize(card, StreamCardSnapshot.SerializerOptions);
+
+        Assert.Equal("Elite Dangerous", card.Headline);
+        Assert.Null(card.Location);
+        Assert.DoesNotContain("Colonia", json);
+        Assert.DoesNotContain("hyperspace", json);
+    }
+
+    [Fact]
+    public void A_change_of_flight_mode_changes_the_content_fingerprint_so_it_is_published()
+    {
+        var state = new CommanderState { StarSystem = "Nervi", Flight = FlightMode.InSpace };
+        var before = StreamCardMapper.Map(state, now: Now).ContentFingerprint();
+
+        state.Flight = FlightMode.Supercruise;
+
+        Assert.NotEqual(before, StreamCardMapper.Map(state, now: Now).ContentFingerprint());
+    }
+
+    [Fact]
+    public void Walking_around_a_station_is_on_foot_not_docked_even_though_the_ship_stays_docked()
+    {
+        // Status.json keeps the ship's Docked bit while the commander is out of it.
+        var state = new CommanderState
+        {
+            Docked = true,
+            StationName = "Jameson Memorial",
+            Flight = FlightMode.OnFoot,
+        };
+
+        var card = StreamCardMapper.Map(state, now: Now);
+
+        Assert.Equal("On foot at Jameson Memorial", card.Headline);
+        Assert.Equal("foot", card.Location!.Mode);
+        Assert.Equal("On foot", card.Location.Status);
+    }
 }

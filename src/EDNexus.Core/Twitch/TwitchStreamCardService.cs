@@ -65,6 +65,8 @@ public sealed class TwitchStreamCardService : IDisposable
         nameof(CommanderState.StarSystem),
         nameof(CommanderState.Body),
         nameof(CommanderState.Docked),
+        nameof(CommanderState.Flight),
+        nameof(CommanderState.JumpDestination),
         nameof(CommanderState.StationName),
         nameof(CommanderState.StationType),
         nameof(CommanderState.CarrierName),

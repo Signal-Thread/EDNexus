@@ -33,6 +33,20 @@ public sealed class CommanderState : ObservableObject
     private bool _docked;
     public bool Docked { get => _docked; set => Set(ref _docked, value); }
 
+    private FlightMode _flight;
+    /// <summary>
+    /// What the commander is doing right now (docked, landed, in supercruise, …), from the game's
+    /// <c>Status.json</c>. <see cref="FlightMode.Unknown"/> until the first one is read.
+    /// </summary>
+    public FlightMode Flight { get => _flight; set => Set(ref _flight, value); }
+
+    private string? _jumpDestination;
+    /// <summary>
+    /// The system a hyperspace jump in progress is heading to, from <c>StartJump</c>. Null when not
+    /// jumping; cleared on arrival.
+    /// </summary>
+    public string? JumpDestination { get => _jumpDestination; set => Set(ref _jumpDestination, value); }
+
     private string? _stationName;
     /// <summary>
     /// The docked station exactly as the journal names it. For a fleet carrier that is the callsign,
