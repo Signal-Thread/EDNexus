@@ -28,6 +28,7 @@ public sealed class StateTracker
         bus.Subscribe("Undocked", OnUndocked);
         bus.Subscribe("SupercruiseExit", OnSupercruiseExit);
         bus.Subscribe("Status", OnStatus);
+        bus.Subscribe("StartJump", OnStartJump);
         bus.Subscribe("Cargo", OnCargo);
         bus.Subscribe("Materials", OnMaterials);
         bus.Subscribe("MaterialCollected", OnMaterialCollected);
@@ -146,6 +147,7 @@ public sealed class StateTracker
 
     private void OnLocation(JournalEntry e)
     {
+        _state.JumpDestination = null;
         _state.StarSystem = e.GetString("StarSystem") ?? _state.StarSystem;
         _state.Body = e.GetString("Body") ?? _state.Body;
         _state.Docked = e.GetBool("Docked") ?? _state.Docked;
@@ -155,6 +157,7 @@ public sealed class StateTracker
 
     private void OnJump(JournalEntry e)
     {
+        _state.JumpDestination = null;
         _state.StarSystem = e.GetString("StarSystem") ?? _state.StarSystem;
         _state.Body = e.GetString("Body") ?? e.GetString("StarSystem");
         _state.Docked = false;
@@ -183,10 +186,20 @@ public sealed class StateTracker
         _state.StationType = null;
     }
 
+    /// <summary>A jump has begun. Only a hyperspace jump has a destination; a supercruise one does not.</summary>
+    private void OnStartJump(JournalEntry e)
+        => _state.JumpDestination = e.GetString("JumpType") == "Hyperspace" ? e.GetString("StarSystem") : null;
+
     private void OnSupercruiseExit(JournalEntry e) => _state.Body = e.GetString("Body") ?? _state.Body;
 
     private void OnStatus(JournalEntry e)
     {
+        // The flags are the one source of the flight mode. Status.json is a snapshot, so it cannot
+        // disagree with itself the way a stream of journal events can when one is read a poll late.
+        if (e.GetInt64("Flags") is long flags
+            && ShipStatusFlags.Derive(flags, e.GetInt64("Flags2") ?? 0) is FlightMode mode)
+            _state.Flight = mode;
+
         if (e.Raw.TryGetProperty("Fuel", out var fuel)
             && fuel.TryGetProperty("FuelMain", out var fm) && fm.TryGetDouble(out var main))
             _state.FuelMain = main;

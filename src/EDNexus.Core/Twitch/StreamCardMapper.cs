@@ -69,6 +69,18 @@ public static class StreamCardMapper
         if (state.Docked && !string.IsNullOrWhiteSpace(state.StationDisplayName))
             return $"Docked at {state.StationDisplayName}";
 
+        // Mid-jump the commander has already left the system the journal last named, so say where
+        // they are going rather than where they were.
+        if (state.Flight == FlightMode.Hyperspace)
+            return !string.IsNullOrWhiteSpace(state.JumpDestination) ? $"Jumping to {state.JumpDestination}" : "Hyperspace jump";
+
+        var place = Place(state);
+        return FlightLabel(state.Flight) is { } label ? $"{label} · {place}" : place;
+    }
+
+    /// <summary>Where the commander is, as the headline names it: the system, and the body when it is a different thing.</summary>
+    private static string Place(CommanderState state)
+    {
         if (string.IsNullOrWhiteSpace(state.StarSystem)) return "In the black";
 
         return !string.IsNullOrWhiteSpace(state.Body)
@@ -76,6 +88,57 @@ public static class StreamCardMapper
                 ? $"{state.StarSystem} / {state.Body}"
                 : state.StarSystem!;
     }
+
+    /// <summary>A short label for what the commander is doing, or null when the game has not said.</summary>
+    private static string? FlightLabel(FlightMode mode) => mode switch
+    {
+        FlightMode.Docked => "Docked",
+        FlightMode.Landed => "Landed",
+        FlightMode.InSpace => "Flying",
+        FlightMode.NearSurface => "Flying low",
+        FlightMode.Supercruise => "Supercruise",
+        FlightMode.Hyperspace => "Hyperspace jump",
+        FlightMode.Srv => "In the SRV",
+        FlightMode.OnFoot => "On foot",
+        _ => null,
+    };
+
+    /// <summary>
+    /// The state in words for the location section: the label, except mid-jump, when it names the
+    /// destination. Null when the game has not said.
+    /// </summary>
+    private static string? FlightStatus(CommanderState state)
+    {
+        if (state.Flight == FlightMode.Hyperspace && !string.IsNullOrWhiteSpace(state.JumpDestination))
+            return $"Jumping to {state.JumpDestination}";
+
+        return state.Flight switch
+        {
+            FlightMode.Supercruise => "In supercruise",
+            FlightMode.Landed => "Landed",
+            FlightMode.InSpace => "Flying in normal space",
+            FlightMode.NearSurface => "Flying low over the surface",
+            FlightMode.Srv => "Driving the SRV",
+            FlightMode.OnFoot => "On foot",
+            FlightMode.Hyperspace => "In hyperspace",
+            FlightMode.Docked => "Docked",
+            _ => null,
+        };
+    }
+
+    /// <summary>The stable token for the wire (see <see cref="StreamCardLocation.Mode"/>).</summary>
+    private static string? FlightToken(FlightMode mode) => mode switch
+    {
+        FlightMode.Docked => "docked",
+        FlightMode.Landed => "landed",
+        FlightMode.InSpace => "space",
+        FlightMode.NearSurface => "surface",
+        FlightMode.Supercruise => "supercruise",
+        FlightMode.Hyperspace => "hyperspace",
+        FlightMode.Srv => "srv",
+        FlightMode.OnFoot => "foot",
+        _ => null,
+    };
 
     private static string? BuildSubline(CommanderState state, StreamCardVisibility visibility)
     {
@@ -130,7 +193,9 @@ public static class StreamCardMapper
             Body: state.Body,
             Docked: state.Docked,
             Station: state.Docked ? state.StationDisplayName : null,
-            StationType: state.Docked ? state.StationType : null);
+            StationType: state.Docked ? state.StationType : null,
+            Mode: FlightToken(state.Flight),
+            Status: FlightStatus(state));
 
     /// <param name="showLocation">
     /// Whether Location is shown. The jump destination is where the commander will be in fifteen

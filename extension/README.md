@@ -434,7 +434,7 @@ message at 5 KiB, so keys are short and lists are capped app-side.
   "subline": "Flying Krait Phantom (PH-01)",
   "cmdr":     { "name": …, "credits": …, "ranks": [{ "label", "name", "pct", "elite" }] },
   "ship":     { "type", "name", "ident", "fuel", "fuelMax", "cargo", "jump" },
-  "loc":      { "system", "body", "docked", "station", "stationType" },
+  "loc":      { "system", "body", "docked", "station", "stationType", "mode", "status" },
   "carrier":  { "name", "callsign", "fuel", "jump", "pendingSystem", "departsAt" },
   "exo":      { "pendingValue", "pendingCount", "soldValue", "soldCount", "firsts",
                 "genus", "species", "samples", "body", "signals" },
@@ -450,6 +450,29 @@ message at 5 KiB, so keys are short and lists are capped app-side.
 machine, so there is nothing for this frontend to hide. Treat a missing section as "not shown", and
 never assume a field is present or well-formed: a `null` list entry or a missing number is skipped,
 never printed as `null`. `dev/sample-state.json` is a complete example.
+
+### What the commander is doing (`loc.mode`, `loc.status`)
+
+`loc.mode` is a stable token for the frontend to branch on; `loc.status` is the same thing in words,
+shown as the location section's Status row, and the headline leads with it ("Supercruise · Nervi",
+"Landed · Nervi / Nervi 2 a", "Jumping to Colonia"). Both come from the game's `Status.json` flags,
+re-read every quarter second, so an undock, a supercruise entry or a touchdown reaches viewers within
+the app's publish interval (5 s) rather than waiting for the next journal event.
+
+| `mode` | `status` | Meaning |
+|---|---|---|
+| `docked` | Docked | On a landing pad |
+| `landed` | Landed | On a planet's surface in the ship |
+| `space` | Flying in normal space | |
+| `surface` | Flying low over the surface | Close to a planet (the game reports a latitude and longitude) |
+| `supercruise` | In supercruise | |
+| `hyperspace` | Jumping to *system* / In hyperspace | Mid-jump; the destination is withheld with the rest of Location |
+| `srv` | Driving the SRV | |
+| `foot` | On foot | Odyssey, in a station or on a planet |
+
+Both are optional and absent until the game has said (before the first `Status.json`), and a frontend
+that does not know them ignores them and keeps using `docked`, so the schema version is unchanged. They
+belong to the **Location** section: hiding it hides these, and the jump destination, with it.
 
 ### Changing the contract
 
