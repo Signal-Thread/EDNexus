@@ -213,8 +213,30 @@ const VIEWS = {
   'video_overlay.html': { shell: 'js/card.js', css: 'css/card.css' },
   'panel.html': { shell: 'js/page.js', css: 'css/page.css', dataView: 'panel' },
   'mobile.html': { shell: 'js/page.js', css: 'css/mobile.css', dataView: 'mobile' },
-  'component.html': { shell: 'js/component.js', css: 'css/component.css' },
+  // The video component is a small box with no footer mark, so it has nothing to link.
+  'component.html': { shell: 'js/component.js', css: 'css/component.css', brand: false },
 };
+
+// The extension's only link out is to the project site, opened in a new tab without passing the
+// channel page along (mirrors the "Check the bundle" step in .github/workflows/extension-package.yml).
+const SITE = 'https://signal-thread.github.io/EDNexus/';
+
+function assertOnlyProjectLinks(html) {
+  for (const tag of html.match(/<a\s[^>]*>/g) || []) {
+    assert.ok(tag.includes(`href="${SITE}"`), `link to somewhere else: ${tag}`);
+    assert.ok(tag.includes('target="_blank"'), `link without target="_blank": ${tag}`);
+    assert.ok(tag.includes('rel="noopener noreferrer"'), `link without rel="noopener noreferrer": ${tag}`);
+  }
+  for (const line of html.split(/\r?\n/)) {
+    if (/\starget=/.test(line)) assert.ok(/<a\s[^>]*\btarget="_blank"/.test(line), `target= on a non-link: ${line.trim()}`);
+  }
+}
+
+test('the config page links to the project site and nowhere else', () => {
+  const html = read('config.html');
+  assertOnlyProjectLinks(html);
+  assert.ok(/<a\s[^>]*class="ednx-link"/.test(html), 'no project-site link on the config page');
+});
 
 for (const [file, spec] of Object.entries(VIEWS)) {
   const html = read(file);
@@ -231,11 +253,17 @@ for (const [file, spec] of Object.entries(VIEWS)) {
     for (const h of hrefs) assert.ok(fs.existsSync(path.join(root, h)), `${h} does not exist`);
   });
 
-  test(`${file}: no inline script/style and no links out (the bundle workflow rejects them)`, () => {
+  test(`${file}: no inline script or style`, () => {
     assert.ok(!/<script(?![^>]*\bsrc=)/.test(html), 'inline <script>');
     assert.ok(!/<style/.test(html), 'inline <style>');
     assert.ok(!/\sstyle=/.test(html), 'style= attribute');
-    assert.ok(!/\starget=/.test(html), 'target= link');
+  });
+
+  test(`${file}: the EDNexus mark links to the project site and nowhere else is linked`, () => {
+    assertOnlyProjectLinks(html);
+    if (spec.brand === false) return;
+    const brand = html.match(/<a\s[^>]*class="ednx-brand"[^>]*>EDNexus<\/a>/);
+    assert.ok(brand, 'the footer mark is not the project-site link');
   });
 
   if (spec.dataView) {

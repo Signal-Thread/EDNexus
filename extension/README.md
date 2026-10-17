@@ -258,7 +258,7 @@ must sit at the **root of the zip**. Do not zip this folder by hand.
 The **`Twitch extension bundle`** workflow (`.github/workflows/extension-package.yml`) builds it:
 
 - It zips `extension/` **excluding `dev/` and `README.md`**, after checking that the viewer paths
-  exist, every view loads the Twitch helper, no inline script/style or `target=` link slipped in, and
+  exist, every view loads the Twitch helper, no inline script/style or link other than the project-site one slipped in, and
   `dev/` did not leak. It runs on every change to `extension/` (push to `main`, tags `v*`, pull
   requests) and on demand (Actions → *Twitch extension bundle* → *Run workflow*).
 - **To get the zip**, open the latest successful run on `main` (or the run for your release tag),
@@ -348,7 +348,12 @@ None of these ship in the bundle, so they are easy to forget until review asks:
       look in the Network panel, step 7.8).
 - [ ] CSP-safe: no inline `<script>`, no `<style>`, no `style=` attributes, no `eval`. (CI rejects the
       first three; `js/card.js` sets `element.style.width` through the CSSOM, which is allowed.)
-- [ ] No links out of the overlay (the GitHub link was removed; CI rejects `target=`).
+- [ ] The only link out is the EDNexus mark (overlay, panel and mobile footers, and the install step on
+      the config page), to the project site <https://signal-thread.github.io/EDNexus/>, in a new tab
+      with `rel="noopener noreferrer"`. CI rejects any other `<a>` or `target=`. It was removed once as
+      a review risk and restored deliberately: if review objects to a link in a viewer view, drop it
+      from the footers (the config page is the broadcaster's and is much less likely to matter).
+      **(verify in console)**
 - [ ] Every view that a version declares has been looked at with `?mock=1`, `&stale=40` and `&v=2` at
       its real size, and with no commander publishing (panel and mobile show their note; overlay and
       component show nothing).
@@ -467,7 +472,8 @@ Worth stating in the listing and the privacy policy, and worth knowing before yo
   jump, locatable.
 - **What the extension itself collects: nothing.** It requests no Twitch identity, sets no cookies,
   and stores one value in the viewer's `localStorage` (whether the panel is open). The only requests
-  are to the Twitch helper script and the EBS, which sees the viewer's IP address and the channel id
+  are to the Twitch helper script and the EBS (a viewer who clicks the EDNexus mark leaves for the
+  project site in a new tab, without the channel page as referrer), which sees the viewer's IP address and the channel id
   like any web server. The EBS retains each channel's last card until it is cleared or ages out
   (`Ebs__ChannelStateMaxAgeHours`).
 - This is documentation of the current behaviour, not a change to it: the contract is unchanged.
@@ -508,7 +514,10 @@ described under *Against the real Twitch console*.
   carrier name, mission targets) that originate in the game and pass through the broadcaster's
   machine before landing in every viewer's browser. `js/card.js` builds nodes and sets
   `textContent`; keep it that way.
-- **No external links from the overlay**, and no requests except the Twitch helper and the EBS.
+- **One link out, and no requests except the Twitch helper and the EBS.** The link is the EDNexus
+  mark to the project site, `target="_blank"` with `rel="noopener noreferrer"` (so it neither
+  replaces the extension frame nor passes the channel page along), and it is a user click, not a
+  request the page makes. The bundle workflow and `dev/test-views.js` both enforce exactly that link.
 - **The overlay must stay click-through.** The iframe covers the whole player, so `body` is
   `pointer-events: none` and only the handle and the open panel re-enable it.
 - **Vanilla JS, no build step.** What is in this folder is what gets uploaded.

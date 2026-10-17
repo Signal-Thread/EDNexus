@@ -87,3 +87,8 @@ input[type="url"]:focus { outline: 2px solid var(--ednx-orange); outline-offset:
 .status { font-size: var(--ednx-text-label); }
 .status--ok { color: var(--ednx-good); }
 .status--error { color: var(--ednx-bad); }
+
+/* The one link on this page: to the project site, so a broadcaster can find the app. */
+.ednx-link { color: var(--ednx-orange); text-decoration: underline; text-underline-offset: 2px; }
+.ednx-link:hover { color: var(--ednx-ink); }
+.ednx-link:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: 2px; border-radius: 2px; }

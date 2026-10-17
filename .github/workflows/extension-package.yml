@@ -75,12 +75,29 @@ jobs:
             fi
           done
 
-          # Twitch's extension CSP rejects inline script and style, and a review flags links out of
-          # an overlay. Both are cheap to catch here and slow to catch in review.
-          if grep -nP '<script(?![^>]*\bsrc=)|<style|\sstyle=|\starget=' bundle/*.html; then
-            echo "::error::inline script/style or a target= link in a view (see the lines above)"
+          # Twitch's extension CSP rejects inline script and style. Cheap to catch here, slow in review.
+          if grep -nP '<script(?![^>]*\bsrc=)|<style|\sstyle=' bundle/*.html; then
+            echo "::error::inline script or style in a view (see the lines above)"
             fail=1
           fi
+
+          # The only link out of the extension is the EDNexus mark, to the project site: opened in a new
+          # tab, with noopener noreferrer so it neither replaces the extension frame nor passes the
+          # channel page along. Any other <a>, or a target= on anything else, is a mistake. Keep each
+          # <a ...> tag on one line: this check reads it that way.
+          site="https://signal-thread.github.io/EDNexus/"
+          if grep -nP '\starget=' bundle/*.html | grep -vP '<a\s[^>]*\btarget="_blank"'; then
+            echo "::error::target= on something other than a link (see the lines above)"
+            fail=1
+          fi
+          while IFS= read -r tag; do
+            for need in "href=\"$site\"" 'target="_blank"' 'rel="noopener noreferrer"'; do
+              case "$tag" in
+                *"$need"*) ;;
+                *) echo "::error::a link out of the extension is not allowed as written ($need missing): $tag"; fail=1 ;;
+              esac
+            done
+          done < <(grep -ohP '<a\s[^>]*>' bundle/*.html || true)
 
           exit $fail
 

@@ -121,5 +121,11 @@ html, body {
 /* The stale note and brand mark that close every view. */
 .ednx-brand { margin-left: auto; color: var(--ednx-ink-faint); letter-spacing: 0.06em; }
 
+/* The mark is a link to the project site: quiet until pointed at or focused, like the rest of the
+   footer, but unmistakably interactive then. */
+a.ednx-brand { text-decoration: none; border-radius: 3px; }
+a.ednx-brand:hover { color: var(--ednx-ink); text-decoration: underline; }
+a.ednx-brand:focus-visible { color: var(--ednx-ink); outline: 2px solid var(--ednx-orange); outline-offset: 2px; }
+
 .ednx-stale { color: var(--ednx-warning); }
 .ednx-stale:empty { display: none; }

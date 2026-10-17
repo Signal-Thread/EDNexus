@@ -78,4 +78,10 @@ html, body { height: 100%; }
 .ednx-meter { height: 6px; margin-top: 6px; }
 .ednx-pip { width: 10px; height: 10px; }
 
-.ednx-card__foot { padding: 10px 16px; }
+/* The footer's link is a touch target: the footer gives up its padding so the link can be 44px tall. */
+.ednx-card__foot { padding: 0 16px; }
+a.ednx-brand {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--ednx-touch-target);
+}
