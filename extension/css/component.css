@@ -1,0 +1,100 @@
+/*
+ * EDNexus commander card — Twitch video component.
+ *
+ * A compact box the broadcaster places and sizes over the stream. Like the overlay it sits on live
+ * video, so it uses the translucent overlay surface; unlike the overlay the iframe is only as big as
+ * the box the broadcaster gave it, so it can take pointer events everywhere. The card's contents are
+ * styled in sections.css.
+ */
+
+@import url("sections.css");
+
+:root {
+  --ednx-bg: var(--ednx-overlay-bg);
+  --ednx-bg-raised: var(--ednx-overlay-raised);
+  --ednx-line: var(--ednx-overlay-line);
+  --ednx-radius: 8px;
+}
+
+html, body { background: transparent; }
+.ednx-body { overflow: hidden; }
+
+/* Nothing to show: draw nothing. `display: flex` below would otherwise beat the [hidden] rule. */
+.ednx-comp[hidden] { display: none; }
+
+.ednx-comp {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  /* Hugs its content, never taller than the box the broadcaster gave it. */
+  max-height: 100%;
+  border: 1px solid var(--ednx-line);
+  border-left: 3px solid var(--ednx-orange);
+  border-radius: var(--ednx-radius);
+  background: var(--ednx-bg);
+  backdrop-filter: blur(6px);
+  overflow: hidden;
+}
+
+.ednx-comp[data-stale="true"] { border-left-color: var(--ednx-warning); }
+.ednx-comp[data-state="error"] { border-left-color: var(--ednx-bad); }
+
+.ednx-comp__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 8px 6px 10px;
+}
+
+.ednx-comp__title { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+
+.ednx-comp__cmdr {
+  font-size: var(--ednx-text-label);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ednx-comp__where {
+  font-size: var(--ednx-text-label);
+  color: var(--ednx-orange);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ednx-comp__where:empty { display: none; }
+
+.ednx-comp__toggle {
+  flex: none;
+  display: flex;
+  padding: 3px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ednx-ink-faint);
+  cursor: pointer;
+  transition: transform 140ms ease;
+}
+
+.ednx-comp__toggle:hover { color: var(--ednx-ink); background: var(--ednx-bg-raised); }
+.ednx-comp__toggle:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: 1px; }
+.ednx-comp__toggle[aria-expanded="true"] { transform: rotate(180deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ednx-comp__toggle { transition: none; }
+}
+
+.ednx-comp__body { min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.ednx-comp__body > .ednx-sections { min-height: 0; }
+.ednx-comp__body [hidden] { display: none; }
+
+/* The compact summary: a couple of label/value blocks. */
+.ednx-summary { display: flex; flex-direction: column; gap: 8px; padding: 0 10px 8px; }
+.ednx-summary .ednx-rank__value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.ednx-comp__foot { padding: 0 10px 6px; font-size: var(--ednx-text-label); }
+.ednx-comp__foot:has(.ednx-stale:empty) { display: none; }

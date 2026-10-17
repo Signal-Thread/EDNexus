@@ -1,0 +1,75 @@
+/*
+ * EDNexus commander card — the views that are a whole card on a page of their own: the Panel (under
+ * the stream) and, with mobile.css on top, the Mobile view.
+ *
+ * Unlike the overlay (card.css) these sit on an opaque surface: a panel renders on the channel page,
+ * in Twitch's light or dark theme, and must not depend on what is behind it. The card's contents are
+ * styled in sections.css.
+ */
+
+@import url("sections.css");
+
+:root {
+  --ednx-bg: var(--ednx-page-bg);
+  --ednx-bg-raised: var(--ednx-page-raised);
+  --ednx-line: var(--ednx-page-line);
+  --ednx-radius: 8px;
+}
+
+html, body { background: var(--ednx-bg); }
+body { overflow: hidden; }
+
+/* `display: flex` below would otherwise beat the user agent's [hidden] rule. */
+.ednx-card[hidden] { display: none; }
+
+.ednx-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  border-left: 3px solid var(--ednx-orange);
+}
+
+/* A card the app has stopped feeding, or a service that cannot be reached, says so at the edge. */
+.ednx-card[data-stale="true"] { border-left-color: var(--ednx-warning); }
+.ednx-card[data-state="error"] { border-left-color: var(--ednx-bad); }
+
+.ednx-card__head {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--ednx-line);
+}
+
+.ednx-card__cmdr {
+  font-size: var(--ednx-text-body);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ednx-card__where {
+  font-size: var(--ednx-text-label);
+  color: var(--ednx-orange);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ednx-card__where:empty { display: none; }
+
+/* The sections take whatever height the head and foot leave, and scroll inside it. */
+.ednx-card .ednx-sections { flex: 1; min-height: 0; }
+
+.ednx-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--ednx-line);
+  font-size: var(--ednx-text-label);
+  color: var(--ednx-ink-faint);
+}

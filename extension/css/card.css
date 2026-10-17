@@ -1,6 +1,9 @@
 /*
  * EDNexus commander card — Twitch video overlay.
  *
+ * The card's contents are styled in sections.css (shared with the panel, video component and mobile
+ * views); this file frames them as a flyout over the stream.
+ *
  * Two rules shape everything here:
  *  1. The iframe covers the whole player. Nothing but the handle and the open panel may take
  *     pointer events, or the viewer loses the ability to click the stream behind it.
@@ -8,12 +11,10 @@
  *     hovered; the panel only exists once a viewer asks for it.
  */
 
-@import url("tokens.css");
+@import url("sections.css");
 
 :root {
-  /* Colours come from tokens.css (rule 8). --ednx-ink-faint is rgba(…, 0.55): 0.38 measured 3.2:1
-     on the panel, under the 4.5:1 minimum; 0.55 measures 5.7:1 on a dark player and 5.3:1 with a
-     bright video behind the 92%-opaque panel. */
+  /* Colours come from tokens.css (rule 8); the overlay surface is translucent, over live video. */
   --ednx-bg: var(--ednx-overlay-bg);
   --ednx-bg-raised: var(--ednx-overlay-raised);
   --ednx-line: var(--ednx-overlay-line);
@@ -22,17 +23,7 @@
   --ednx-panel-w: 330px;
 }
 
-* { box-sizing: border-box; }
-
-html, body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  background: transparent;
-  font-family: var(--ednx-font);
-  color: var(--ednx-ink);
-  -webkit-font-smoothing: antialiased;
-}
+html, body { background: transparent; }
 
 /* The overlay must be click-through everywhere the card is not. */
 .ednx-body { pointer-events: none; overflow: hidden; }
@@ -41,19 +32,6 @@ html, body {
    channel that has it installed but is not playing shows no tab. `display: flex` on .ednx-root would
    otherwise beat the user agent's [hidden] rule. */
 .ednx-root[hidden] { display: none; }
-
-/* Text for assistive tech only: the live region that announces connection and staleness changes. */
-.ednx-sr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
 
 .ednx-root {
   position: absolute;
@@ -205,86 +183,6 @@ html, body {
 .ednx-close:hover { color: var(--ednx-ink); background: var(--ednx-bg-raised); }
 .ednx-close:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: 1px; }
 
-/* -------------------------------------------------------------- sections -- */
-
-.ednx-sections {
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 2px 0;
-}
-
-/* The list scrolls, so keyboard users must be able to reach it to scroll it. */
-.ednx-sections:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: -2px; }
-
-.ednx-sections::-webkit-scrollbar { width: 6px; }
-.ednx-sections::-webkit-scrollbar-thumb { background: var(--ednx-line); border-radius: 3px; }
-
-.ednx-section { padding: 9px 12px; border-bottom: 1px solid var(--ednx-line); }
-.ednx-section:last-child { border-bottom: 0; }
-
-.ednx-section__title {
-  margin: 0 0 6px;
-  font-size: var(--ednx-text-label);
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--ednx-ink-faint);
-}
-
-/* Label/value rows — the backbone of most sections. */
-.ednx-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: var(--ednx-text-label); }
-.ednx-rows dt { color: var(--ednx-ink-soft); white-space: nowrap; }
-.ednx-rows dd {
-  margin: 0;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ednx-num { font-family: var(--ednx-mono); }
-
-/* Meters: fuel, rank progress, sample runs. */
-.ednx-meter {
-  position: relative;
-  height: 4px;
-  margin-top: 4px;
-  border-radius: 2px;
-  background: var(--ednx-bg-raised);
-  overflow: hidden;
-}
-
-.ednx-meter__fill { height: 100%; border-radius: 2px; background: var(--ednx-orange); }
-.ednx-meter__fill--low { background: var(--ednx-bad); }
-
-.ednx-ranks { display: flex; flex-direction: column; gap: 6px; }
-.ednx-rank__line { display: flex; justify-content: space-between; gap: 8px; font-size: var(--ednx-text-label); }
-.ednx-rank__name { color: var(--ednx-ink-soft); }
-.ednx-rank__value { font-weight: 600; }
-
-.ednx-elite { color: var(--ednx-orange); }
-
-/* Pips for the three-sample exobiology run. */
-.ednx-pips { display: inline-flex; gap: 3px; vertical-align: middle; }
-.ednx-pip { width: 7px; height: 7px; border: 1px solid var(--ednx-orange-dim); border-radius: 50%; }
-.ednx-pip--on { background: var(--ednx-orange); border-color: var(--ednx-orange); }
-
-.ednx-tag {
-  display: inline-block;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--ednx-bg-raised);
-  color: var(--ednx-ink-soft);
-  font-size: var(--ednx-text-label);
-}
-
-.ednx-more { margin-top: 5px; font-size: var(--ednx-text-label); color: var(--ednx-ink-faint); }
-
-.ednx-empty { padding: 18px 12px; text-align: center; font-size: var(--ednx-text-label); color: var(--ednx-ink-faint); }
-
-/* ------------------------------------------------------------------ foot -- */
-
 .ednx-panel__foot {
   display: flex;
   align-items: center;
@@ -295,11 +193,6 @@ html, body {
   font-size: var(--ednx-text-label);
   color: var(--ednx-ink-faint);
 }
-
-.ednx-brand { margin-left: auto; color: var(--ednx-ink-faint); letter-spacing: 0.06em; }
-
-.ednx-stale { color: var(--ednx-warning); }
-.ednx-stale:empty { display: none; }
 
 /* Short players (mobile portrait, small theatre mode) get a shorter, narrower card. */
 @media (max-height: 420px) {

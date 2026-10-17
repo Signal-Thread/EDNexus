@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EDNexus — Commander Card (panel)</title>
+  <link rel="stylesheet" href="css/page.css">
+</head>
+<!--
+  The Panel view: an always-on card in the panel area under the stream. Twitch fixes the panel's
+  width and lets the broadcaster pick its height; the card fills it and scrolls inside.
+
+  Unlike the overlay, the panel's space is already allocated whether or not there is anything to
+  show, so when no commander is publishing it carries a one-line note rather than a blank rectangle.
+  js/page.js reads data-view to choose this layout (EDNexusModel.layoutFor).
+-->
+<body data-view="panel">
+  <!-- Announces connection and staleness changes to assistive tech. Written by js/session.js. -->
+  <p class="ednx-sr" id="live" role="status" aria-live="polite"></p>
+
+  <main class="ednx-card" id="root" data-state="idle" data-stale="false" aria-label="Commander information">
+    <header class="ednx-card__head">
+      <span class="ednx-card__cmdr" id="cmdr-name">EDNexus</span>
+      <span class="ednx-card__where" id="cmdr-where"></span>
+    </header>
+
+    <!-- Sections are written by js/page.js; each one removes itself when the broadcaster has hidden
+         it or the game has not reported anything for it yet. -->
+    <div class="ednx-sections" id="sections" tabindex="0" role="region" aria-label="Commander details"></div>
+
+    <footer class="ednx-card__foot">
+      <span class="ednx-stale" id="stale"></span>
+      <span class="ednx-brand">EDNexus</span>
+    </footer>
+  </main>
+
+  <!-- Twitch's extension helper. Must load before our own scripts: it defines window.Twitch.ext,
+       which carries auth, the configuration service and the PubSub subscription. -->
+  <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
+  <script src="js/state.js"></script>
+  <script src="js/model.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/session.js"></script>
+  <script src="js/page.js"></script>
+</body>
+</html>

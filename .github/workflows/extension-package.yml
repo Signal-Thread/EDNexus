@@ -34,6 +34,9 @@ jobs:
       - name: Check the transport logic
         run: node extension/dev/test-state.js
 
+      - name: Check the views (what each shows, and that every entry page is wired up)
+        run: node extension/dev/test-views.js
+
       - name: Stage the files Twitch serves
         run: |
           mkdir -p bundle
@@ -48,7 +51,10 @@ jobs:
           fail=0
 
           # Paths configured in the developer console, resolved against the Base URI.
-          for required in video_overlay.html config.html js/state.js js/card.js js/config.js css/tokens.css css/card.css css/config.css; do
+          views="video_overlay.html panel.html component.html mobile.html config.html"
+          scripts="js/state.js js/model.js js/render.js js/session.js js/card.js js/page.js js/component.js js/config.js"
+          styles="css/tokens.css css/sections.css css/card.css css/page.css css/mobile.css css/component.css css/config.css"
+          for required in $views $scripts $styles; do
             if [ ! -f "bundle/$required" ]; then
               echo "::error::missing from the bundle: $required"
               fail=1
@@ -62,7 +68,7 @@ jobs:
           fi
 
           # Every view needs Twitch's helper or window.Twitch.ext never exists and the view is inert.
-          for view in video_overlay.html config.html; do
+          for view in $views; do
             if ! grep -q 'twitch-ext.min.js' "bundle/$view"; then
               echo "::error::$view does not load the Twitch helper script"
               fail=1

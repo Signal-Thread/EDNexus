@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EDNexus — Commander Card (video component)</title>
+  <link rel="stylesheet" href="css/component.css">
+</head>
+<!--
+  The Video Component view: a compact summary the broadcaster places and sizes on the stream — where
+  the commander is, the ship with its fuel, one rank bar. A viewer can expand it to the full card
+  (the same sections as the overlay and panel) and collapse it again.
+
+  Like the overlay it draws nothing unless there is a live card, so a channel that is not playing
+  shows no empty box; the iframe is only as big as the box the broadcaster gave it. js/component.js.
+-->
+<body class="ednx-body">
+  <!-- Announces connection and staleness changes to assistive tech. Written by js/session.js. -->
+  <p class="ednx-sr" id="live" role="status" aria-live="polite"></p>
+
+  <div class="ednx-comp" id="root" data-expanded="false" data-state="idle" data-stale="false" hidden>
+    <header class="ednx-comp__head">
+      <div class="ednx-comp__title">
+        <span class="ednx-comp__cmdr" id="cmdr-name">CMDR</span>
+        <span class="ednx-comp__where" id="cmdr-where"></span>
+      </div>
+      <button type="button" class="ednx-comp__toggle" id="toggle" aria-expanded="false"
+              aria-controls="body" aria-label="Show the full commander card">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 9l6 6 6-6"></path>
+        </svg>
+      </button>
+    </header>
+
+    <div class="ednx-comp__body" id="body">
+      <!-- The compact summary, shown until a viewer expands the card. -->
+      <div id="summary"></div>
+      <!-- The full card, shown once expanded. -->
+      <div class="ednx-sections" id="sections" tabindex="0" role="region" aria-label="Commander details" hidden></div>
+    </div>
+
+    <footer class="ednx-comp__foot">
+      <span class="ednx-stale" id="stale"></span>
+    </footer>
+  </div>
+
+  <!-- Twitch's extension helper. Must load before our own scripts: it defines window.Twitch.ext. -->
+  <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
+  <script src="js/state.js"></script>
+  <script src="js/model.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/session.js"></script>
+  <script src="js/component.js"></script>
+</body>
+</html>

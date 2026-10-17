@@ -1,6 +1,7 @@
 # EDNexus Twitch Extension — commander card
 
-The viewer-facing half of EDNexus's Twitch integration: a **flyout card** drawn over the stream.
+The viewer-facing half of EDNexus's Twitch integration: the commander card, in every extension view
+type Twitch offers (see [Views](#views)). The headline one is a **flyout card** drawn over the stream.
 Collapsed, it is a small tab on the left edge showing one line ("Docked at Jameson Memorial").
 Clicking it slides out a panel with the commander's ship, location, ranks, exobiology progress,
 missions, mining and cargo; closing it puts the stream back in full view. Collapsed is the default,
@@ -14,33 +15,58 @@ TwitchStreamCardService  ──POST──►  /api/update-state  ──PubSub─
                                                                       and again when quiet)
 ```
 
-Sections: [Layout](#layout) · [What viewers see](#what-viewers-see-and-when) ·
+Sections: [Views](#views) · [Layout](#layout) · [What viewers see](#what-viewers-see-and-when) ·
 [Developing locally](#developing-locally) · [Submission & go-live checklist](#submission--go-live-checklist) ·
 [Broadcaster setup](#broadcaster-setup) · [The payload](#the-payload) ·
 [Publishing contract](#publishing-contract-with-the-desktop-app) · [Privacy](#privacy-notes) ·
-[Conventions](#conventions)
+[Troubleshooting](#troubleshooting) · [Conventions](#conventions)
+
+## Views
+
+One renderer, several shells: every view loads the same transport, model, renderer and session code,
+and differs only in how it frames the card. All of them read the same public snapshot, so the
+desktop app needs no setting for any of them.
+
+| View | Entry page | Where viewers see it | Shows | When there is no live card |
+|---|---|---|---|---|
+| **Video overlay** | `video_overlay.html` | Over the whole player | A small tab that opens into the full card | Nothing |
+| **Panel** | `panel.html` | Always-on, under the stream (a fixed narrow width, 318 px when this was written; verify in console) | The full card, scrolling inside the panel | A one-line note: the panel's space is already allocated, so a blank box would be worse |
+| **Video component** | `component.html` | A box the broadcaster places and sizes on the stream | A compact summary (place, ship and fuel, one rank bar) that expands to the full card | Nothing |
+| **Mobile** | `mobile.html` | The Twitch mobile app | The full card as one touch-sized column; each section folds behind a 44 px button, the first two start open | A one-line note |
+
+The per-view rules (hide when idle, fold sections, how many start open) live in one place,
+`EDNexusModel.layoutFor` in `js/model.js`, and `dev/test-views.js` tests them.
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `video_overlay.html` | The overlay itself — the handle plus the panel. |
+| `video_overlay.html` | The overlay itself — the handle plus the flyout. |
+| `panel.html` · `component.html` · `mobile.html` | The other viewer views (see [Views](#views)). |
 | `config.html` | Broadcaster config page. Setup guidance only; nothing to configure (see below). |
-| `css/tokens.css` | Every colour and the type scale, shared by both views (AGENTS.md rule 8). |
-| `css/card.css` | Overlay styling. Click-through everywhere the card is not. |
+| `css/tokens.css` | Every colour and the type scale, shared by every view (AGENTS.md rule 8). The mobile-only touch sizes are defined here too. |
+| `css/sections.css` | The card's contents (rows, meters, ranks), shared by every view. A view's own stylesheet frames it. |
+| `css/card.css` | Overlay framing. Click-through everywhere the card is not. |
+| `css/page.css` · `css/mobile.css` · `css/component.css` | Framing for the panel (and, with `mobile.css` on top, the mobile view) and the video component. |
 | `css/config.css` | Config page styling. |
 | `js/state.js` | Transport: initial-state fetch (with Retry-After, backoff and jitter, retried for as long as the page is open) plus the PubSub subscription. With a card on screen and nothing heard for 12 minutes it asks `/api/initial-state` again, so a viewer who missed the "offline" broadcast drops the card (404) or picks up a newer one. No rendering. |
-| `js/card.js` | Rendering, connection-status handling and flyout behaviour. No network. |
+| `js/model.js` | Everything that is not DOM: formatting, what a viewer sees in a given state (`deriveView`), staleness, the compact summary and the per-view layout. No network, no `document`, so it runs under Node. |
+| `js/render.js` | Builds the card's sections (and the compact summary) as DOM. The only place a payload string reaches the page, always via `textContent`. |
+| `js/session.js` | Connects the transport to a view: status and snapshot in, `deriveView` and staleness out, screen-reader announcements, the 30 s tick. |
+| `js/card.js` · `js/page.js` · `js/component.js` | The shells: the overlay's flyout; the panel and mobile pages (`data-view` picks which); the video component. Framing only. |
 | `js/config.js` | Config page: only the localhost-only developer form. |
 | `dev/sample-state.json` | A representative payload for local development. Not in the upload. |
 | `dev/serve-https.py` | Serves this folder over TLS for Twitch local testing. Not in the upload. |
 | `dev/test-state.js` | Dependency-free Node checks for `js/state.js`. Not in the upload; CI runs it. |
+| `dev/test-views.js` | Dependency-free Node checks for `js/model.js` and the view entry pages (script order, files exist, no inline script or hand-picked colours). Not in the upload; CI runs it. |
 
 ## What viewers see, and when
 
 The extension is installed on a channel whether or not the broadcaster is playing Elite, so the
-overlay draws **nothing** unless there is something to say. `js/card.js` derives the view from the
-transport's status and the last snapshot:
+overlay and the video component draw **nothing** unless there is something to say. (The panel and
+mobile views already own their space, so they show a one-line note instead of a blank box.)
+`js/model.js` derives the view from the transport's status and the last snapshot; the table below
+describes the overlay, and the other views follow the same rules:
 
 | Situation | Viewer sees |
 |---|---|
@@ -65,14 +91,21 @@ never comes.
 python -m http.server 8931 --directory extension
 ```
 
-Then open <http://127.0.0.1:8931/video_overlay.html?mock=1>. Two more flags show the states that
+Then open <http://127.0.0.1:8931/video_overlay.html?mock=1>, or any other view the same way
+(`panel.html`, `component.html`, `mobile.html`). Two more flags show the states that
 are otherwise hard to reach: `&stale=40` ages the sample by 40 minutes, and `&v=2` stamps it with a
 schema newer than the frontend understands.
 
-Run the transport checks (retry/backoff, Retry-After, render errors, EBS override rules):
+Look at each view at the size it will really have: the panel is 318 px wide, the mobile view is a
+phone (about 375 px), and the video component is whatever the broadcaster draws, from roughly
+250 px wide up. The browser's device toolbar (or `resize_window`) is enough.
+
+Run the transport checks (retry/backoff, Retry-After, render errors, EBS override rules) and the
+view checks (what each view shows, staleness, the compact summary, per-view layout, entry-page wiring):
 
 ```bash
 node extension/dev/test-state.js
+node extension/dev/test-views.js
 ```
 
 ### The EBS the extension reads from
@@ -158,11 +191,19 @@ and is not repeated here.
 
 ### 1. Extension type and views
 
-- [ ] **Extension type**: **Video — Fullscreen** only. It hands the extension the whole video area as
-      a transparent canvas, which is what `video_overlay.html` is written against. Leave Panel,
-      Video — Component and Mobile unticked: this folder ships one viewer path, and Twitch's review
-      exercises every type a version declares. The cost: a video extension does not render for
-      mobile-app viewers, who see nothing until a Panel/Mobile view exists. **(verify in console)**
+- [ ] **Extension type, first submission**: **Video — Fullscreen** only. It hands the extension the
+      whole video area as a transparent canvas, which is what `video_overlay.html` is written
+      against. Leave Panel, Video — Component and Mobile unticked for the *first* version: Twitch's
+      review exercises every type a version declares, so a problem in a newer view must not hold up
+      the first release. The bundle already contains the other views' files (they are inert until a
+      version declares a path for them). The cost: a video extension does not render for mobile-app
+      viewers until the Mobile view is declared. **(verify in console)**
+- [ ] **Later versions: add the other views** once the first is approved and live. Each is a new
+      version (and a new review) that declares a path; tick them together or one at a time:
+      **Panel** `panel.html` (viewer height: pick within the console's range; the card scrolls inside
+      it, so a shorter panel still works); **Video — Component** `component.html` (the broadcaster
+      sizes it; the layout is fluid down to about 250 px wide); **Mobile** `mobile.html`. Check each
+      with the console's hosted test and its own listing screenshot (section 6). **(verify in console)**
 - [ ] **Video — Fullscreen Viewer Path**: `video_overlay.html` (the file name predates the console's
       current type labels).
 - [ ] **Config Path**: `config.html`. **Live Config Path**: leave empty.
@@ -308,6 +349,9 @@ None of these ship in the bundle, so they are easy to forget until review asks:
 - [ ] CSP-safe: no inline `<script>`, no `<style>`, no `style=` attributes, no `eval`. (CI rejects the
       first three; `js/card.js` sets `element.style.width` through the CSSOM, which is allowed.)
 - [ ] No links out of the overlay (the GitHub link was removed; CI rejects `target=`).
+- [ ] Every view that a version declares has been looked at with `?mock=1`, `&stale=40` and `&v=2` at
+      its real size, and with no commander publishing (panel and mobile show their note; overlay and
+      component show nothing).
 - [ ] The overlay is click-through everywhere but the tab and the open panel; the tab and panel are
       keyboard operable (Tab, Enter, Escape), the scrolling list is focusable, and state changes are
       announced through the live region.
@@ -334,10 +378,15 @@ What to tell a streamer (the same text is on the config page):
    Twitch password or a raw Twitch token.
 3. Tick **Show my session to viewers**, and choose the sections to share under it. Your credit balance
    is off until you turn it on; the rest start on.
-4. In the Twitch dashboard, **Extensions → My Extensions**, activate *EDNexus commander card* as a
-   **video overlay**.
+4. In the Twitch dashboard, **Extensions → My Extensions**, activate *EDNexus commander card* in the
+   slots you want: as a **video overlay** (a tab over the stream), a **panel** (always visible under
+   the stream), a **video component** (a small summary box you place on the stream), or any
+   combination. Each is switched on or off independently in Twitch, and none needs a setting in
+   the desktop app: they all show the same card.
 
-Viewers then see a small tab on the left of the stream while you play, and nothing otherwise. The card
+Viewers then see the card in each slot you activated while you play (the overlay and the video
+component show nothing otherwise; the panel shows a short note), and the Twitch mobile app shows
+it too once the mobile view is live. The card
 is removed when you switch it off, sign out, or close EDNexus. There is nothing to configure on the
 extension's own settings page.
 
@@ -422,6 +471,28 @@ Worth stating in the listing and the privacy policy, and worth knowing before yo
   like any web server. The EBS retains each channel's last card until it is cleared or ages out
   (`Ebs__ChannelStateMaxAgeHours`).
 - This is documentation of the current behaviour, not a change to it: the contract is unchanged.
+
+## Troubleshooting
+
+**The browser console says `Fetch API cannot load https://ednexus.signal-and-thread.com/api/initial-state/…
+Refused to connect because it violates the document's Content Security Policy`, and the card shows
+"Card unavailable".** Twitch builds the extension's CSP from the console's allowlist, so a host that
+is not listed is blocked *before any request is made* — the EBS never sees it, and the EBS being
+up does not help. In the developer console, on the version you are testing, **Capabilities → Allowlist
+for URL Fetching Domains**, add `https://ednexus.signal-and-thread.com` (exactly `DEFAULT_EBS`; no
+trailing slash or path). Twitch locks that field once a version leaves *Local Test*, so for a
+version already in Hosted Test or later you may need a new version. Then reload the channel page.
+**(verify in console)**
+
+The `postMessage … target origin ('https://supervisor.ext-twitch.tv') does not match … ('https://www.twitch.tv')`
+line that often sits beside it is Twitch's own page talking to itself and is harmless.
+
+**The page loads but the card never appears, with no CSP error.** `curl -i
+https://ednexus.signal-and-thread.com/api/initial-state/<channelId>`: `404` means the broadcaster is
+not publishing (EDNexus closed, the card switched off, or not signed in to Twitch); `200` with
+an `access-control-allow-origin` for your extension's `*.ext-twitch.tv` origin means the EBS is
+fine. Local Test from `https://localhost:8080` only passes CORS against a local EBS configured as
+described under *Against the real Twitch console*.
 
 ## Conventions
 
