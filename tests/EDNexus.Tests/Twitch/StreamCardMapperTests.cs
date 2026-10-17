@@ -528,4 +528,22 @@ public class StreamCardMapperTests
 
         Assert.NotEqual(before, StreamCardMapper.Map(state, now: Now).ContentFingerprint());
     }
+
+    [Fact]
+    public void Walking_around_a_station_is_on_foot_not_docked_even_though_the_ship_stays_docked()
+    {
+        // Status.json keeps the ship's Docked bit while the commander is out of it.
+        var state = new CommanderState
+        {
+            Docked = true,
+            StationName = "Jameson Memorial",
+            Flight = FlightMode.OnFoot,
+        };
+
+        var card = StreamCardMapper.Map(state, now: Now);
+
+        Assert.Equal("On foot at Jameson Memorial", card.Headline);
+        Assert.Equal("foot", card.Location!.Mode);
+        Assert.Equal("On foot", card.Location.Status);
+    }
 }

@@ -66,8 +66,12 @@ public static class StreamCardMapper
     {
         if (!visibility.Location) return "Elite Dangerous";
 
+        // The ship stays docked while the commander walks around the station, so "Docked at" would
+        // contradict the Status row; say they are on foot, and where.
         if (state.Docked && !string.IsNullOrWhiteSpace(state.StationDisplayName))
-            return $"Docked at {state.StationDisplayName}";
+            return state.Flight == FlightMode.OnFoot
+                ? $"On foot at {state.StationDisplayName}"
+                : $"Docked at {state.StationDisplayName}";
 
         // Mid-jump the commander has already left the system the journal last named, so say where
         // they are going rather than where they were.

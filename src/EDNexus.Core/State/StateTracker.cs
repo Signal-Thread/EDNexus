@@ -75,6 +75,9 @@ public sealed class StateTracker
         _state.SuitName = null;
         _state.SuitSymbol = null;
         _state.SuitClass = 0;
+        // Where the previous commander was heading must never be published under the new one's name.
+        _state.Flight = FlightMode.Unknown;
+        _state.JumpDestination = null;
     }
 
     private void OnLoadGame(JournalEntry e)

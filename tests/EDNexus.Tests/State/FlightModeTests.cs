@@ -164,4 +164,33 @@ public class FlightModeTests
 
         Assert.Equal(FlightMode.Unknown, state.Flight);
     }
+
+    [Fact]
+    public void A_different_commander_does_not_inherit_the_previous_ones_flight_or_jump_destination()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, """{"timestamp":"2026-10-17T01:00:00Z","event":"LoadGame","Commander":"Alpha"}""");
+        Publish(bus, """{"timestamp":"2026-10-17T01:20:20Z","event":"StartJump","JumpType":"Hyperspace","StarSystem":"Colonia"}""");
+        Publish(bus, Status(Bit(30) | Bit(24)));
+        Assert.Equal("Colonia", state.JumpDestination);
+        Assert.Equal(FlightMode.Hyperspace, state.Flight);
+
+        // Another account loads: the stream card must not say Bravo is jumping to Alpha's destination.
+        Publish(bus, """{"timestamp":"2026-10-17T02:00:00Z","event":"LoadGame","Commander":"Bravo"}""");
+
+        Assert.Null(state.JumpDestination);
+        Assert.Equal(FlightMode.Unknown, state.Flight);
+    }
+
+    [Fact]
+    public void Loading_the_same_commander_again_keeps_the_flight_state()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, """{"timestamp":"2026-10-17T01:00:00Z","event":"LoadGame","Commander":"Alpha"}""");
+        Publish(bus, Status(Bit(4) | Bit(24)));
+
+        Publish(bus, """{"timestamp":"2026-10-17T01:05:00Z","event":"LoadGame","Commander":"alpha"}""");
+
+        Assert.Equal(FlightMode.Supercruise, state.Flight);
+    }
 }
