@@ -21,6 +21,9 @@
     <!-- Announces connection and staleness changes to assistive tech, including while the panel is
          collapsed (when everything inside it is hidden from them). Written by js/card.js. -->
     <p class="ednx-sr" id="live" role="status" aria-live="polite"></p>
+    <!-- Says where the card went when it is moved with the keyboard. Separate from the one above so
+         the two never overwrite each other. -->
+    <p class="ednx-sr" id="move-live" role="status" aria-live="polite"></p>
 
     <!-- Collapsed state: the only thing on screen until a viewer asks for more. -->
     <button type="button" class="ednx-handle" id="handle" aria-expanded="false" aria-controls="panel">
@@ -45,26 +48,47 @@
 
     <!-- Expanded state: the card proper. Hidden from assistive tech while collapsed. -->
     <section class="ednx-panel" id="panel" aria-label="Commander information" hidden>
-      <header class="ednx-panel__head">
+      <!-- The header is the card's drag handle (js/card.js); the buttons inside it are not, so they
+           still click. The Move button is the keyboard route to the same thing: arrow keys move the
+           card, Shift moves it further, Home puts it back. -->
+      <header class="ednx-panel__head" id="drag-head">
         <div class="ednx-panel__title">
           <span class="ednx-panel__cmdr" id="cmdr-name">CMDR</span>
           <span class="ednx-panel__where" id="cmdr-where"></span>
         </div>
-        <button type="button" class="ednx-close" id="close" aria-label="Hide commander card">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round">
-            <path d="M18 6L6 18M6 6l12 12"></path>
-          </svg>
-        </button>
+        <div class="ednx-panel__tools">
+          <button type="button" class="ednx-tool" id="move" aria-label="Move the card" aria-describedby="move-hint">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"></path>
+            </svg>
+          </button>
+          <!-- Shown only once the viewer has moved the card off the default. -->
+          <button type="button" class="ednx-tool" id="reset-pos" aria-label="Put the card back where it started" hidden>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"></path>
+            </svg>
+          </button>
+          <button type="button" class="ednx-tool ednx-close" id="close" aria-label="Hide commander card">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6L6 18M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
       </header>
+      <p class="ednx-sr" id="move-hint">Drag the card, or use the arrow keys on this button to move it. Shift moves it further. Home puts it back.</p>
 
       <!-- Sections are written by js/card.js; each one removes itself when the broadcaster
            has hidden it or the game has not reported anything for it yet. -->
       <div class="ednx-sections" id="sections" tabindex="0" role="region" aria-label="Commander details"></div>
 
+      <!-- The EDNexus mark is the extension's only link out: to the project site, in a new tab, with
+           noopener noreferrer so the channel page is not passed along. CI allows exactly this link. -->
       <footer class="ednx-panel__foot">
         <span class="ednx-stale" id="stale"></span>
-        <span class="ednx-brand">EDNexus</span>
+        <a class="ednx-brand" href="https://signal-thread.github.io/EDNexus/" target="_blank" rel="noopener noreferrer" aria-label="EDNexus website (opens in a new tab)">EDNexus</a>
       </footer>
     </section>
   </div>
@@ -73,6 +97,10 @@
        which carries auth, the configuration service and the PubSub subscription. -->
   <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
   <script src="js/state.js"></script>
+  <script src="js/model.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/session.js"></script>
+  <script src="js/position.js"></script>
   <script src="js/card.js"></script>
 </body>
 </html>

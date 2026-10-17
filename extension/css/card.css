@@ -1,6 +1,9 @@
 /*
  * EDNexus commander card — Twitch video overlay.
  *
+ * The card's contents are styled in sections.css (shared with the panel, video component and mobile
+ * views); this file frames them as a flyout over the stream.
+ *
  * Two rules shape everything here:
  *  1. The iframe covers the whole player. Nothing but the handle and the open panel may take
  *     pointer events, or the viewer loses the ability to click the stream behind it.
@@ -8,12 +11,10 @@
  *     hovered; the panel only exists once a viewer asks for it.
  */
 
-@import url("tokens.css");
+@import url("sections.css");
 
 :root {
-  /* Colours come from tokens.css (rule 8). --ednx-ink-faint is rgba(…, 0.55): 0.38 measured 3.2:1
-     on the panel, under the 4.5:1 minimum; 0.55 measures 5.7:1 on a dark player and 5.3:1 with a
-     bright video behind the 92%-opaque panel. */
+  /* Colours come from tokens.css (rule 8); the overlay surface is translucent, over live video. */
   --ednx-bg: var(--ednx-overlay-bg);
   --ednx-bg-raised: var(--ednx-overlay-raised);
   --ednx-line: var(--ednx-overlay-line);
@@ -22,17 +23,7 @@
   --ednx-panel-w: 330px;
 }
 
-* { box-sizing: border-box; }
-
-html, body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  background: transparent;
-  font-family: var(--ednx-font);
-  color: var(--ednx-ink);
-  -webkit-font-smoothing: antialiased;
-}
+html, body { background: transparent; }
 
 /* The overlay must be click-through everywhere the card is not. */
 .ednx-body { pointer-events: none; overflow: hidden; }
@@ -42,24 +33,19 @@ html, body {
    otherwise beat the user agent's [hidden] rule. */
 .ednx-root[hidden] { display: none; }
 
-/* Text for assistive tech only: the live region that announces connection and staleness changes. */
-.ednx-sr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
+/* Where the card sits is two fractions of the free space, set by js/card.js (see js/position.js):
+   x 0 is flush left and 1 flush right, y 0 is the top and 1 the bottom. Putting the corner at
+   x * 100% and then pulling the card back by x * its own width is what turns that fraction into a
+   place, with no measuring, and keeps it right as the card grows from a tab into the full panel. The
+   defaults here are the card's original place (left edge, halfway down) for the moment before the
+   script runs. */
 .ednx-root {
+  --ednx-x: 0;
+  --ednx-y: 0.5;
   position: absolute;
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
+  left: calc(var(--ednx-x) * 100%);
+  top: calc(var(--ednx-y) * 100%);
+  transform: translate(calc(var(--ednx-x) * -100%), calc(var(--ednx-y) * -100%));
   display: flex;
   align-items: flex-start;
   gap: 0;
@@ -79,12 +65,14 @@ html, body {
   padding: 7px 8px 7px 9px;
   border: 1px solid var(--ednx-line);
   border-left: 3px solid var(--ednx-orange);
-  border-radius: 0 var(--ednx-radius) var(--ednx-radius) 0;
+  border-radius: var(--ednx-radius);
   background: var(--ednx-bg);
   color: var(--ednx-ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
+  /* The tab can be dragged anywhere: without this a touch drag would scroll or zoom the page. */
+  touch-action: none;
   /* Readable over video, but still quieter than the open panel. */
   opacity: 0.92;
   backdrop-filter: blur(6px);
@@ -102,6 +90,22 @@ html, body {
 .ednx-root[data-stale="true"] .ednx-handle__sub { color: var(--ednx-warning); }
 .ednx-root[data-state="error"] .ednx-handle { border-left-color: var(--ednx-bad); }
 .ednx-root[data-state="error"] .ednx-handle__mark { color: var(--ednx-bad); }
+
+/* Flush to a side, the card is drawn as part of that side (square against it); floating free it has
+   rounded corners all round. The accent bar stays on the left either way. */
+.ednx-root[data-edge="left"] .ednx-handle,
+.ednx-root[data-edge="left"] .ednx-panel { border-radius: 0 var(--ednx-radius) var(--ednx-radius) 0; }
+.ednx-root[data-edge="right"] .ednx-handle,
+.ednx-root[data-edge="right"] .ednx-panel { border-radius: var(--ednx-radius) 0 0 var(--ednx-radius); }
+.ednx-root[data-edge="right"] .ednx-handle__chevron { transform: scaleX(-1); }
+.ednx-root[data-edge="right"] .ednx-handle:hover,
+.ednx-root[data-edge="right"] .ednx-handle:focus-visible { transform: translateX(-2px); }
+
+/* While being dragged the card follows the pointer exactly: no easing, no text selection. */
+.ednx-root[data-dragging="true"] .ednx-handle,
+.ednx-root[data-dragging="true"] .ednx-panel { transition: none; animation: none; transform: none; }
+.ednx-root[data-dragging="true"],
+.ednx-root[data-dragging="true"] * { cursor: grabbing; user-select: none; }
 
 /* While the panel is open the handle collapses to a sliver — the panel has its own close button. */
 .ednx-root[data-open="true"] .ednx-handle { display: none; }
@@ -145,7 +149,7 @@ html, body {
   max-height: 92vh;
   border: 1px solid var(--ednx-line);
   border-left: 3px solid var(--ednx-orange);
-  border-radius: 0 var(--ednx-radius) var(--ednx-radius) 0;
+  border-radius: var(--ednx-radius);
   background: var(--ednx-bg);
   backdrop-filter: blur(10px);
   box-shadow: 0 10px 34px var(--ednx-overlay-shadow);
@@ -158,12 +162,29 @@ html, body {
   to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes ednx-slide-in-right {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes ednx-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ednx-root[data-edge="right"] .ednx-panel { animation-name: ednx-slide-in-right; }
+.ednx-root[data-edge="float"] .ednx-panel { animation-name: ednx-fade-in; }
+
 @media (prefers-reduced-motion: reduce) {
   .ednx-panel { animation: none; }
   .ednx-handle { transition: none; }
 }
 
 .ednx-panel__head {
+  /* The header is where the open card is picked up and dragged (js/card.js). */
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -191,7 +212,7 @@ html, body {
   text-overflow: ellipsis;
 }
 
-.ednx-close {
+.ednx-tool {
   flex: none;
   display: flex;
   padding: 3px;
@@ -202,88 +223,11 @@ html, body {
   cursor: pointer;
 }
 
-.ednx-close:hover { color: var(--ednx-ink); background: var(--ednx-bg-raised); }
-.ednx-close:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: 1px; }
+.ednx-tool:hover { color: var(--ednx-ink); background: var(--ednx-bg-raised); }
+.ednx-tool[hidden] { display: none; }
 
-/* -------------------------------------------------------------- sections -- */
-
-.ednx-sections {
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 2px 0;
-}
-
-/* The list scrolls, so keyboard users must be able to reach it to scroll it. */
-.ednx-sections:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: -2px; }
-
-.ednx-sections::-webkit-scrollbar { width: 6px; }
-.ednx-sections::-webkit-scrollbar-thumb { background: var(--ednx-line); border-radius: 3px; }
-
-.ednx-section { padding: 9px 12px; border-bottom: 1px solid var(--ednx-line); }
-.ednx-section:last-child { border-bottom: 0; }
-
-.ednx-section__title {
-  margin: 0 0 6px;
-  font-size: var(--ednx-text-label);
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--ednx-ink-faint);
-}
-
-/* Label/value rows — the backbone of most sections. */
-.ednx-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: var(--ednx-text-label); }
-.ednx-rows dt { color: var(--ednx-ink-soft); white-space: nowrap; }
-.ednx-rows dd {
-  margin: 0;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ednx-num { font-family: var(--ednx-mono); }
-
-/* Meters: fuel, rank progress, sample runs. */
-.ednx-meter {
-  position: relative;
-  height: 4px;
-  margin-top: 4px;
-  border-radius: 2px;
-  background: var(--ednx-bg-raised);
-  overflow: hidden;
-}
-
-.ednx-meter__fill { height: 100%; border-radius: 2px; background: var(--ednx-orange); }
-.ednx-meter__fill--low { background: var(--ednx-bad); }
-
-.ednx-ranks { display: flex; flex-direction: column; gap: 6px; }
-.ednx-rank__line { display: flex; justify-content: space-between; gap: 8px; font-size: var(--ednx-text-label); }
-.ednx-rank__name { color: var(--ednx-ink-soft); }
-.ednx-rank__value { font-weight: 600; }
-
-.ednx-elite { color: var(--ednx-orange); }
-
-/* Pips for the three-sample exobiology run. */
-.ednx-pips { display: inline-flex; gap: 3px; vertical-align: middle; }
-.ednx-pip { width: 7px; height: 7px; border: 1px solid var(--ednx-orange-dim); border-radius: 50%; }
-.ednx-pip--on { background: var(--ednx-orange); border-color: var(--ednx-orange); }
-
-.ednx-tag {
-  display: inline-block;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--ednx-bg-raised);
-  color: var(--ednx-ink-soft);
-  font-size: var(--ednx-text-label);
-}
-
-.ednx-more { margin-top: 5px; font-size: var(--ednx-text-label); color: var(--ednx-ink-faint); }
-
-.ednx-empty { padding: 18px 12px; text-align: center; font-size: var(--ednx-text-label); color: var(--ednx-ink-faint); }
-
-/* ------------------------------------------------------------------ foot -- */
+.ednx-panel__tools { display: flex; align-items: center; gap: 2px; flex: none; }
+.ednx-tool:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: 1px; }
 
 .ednx-panel__foot {
   display: flex;
@@ -296,14 +240,9 @@ html, body {
   color: var(--ednx-ink-faint);
 }
 
-.ednx-brand { margin-left: auto; color: var(--ednx-ink-faint); letter-spacing: 0.06em; }
-
-.ednx-stale { color: var(--ednx-warning); }
-.ednx-stale:empty { display: none; }
-
 /* Short players (mobile portrait, small theatre mode) get a shorter, narrower card. */
 @media (max-height: 420px) {
-  .ednx-root { max-height: 100vh; top: 0; transform: none; }
+  .ednx-root { max-height: 100vh; }
   .ednx-panel { max-height: 100vh; }
   :root { --ednx-panel-w: 260px; }
 }

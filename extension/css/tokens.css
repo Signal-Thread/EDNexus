@@ -1,6 +1,6 @@
 /*
- * Shared identity tokens for both surfaces of the Twitch extension (the video overlay card and the
- * broadcaster config page). Reconciled with src/EDNexus.App/Themes/Theme.axaml and the EDNexus design
+ * Shared identity tokens for every surface of the Twitch extension (the video overlay, panel, video
+ * component and mobile card views, and the broadcaster config page). Reconciled with src/EDNexus.App/Themes/Theme.axaml and the EDNexus design
  * system so the desktop app and the extension read as the same product instead of two independently
  * re-picked palettes.
  *
@@ -44,4 +44,10 @@
   --ednx-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
   --ednx-text-label: 12px;
   --ednx-text-body: 13px;
+
+  /* Mobile view only. The card is read at arm's length on a phone, where Label/Body are too small, and
+     16px is the size iOS leaves alone rather than zooming. 44px is the usual minimum touch target.
+     Not part of the desktop design system's scale: the desktop app and the other views never use them. */
+  --ednx-text-touch: 16px;
+  --ednx-touch-target: 44px;
 }

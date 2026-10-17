@@ -104,9 +104,13 @@ def main() -> None:
     base = f"https://{args.host}:{args.port}/"
     print(f"Serving {root} at {base}")
     print(f"  Base URI            {base}")
-    print(f"  Viewer path         video_overlay.html")
+    print(f"  Video overlay path  video_overlay.html")
+    print(f"  Panel path          panel.html")
+    print(f"  Component path      component.html")
+    print(f"  Mobile path         mobile.html")
     print(f"  Config path         config.html")
-    print(f"  Standalone preview  {base}video_overlay.html?mock=1")
+    for view in ("video_overlay", "panel", "component", "mobile"):
+        print(f"  Standalone preview  {base}{view}.html?mock=1")
     print("Ctrl+C to stop.")
     try:
         httpd.serve_forever()

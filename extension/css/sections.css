@@ -1,0 +1,131 @@
+/*
+ * The commander card's contents, shared by every view (overlay, panel, video component, mobile).
+ *
+ * A view's own stylesheet frames this (position, width, surface) and must define the three surface
+ * variables the contents use, since the surface differs per view: a translucent card over video for
+ * the overlay and the video component, an opaque one for the panel and the mobile view.
+ *
+ *   --ednx-bg-raised   a faint lift for meter tracks and tags
+ *   --ednx-line        hairlines between sections
+ *   --ednx-radius      corner radius
+ *
+ * Colours come from tokens.css only (AGENTS.md rule 8). --ednx-ink-faint is rgba(…, 0.55): 0.38
+ * measured 3.2:1 on the card, under the 4.5:1 minimum; 0.55 measures 5.7:1 on a dark player and 5.3:1
+ * with a bright video behind the 92%-opaque overlay.
+ */
+
+@import url("tokens.css");
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: var(--ednx-font);
+  color: var(--ednx-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Text for assistive tech only: the live region that announces connection and staleness changes. */
+.ednx-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* -------------------------------------------------------------- sections -- */
+
+.ednx-sections {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 0;
+}
+
+/* The list scrolls, so keyboard users must be able to reach it to scroll it. */
+.ednx-sections:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: -2px; }
+
+.ednx-sections::-webkit-scrollbar { width: 6px; }
+.ednx-sections::-webkit-scrollbar-thumb { background: var(--ednx-line); border-radius: 3px; }
+
+.ednx-section { padding: 9px 12px; border-bottom: 1px solid var(--ednx-line); }
+.ednx-section:last-child { border-bottom: 0; }
+
+.ednx-section__title {
+  margin: 0 0 6px;
+  font-size: var(--ednx-text-label);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ednx-ink-faint);
+}
+
+/* Label/value rows — the backbone of most sections. */
+.ednx-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: var(--ednx-text-label); }
+.ednx-rows dt { color: var(--ednx-ink-soft); white-space: nowrap; }
+.ednx-rows dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ednx-num { font-family: var(--ednx-mono); }
+
+/* Meters: fuel, rank progress, sample runs. */
+.ednx-meter {
+  position: relative;
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: var(--ednx-bg-raised);
+  overflow: hidden;
+}
+
+.ednx-meter__fill { height: 100%; border-radius: 2px; background: var(--ednx-orange); }
+.ednx-meter__fill--low { background: var(--ednx-bad); }
+
+.ednx-ranks { display: flex; flex-direction: column; gap: 6px; }
+.ednx-rank__line { display: flex; justify-content: space-between; gap: 8px; font-size: var(--ednx-text-label); }
+.ednx-rank__name { color: var(--ednx-ink-soft); }
+.ednx-rank__value { font-weight: 600; }
+
+.ednx-elite { color: var(--ednx-orange); }
+
+/* Pips for the three-sample exobiology run. */
+.ednx-pips { display: inline-flex; gap: 3px; vertical-align: middle; }
+.ednx-pip { width: 7px; height: 7px; border: 1px solid var(--ednx-orange-dim); border-radius: 50%; }
+.ednx-pip--on { background: var(--ednx-orange); border-color: var(--ednx-orange); }
+
+.ednx-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--ednx-bg-raised);
+  color: var(--ednx-ink-soft);
+  font-size: var(--ednx-text-label);
+}
+
+.ednx-more { margin-top: 5px; font-size: var(--ednx-text-label); color: var(--ednx-ink-faint); }
+
+.ednx-empty { padding: 18px 12px; text-align: center; font-size: var(--ednx-text-label); color: var(--ednx-ink-faint); }
+
+/* The stale note and brand mark that close every view. */
+.ednx-brand { margin-left: auto; color: var(--ednx-ink-faint); letter-spacing: 0.06em; }
+
+/* The mark is a link to the project site: quiet until pointed at or focused, like the rest of the
+   footer, but unmistakably interactive then. */
+a.ednx-brand { text-decoration: none; border-radius: 3px; }
+a.ednx-brand:hover { color: var(--ednx-ink); text-decoration: underline; }
+a.ednx-brand:focus-visible { color: var(--ednx-ink); outline: 2px solid var(--ednx-orange); outline-offset: 2px; }
+
+.ednx-stale { color: var(--ednx-warning); }
+.ednx-stale:empty { display: none; }

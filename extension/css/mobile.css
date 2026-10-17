@@ -1,0 +1,87 @@
+/*
+ * EDNexus commander card — Twitch mobile view.
+ *
+ * The page.css card with a touch-first layout: no hover anywhere, text at the touch size, and each
+ * section folded behind a full-width 44px button so a long card is not one endless scroll on a phone.
+ * Which sections start open is EDNexusModel.layoutFor('mobile').
+ */
+
+@import url("page.css");
+
+html, body { height: 100%; }
+
+/* The app draws its own chrome around the extension; keep clear of notches and the home indicator
+   (viewport-fit=cover is not set, so these resolve to 0 on most devices, which is harmless). */
+.ednx-card {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.ednx-card__head { padding: 12px 16px 10px; }
+.ednx-card__cmdr,
+.ednx-card__where { font-size: var(--ednx-text-touch); }
+
+.ednx-section { padding: 0 16px 6px; }
+
+/* The title is now a button inside the heading. */
+.ednx-section__title { margin: 0; }
+
+.ednx-fold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--ednx-touch-target);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ednx-fold:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: -2px; }
+
+/* A chevron drawn from two borders, so it takes the text colour and needs no image. */
+.ednx-fold__chevron {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 140ms ease;
+}
+
+.ednx-fold[aria-expanded="true"] .ednx-fold__chevron { transform: rotate(-135deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ednx-fold__chevron { transition: none; }
+}
+
+.ednx-fold__body { padding: 0 0 10px; }
+.ednx-fold__body[hidden] { display: none; }
+
+/* Touch-size text for the contents. */
+.ednx-rows { font-size: var(--ednx-text-touch); gap: 6px 14px; }
+.ednx-rows dd { white-space: normal; overflow-wrap: anywhere; }
+.ednx-rank__line,
+.ednx-more,
+.ednx-empty { font-size: var(--ednx-text-touch); }
+.ednx-ranks { gap: 12px; }
+.ednx-meter { height: 6px; margin-top: 6px; }
+.ednx-pip { width: 10px; height: 10px; }
+
+/* The footer's link is a touch target: the footer gives up its padding so the link can be 44px tall. */
+.ednx-card__foot { padding: 0 16px; }
+a.ednx-brand {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--ednx-touch-target);
+}
