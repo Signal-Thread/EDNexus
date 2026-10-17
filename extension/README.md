@@ -29,10 +29,33 @@ desktop app needs no setting for any of them.
 
 | View | Entry page | Where viewers see it | Shows | When there is no live card |
 |---|---|---|---|---|
-| **Video overlay** | `video_overlay.html` | Over the whole player | A small tab that opens into the full card | Nothing |
+| **Video overlay** | `video_overlay.html` | Over the whole player | A small tab that opens into the full card. **Movable** (see below) | Nothing |
 | **Panel** | `panel.html` | Always-on, under the stream (a fixed narrow width, 318 px when this was written; verify in console) | The full card, scrolling inside the panel | A one-line note: the panel's space is already allocated, so a blank box would be worse |
 | **Video component** | `component.html` | A box the broadcaster places and sizes on the stream | A compact summary (place, ship and fuel, one rank bar) that expands to the full card | Nothing |
 | **Mobile** | `mobile.html` | The Twitch mobile app | The full card as one touch-sized column; each section folds behind a 44 px button, the first two start open | A one-line note |
+
+### Moving the card
+
+Only the **video overlay** is movable, because it is the one view that owns a whole canvas (the
+player). Twitch itself places and sizes the panel, the video component and the mobile view, and an
+extension's iframe cannot leave its box, so there is nothing for the extension to move there:
+a broadcaster positions those in Twitch's own dashboard.
+
+- **The viewer** drags the tab (or the open card's header), or focuses the Move button and uses the
+  arrow keys (Shift moves further, Home puts it back). A small button appears to reset it. The choice
+  is kept in the viewer's browser (`localStorage`), and takes priority over the broadcaster's default.
+- **The broadcaster** sets where it *starts* on the config page (a preview of the stream: drag the
+  card, click a spot, pick one of nine, or use the arrow keys), so it does not begin on top of a
+  webcam or the game's interface. It is saved to Twitch's configuration service (`broadcaster`
+  segment) as `{ "position": { "x", "y" } }`, shared with the development form's `ebsBaseUrl`
+  (every save merges, so neither erases the other), and is public to viewers.
+- With neither, the card is where it has always been: flush left, halfway down.
+
+A position is two fractions of the *free* space (the player minus the card), not pixels, so it holds
+through theatre mode, fullscreen and resizing and can never be off screen; flush to a side the card
+is drawn square against it, and floating free it is rounded. Both stored values are validated
+(`js/position.js`): neither the broadcaster's document nor the viewer's storage can put a string or
+an out-of-range number into the layout.
 
 The per-view rules (hide when idle, fold sections, how many start open) live in one place,
 `EDNexusModel.layoutFor` in `js/model.js`, and `dev/test-views.js` tests them.
@@ -53,12 +76,13 @@ The per-view rules (hide when idle, fold sections, how many start open) live in 
 | `js/model.js` | Everything that is not DOM: formatting, what a viewer sees in a given state (`deriveView`), staleness, the compact summary and the per-view layout. No network, no `document`, so it runs under Node. |
 | `js/render.js` | Builds the card's sections (and the compact summary) as DOM. The only place a payload string reaches the page, always via `textContent`. |
 | `js/session.js` | Connects the transport to a view: status and snapshot in, `deriveView` and staleness out, screen-reader announcements, the 30 s tick. |
+| `js/position.js` | Where the overlay card sits: the fraction maths, snapping, the broadcaster's default (read from and merged into Twitch's configuration document) and the viewer's saved choice, all validated. No `document`, so it runs under Node. Used by the overlay and the config page. |
 | `js/card.js` · `js/page.js` · `js/component.js` | The shells: the overlay's flyout; the panel and mobile pages (`data-view` picks which); the video component. Framing only. |
 | `js/config.js` | Config page: only the localhost-only developer form. |
 | `dev/sample-state.json` | A representative payload for local development. Not in the upload. |
 | `dev/serve-https.py` | Serves this folder over TLS for Twitch local testing. Not in the upload. |
 | `dev/test-state.js` | Dependency-free Node checks for `js/state.js`. Not in the upload; CI runs it. |
-| `dev/test-views.js` | Dependency-free Node checks for `js/model.js` and the view entry pages (script order, files exist, no inline script or hand-picked colours). Not in the upload; CI runs it. |
+| `dev/test-views.js` | Dependency-free Node checks for `js/model.js`, `js/position.js` and the view entry pages (script order, files exist, no inline script or hand-picked colours). Not in the upload; CI runs it. |
 
 ## What viewers see, and when
 
@@ -92,7 +116,8 @@ python -m http.server 8931 --directory extension
 ```
 
 Then open <http://127.0.0.1:8931/video_overlay.html?mock=1>, or any other view the same way
-(`panel.html`, `component.html`, `mobile.html`). Two more flags show the states that
+(`panel.html`, `component.html`, `mobile.html`). `&default=0.9,0.1` stands in for a broadcaster's
+default position (x, y as fractions, 0 to 1) on the overlay, on a localhost page only. Two more flags show the states that
 are otherwise hard to reach: `&stale=40` ages the sample by 40 minutes, and `&v=2` stamps it with a
 schema newer than the frontend understands.
 
@@ -187,7 +212,8 @@ and is not repeated here.
       `Access-Control-Expose-Headers`. Without that, browsers hide the header from `js/state.js` and
       only the (still correct) backoff applies.
 - [ ] `node extension/dev/test-state.js` passes, and the overlay has been looked at with
-      `?mock=1`, `?mock=1&stale=40` and `?mock=1&v=2`.
+      `?mock=1`, `?mock=1&stale=40` and `?mock=1&v=2`, and the overlay has been dragged, moved with the
+      keyboard and reset, and checked with a broadcaster default (`&default=0.9,0.1`).
 
 ### 1. Extension type and views
 
@@ -499,6 +525,13 @@ not publishing (EDNexus closed, the card switched off, or not signed in to Twitc
 an `access-control-allow-origin` for your extension's `*.ext-twitch.tv` origin means the EBS is
 fine. Local Test from `https://localhost:8080` only passes CORS against a local EBS configured as
 described under *Against the real Twitch console*.
+
+**A broadcaster saved a position and viewers still see the card on the left.** Twitch's
+`configuration.set` gives no result, and a write it ignores looks like one it accepted, so the config
+page waits a few seconds for Twitch to echo the value back and says "Twitch has not confirmed the
+save yet" if it does not. Reload the config page: a position that is still there was saved. Viewers
+who have already moved the card keep their own place by design (their Reset button returns them to
+the broadcaster's).
 
 ## Conventions
 

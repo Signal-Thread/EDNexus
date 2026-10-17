@@ -23,7 +23,12 @@ const win = { console };
 win.window = win;
 vm.createContext(win);
 vm.runInContext(read('js/model.js'), win);
+vm.runInContext(read('js/position.js'), win);
 const M = win.EDNexusModel;
+const P = win.EDNexusPosition;
+
+// Objects built inside the vm have another realm's prototype, which deepStrictEqual rejects.
+const plain = (value) => JSON.parse(JSON.stringify(value));
 
 const sample = JSON.parse(read('dev/sample-state.json'));
 const STALE_AFTER = 25 * 60 * 1000;
@@ -204,13 +209,145 @@ test('fold state: the first N sections start open, and a viewer\'s choice surviv
   assert.ok(!('Commander' in next), 'a section that left the card should leave the state');
 });
 
+/* ------------------------------------------------------- card position -- */
+
+/** A stand-in for localStorage. */
+function fakeStorage(initial) {
+  const data = new Map(Object.entries(initial || {}));
+  return {
+    getItem: (k) => (data.has(k) ? data.get(k) : null),
+    setItem: (k, v) => { data.set(k, String(v)); },
+    removeItem: (k) => { data.delete(k); },
+    _data: data,
+  };
+}
+
+test('with nothing chosen the card is where it has always been: left edge, halfway down', () => {
+  assert.deepStrictEqual(plain(P.DEFAULT), { x: 0, y: 0.5 });
+});
+
+test('a position is two fractions of the free space; anything else is rejected', () => {
+  assert.deepStrictEqual(plain(P.normalize({ x: 0.25, y: 0.75 })), { x: 0.25, y: 0.75 });
+  assert.deepStrictEqual(plain(P.normalize({ x: 0, y: 1 })), { x: 0, y: 1 });
+  const bad = [
+    null, undefined, 5, 'x', [], {}, { x: 0.5 }, { y: 0.5 },
+    { x: -0.1, y: 0.5 }, { x: 0.5, y: 1.01 }, { x: NaN, y: 0.5 }, { x: Infinity, y: 0.5 },
+    { x: '0.5', y: '0.5' }, { x: null, y: 0.5 }, { x: 0.5, y: {} },
+  ];
+  for (const value of bad) assert.strictEqual(P.normalize(value), null, JSON.stringify(value));
+});
+
+test('pixels become a clamped fraction of the free space, and no free space pins to 0', () => {
+  assert.deepStrictEqual(plain(P.fromPixels(150, 50, 300, 100)), { x: 0.5, y: 0.5 });
+  assert.deepStrictEqual(plain(P.fromPixels(-40, 999, 300, 100)), { x: 0, y: 1 }, 'dragged off either side');
+  assert.deepStrictEqual(plain(P.fromPixels(10, 10, 0, -5)), { x: 0, y: 0 }, 'card as big as the player');
+});
+
+test('a released card snaps to an edge or the middle, and not otherwise', () => {
+  assert.deepStrictEqual(plain(P.snap({ x: 0.02, y: 0.02 })), { x: 0, y: 0 });
+  assert.deepStrictEqual(plain(P.snap({ x: 0.98, y: 0.98 })), { x: 1, y: 1 });
+  assert.deepStrictEqual(plain(P.snap({ x: 0.4, y: 0.51 })), { x: 0.4, y: 0.5 });
+  assert.deepStrictEqual(plain(P.snap({ x: 0.2, y: 0.3 })), { x: 0.2, y: 0.3 }, 'nowhere near anything');
+});
+
+test('keyboard steps are small, Shift steps are bigger, and neither leaves the screen', () => {
+  assert.deepStrictEqual(plain(P.step({ x: 0.5, y: 0.5 }, 1, 0, false)), { x: 0.52, y: 0.5 });
+  assert.deepStrictEqual(plain(P.step({ x: 0.5, y: 0.5 }, 0, -1, true)), { x: 0.5, y: 0.4 });
+  assert.deepStrictEqual(plain(P.step({ x: 0, y: 0 }, -1, -1, true)), { x: 0, y: 0 });
+  assert.deepStrictEqual(plain(P.step({ x: 1, y: 1 }, 1, 1, true)), { x: 1, y: 1 });
+});
+
+test('the card is drawn against a side only when it is flush to it', () => {
+  assert.strictEqual(P.edgeFor({ x: 0, y: 0.5 }), 'left');
+  assert.strictEqual(P.edgeFor({ x: 1, y: 0.2 }), 'right');
+  assert.strictEqual(P.edgeFor({ x: 0.5, y: 0.5 }), 'float');
+  assert.strictEqual(P.edgeFor({ x: 0.2, y: 0.5 }), 'float');
+});
+
+test('positions are described in plain words', () => {
+  assert.strictEqual(P.describe({ x: 0, y: 0.5 }), 'Left edge, middle');
+  assert.strictEqual(P.describe({ x: 1, y: 0 }), 'Right edge, top');
+  assert.strictEqual(P.describe({ x: 0.5, y: 1 }), 'Centre, bottom');
+  assert.strictEqual(P.describe({ x: 0.2, y: 0.2 }), 'Left, top');
+  assert.strictEqual(P.describe({ x: 0.8, y: 0.8 }), 'Right, bottom');
+});
+
+test('the broadcaster default is read from the configuration document, and only if valid', () => {
+  const doc = (position, extra) => JSON.stringify(Object.assign({ v: 1, position }, extra));
+  assert.deepStrictEqual(plain(P.parseConfig(doc({ x: 1, y: 0.1 }))), { x: 1, y: 0.1 });
+  assert.deepStrictEqual(plain(P.parseConfig(doc({ x: 1, y: 0.1 }, { ebsBaseUrl: 'https://localhost:8787' }))), { x: 1, y: 0.1 });
+  for (const raw of [undefined, null, '', 'not json', '[]', '5', '"x"', '{}', doc({ x: 9, y: 0 }), doc('left'), doc(null), doc({ x: 'a', y: 'b' })]) {
+    assert.strictEqual(P.parseConfig(raw), null, String(raw));
+  }
+});
+
+test('saving the position keeps the other keys in the shared configuration document', () => {
+  const existing = JSON.stringify({ ebsBaseUrl: 'https://localhost:8787' });
+  const saved = JSON.parse(P.configWith(existing, { position: { x: 0.9, y: 0.1 } }));
+  assert.strictEqual(saved.ebsBaseUrl, 'https://localhost:8787', 'the dev EBS override was lost');
+  assert.deepStrictEqual(plain(saved.position), { x: 0.9, y: 0.1 });
+
+  // And the other way round: the development form saving an EBS must keep the position.
+  const back = JSON.parse(P.configWith(JSON.stringify(saved), { ebsBaseUrl: 'https://localhost:9999' }));
+  assert.deepStrictEqual(plain(back.position), { x: 0.9, y: 0.1 }, 'the position was lost');
+  assert.strictEqual(back.ebsBaseUrl, 'https://localhost:9999');
+});
+
+test('clearing a key removes it; an invalid position is dropped rather than stored', () => {
+  const both = JSON.stringify({ ebsBaseUrl: 'https://localhost:8787', position: { x: 0, y: 0 } });
+  assert.deepStrictEqual(plain(JSON.parse(P.configWith(both, { position: null }))), { ebsBaseUrl: 'https://localhost:8787' });
+  assert.deepStrictEqual(plain(JSON.parse(P.configWith(both, { ebsBaseUrl: null }))), { position: { x: 0, y: 0 } });
+  assert.strictEqual(JSON.parse(P.configWith('{}', { position: { x: 5, y: 5 } })).position, undefined);
+});
+
+test('configWith starts from an empty document when the existing one is missing or corrupt', () => {
+  for (const existing of [undefined, null, '', 'garbage', '[1,2]', '7']) {
+    assert.deepStrictEqual(plain(JSON.parse(P.configWith(existing, { position: { x: 0.5, y: 0.5 } }))), { position: { x: 0.5, y: 0.5 } }, String(existing));
+  }
+});
+
+test('the viewer\'s choice is saved, read back, and cleared', () => {
+  const storage = fakeStorage();
+  assert.strictEqual(P.load(storage), null);
+  P.save(storage, { x: 0.3, y: 0.7 });
+  assert.deepStrictEqual(plain(P.load(storage)), { x: 0.3, y: 0.7 });
+  P.clear(storage);
+  assert.strictEqual(P.load(storage), null);
+});
+
+test('a tampered or corrupt stored value is ignored, never trusted', () => {
+  for (const stored of ['', 'x', '{"x":5,"y":0}', '{"x":"a","y":"b"}', '[1,2]', 'null', '{"x":0.5}']) {
+    assert.strictEqual(P.load(fakeStorage({ [P.STORAGE_KEY]: stored })), null, stored);
+  }
+});
+
+test('unavailable storage never throws: the card still moves, it just is not remembered', () => {
+  const broken = {
+    getItem() { throw new Error('denied'); },
+    setItem() { throw new Error('denied'); },
+    removeItem() { throw new Error('denied'); },
+  };
+  assert.strictEqual(P.load(broken), null);
+  P.save(broken, { x: 0, y: 0 });
+  P.clear(broken);
+  assert.strictEqual(P.load(undefined), null);
+});
+
+test('the development default is parsed, and a bad one is ignored', () => {
+  assert.deepStrictEqual(plain(P.parseDevDefault('?mock=1&default=0.9,0.1')), { x: 0.9, y: 0.1 });
+  for (const search of ['', undefined, '?default=2,0', '?default=a,b', '?default=0.5']) {
+    assert.strictEqual(P.parseDevDefault(search), null, String(search));
+  }
+});
+
 /* ------------------------------------------------------------ entry pages -- */
 
 // Which entry page is which view, and the scripts each must load, in order. state.js first, then the
 // helper-dependent layers: model -> render -> session -> the view's own shell.
 const SHARED = ['js/state.js', 'js/model.js', 'js/render.js', 'js/session.js'];
 const VIEWS = {
-  'video_overlay.html': { shell: 'js/card.js', css: 'css/card.css' },
+  // The overlay is the one movable view, so it also loads the position module (js/position.js).
+  'video_overlay.html': { shell: 'js/card.js', css: 'css/card.css', extra: ['js/position.js'] },
   'panel.html': { shell: 'js/page.js', css: 'css/page.css', dataView: 'panel' },
   'mobile.html': { shell: 'js/page.js', css: 'css/mobile.css', dataView: 'mobile' },
   // The video component is a small box with no footer mark, so it has nothing to link.
@@ -232,6 +369,22 @@ function assertOnlyProjectLinks(html) {
   }
 }
 
+test('the config page loads the Twitch helper first, then the transport, the position module, then itself', () => {
+  const scripts = [...read('config.html').matchAll(/<script\s+src="([^"]+)"/g)].map((m) => m[1]);
+  assert.match(scripts[0], /twitch-ext\.min\.js$/);
+  assert.deepStrictEqual(scripts.slice(1), ['js/state.js', 'js/position.js', 'js/config.js']);
+});
+
+test('the config page has every control its script looks up', () => {
+  const html = read('config.html');
+  const source = read('js/config.js');
+  // js/config.js bails out quietly when one is missing, which would ship a dead picker.
+  for (const id of ['stage', 'stage-card', 'position-text', 'position-status', 'position-save', 'position-default', 'presets']) {
+    assert.ok(html.includes(`id="${id}"`), `config.html has no #${id}`);
+    assert.ok(source.includes(`'${id}'`), `config.js never looks up #${id}`);
+  }
+});
+
 test('the config page links to the project site and nowhere else', () => {
   const html = read('config.html');
   assertOnlyProjectLinks(html);
@@ -244,7 +397,7 @@ for (const [file, spec] of Object.entries(VIEWS)) {
 
   test(`${file}: loads the Twitch helper first, then the shared layers, then its shell`, () => {
     assert.match(scripts[0], /twitch-ext\.min\.js$/);
-    assert.deepStrictEqual(scripts.slice(1), [...SHARED, spec.shell]);
+    assert.deepStrictEqual(scripts.slice(1), [...SHARED, ...(spec.extra || []), spec.shell]);
   });
 
   test(`${file}: every local script and stylesheet exists`, () => {

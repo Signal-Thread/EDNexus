@@ -33,11 +33,19 @@ html, body { background: transparent; }
    otherwise beat the user agent's [hidden] rule. */
 .ednx-root[hidden] { display: none; }
 
+/* Where the card sits is two fractions of the free space, set by js/card.js (see js/position.js):
+   x 0 is flush left and 1 flush right, y 0 is the top and 1 the bottom. Putting the corner at
+   x * 100% and then pulling the card back by x * its own width is what turns that fraction into a
+   place, with no measuring, and keeps it right as the card grows from a tab into the full panel. The
+   defaults here are the card's original place (left edge, halfway down) for the moment before the
+   script runs. */
 .ednx-root {
+  --ednx-x: 0;
+  --ednx-y: 0.5;
   position: absolute;
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
+  left: calc(var(--ednx-x) * 100%);
+  top: calc(var(--ednx-y) * 100%);
+  transform: translate(calc(var(--ednx-x) * -100%), calc(var(--ednx-y) * -100%));
   display: flex;
   align-items: flex-start;
   gap: 0;
@@ -57,12 +65,14 @@ html, body { background: transparent; }
   padding: 7px 8px 7px 9px;
   border: 1px solid var(--ednx-line);
   border-left: 3px solid var(--ednx-orange);
-  border-radius: 0 var(--ednx-radius) var(--ednx-radius) 0;
+  border-radius: var(--ednx-radius);
   background: var(--ednx-bg);
   color: var(--ednx-ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
+  /* The tab can be dragged anywhere: without this a touch drag would scroll or zoom the page. */
+  touch-action: none;
   /* Readable over video, but still quieter than the open panel. */
   opacity: 0.92;
   backdrop-filter: blur(6px);
@@ -80,6 +90,22 @@ html, body { background: transparent; }
 .ednx-root[data-stale="true"] .ednx-handle__sub { color: var(--ednx-warning); }
 .ednx-root[data-state="error"] .ednx-handle { border-left-color: var(--ednx-bad); }
 .ednx-root[data-state="error"] .ednx-handle__mark { color: var(--ednx-bad); }
+
+/* Flush to a side, the card is drawn as part of that side (square against it); floating free it has
+   rounded corners all round. The accent bar stays on the left either way. */
+.ednx-root[data-edge="left"] .ednx-handle,
+.ednx-root[data-edge="left"] .ednx-panel { border-radius: 0 var(--ednx-radius) var(--ednx-radius) 0; }
+.ednx-root[data-edge="right"] .ednx-handle,
+.ednx-root[data-edge="right"] .ednx-panel { border-radius: var(--ednx-radius) 0 0 var(--ednx-radius); }
+.ednx-root[data-edge="right"] .ednx-handle__chevron { transform: scaleX(-1); }
+.ednx-root[data-edge="right"] .ednx-handle:hover,
+.ednx-root[data-edge="right"] .ednx-handle:focus-visible { transform: translateX(-2px); }
+
+/* While being dragged the card follows the pointer exactly: no easing, no text selection. */
+.ednx-root[data-dragging="true"] .ednx-handle,
+.ednx-root[data-dragging="true"] .ednx-panel { transition: none; animation: none; transform: none; }
+.ednx-root[data-dragging="true"],
+.ednx-root[data-dragging="true"] * { cursor: grabbing; user-select: none; }
 
 /* While the panel is open the handle collapses to a sliver — the panel has its own close button. */
 .ednx-root[data-open="true"] .ednx-handle { display: none; }
@@ -123,7 +149,7 @@ html, body { background: transparent; }
   max-height: 92vh;
   border: 1px solid var(--ednx-line);
   border-left: 3px solid var(--ednx-orange);
-  border-radius: 0 var(--ednx-radius) var(--ednx-radius) 0;
+  border-radius: var(--ednx-radius);
   background: var(--ednx-bg);
   backdrop-filter: blur(10px);
   box-shadow: 0 10px 34px var(--ednx-overlay-shadow);
@@ -136,12 +162,29 @@ html, body { background: transparent; }
   to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes ednx-slide-in-right {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes ednx-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ednx-root[data-edge="right"] .ednx-panel { animation-name: ednx-slide-in-right; }
+.ednx-root[data-edge="float"] .ednx-panel { animation-name: ednx-fade-in; }
+
 @media (prefers-reduced-motion: reduce) {
   .ednx-panel { animation: none; }
   .ednx-handle { transition: none; }
 }
 
 .ednx-panel__head {
+  /* The header is where the open card is picked up and dragged (js/card.js). */
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -169,7 +212,7 @@ html, body { background: transparent; }
   text-overflow: ellipsis;
 }
 
-.ednx-close {
+.ednx-tool {
   flex: none;
   display: flex;
   padding: 3px;
@@ -180,8 +223,11 @@ html, body { background: transparent; }
   cursor: pointer;
 }
 
-.ednx-close:hover { color: var(--ednx-ink); background: var(--ednx-bg-raised); }
-.ednx-close:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: 1px; }
+.ednx-tool:hover { color: var(--ednx-ink); background: var(--ednx-bg-raised); }
+.ednx-tool[hidden] { display: none; }
+
+.ednx-panel__tools { display: flex; align-items: center; gap: 2px; flex: none; }
+.ednx-tool:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: 1px; }
 
 .ednx-panel__foot {
   display: flex;
@@ -196,7 +242,7 @@ html, body { background: transparent; }
 
 /* Short players (mobile portrait, small theatre mode) get a shorter, narrower card. */
 @media (max-height: 420px) {
-  .ednx-root { max-height: 100vh; top: 0; transform: none; }
+  .ednx-root { max-height: 100vh; }
   .ednx-panel { max-height: 100vh; }
   :root { --ednx-panel-w: 260px; }
 }

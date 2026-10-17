@@ -92,3 +92,110 @@ input[type="url"]:focus { outline: 2px solid var(--ednx-orange); outline-offset:
 .ednx-link { color: var(--ednx-orange); text-decoration: underline; text-underline-offset: 2px; }
 .ednx-link:hover { color: var(--ednx-ink); }
 .ednx-link:focus-visible { outline: 2px solid var(--ednx-orange); outline-offset: 2px; border-radius: 2px; }
+
+/* Text for assistive tech only. */
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.button--quiet {
+  border: 1px solid var(--ednx-line);
+  background: transparent;
+  color: var(--ednx-ink);
+}
+
+.button[disabled] { opacity: 0.5; cursor: default; filter: none; }
+
+/* ------------------------------------------------- card position picker -- */
+
+/* A stand-in for the player, 16:9. The card inside it is drawn open, at about its real size relative
+   to a stream, and is placed exactly as the overlay places it: x and y are fractions of the free space
+   (see css/card.css and js/position.js), set from js/config.js. */
+.stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin: 0 0 8px;
+  border: 1px solid var(--ednx-line);
+  border-radius: 6px;
+  background: var(--ednx-page-field-bg);
+  overflow: hidden;
+  touch-action: none;
+  cursor: crosshair;
+  /* A faint thirds grid, so "top right" or "middle" reads at a glance. */
+  background-image:
+    linear-gradient(to right, transparent calc(33.333% - 1px), var(--ednx-line) calc(33.333% - 1px), var(--ednx-line) 33.333%, transparent 33.333%, transparent calc(66.666% - 1px), var(--ednx-line) calc(66.666% - 1px), var(--ednx-line) 66.666%, transparent 66.666%),
+    linear-gradient(to bottom, transparent calc(33.333% - 1px), var(--ednx-line) calc(33.333% - 1px), var(--ednx-line) 33.333%, transparent 33.333%, transparent calc(66.666% - 1px), var(--ednx-line) calc(66.666% - 1px), var(--ednx-line) 66.666%, transparent 66.666%);
+}
+
+.stage__card {
+  --ednx-x: 0;
+  --ednx-y: 0.5;
+  position: absolute;
+  left: calc(var(--ednx-x) * 100%);
+  top: calc(var(--ednx-y) * 100%);
+  transform: translate(calc(var(--ednx-x) * -100%), calc(var(--ednx-y) * -100%));
+  width: 26%;
+  height: 64%;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--ednx-overlay-line);
+  border-left: 3px solid var(--ednx-orange);
+  border-radius: 6px;
+  background: var(--ednx-overlay-bg);
+  color: var(--ednx-ink);
+  font: inherit;
+  font-size: var(--ednx-text-label);
+  font-weight: 600;
+  text-align: left;
+  vertical-align: top;
+  cursor: grab;
+  touch-action: none;
+}
+
+.stage__card:focus-visible { outline: 2px solid var(--ednx-ink); outline-offset: 2px; }
+.stage[data-dragging="true"],
+.stage[data-dragging="true"] .stage__card { cursor: grabbing; }
+
+.stage__text { margin: 0 0 10px; }
+
+/* Nine quick positions, as a 3 x 3 pad. */
+.presets {
+  display: grid;
+  grid-template-columns: repeat(3, 28px);
+  gap: 4px;
+  margin: 0 0 4px;
+}
+
+.preset {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--ednx-line);
+  border-radius: 4px;
+  background: var(--ednx-page-field-bg);
+  cursor: pointer;
+}
+
+.preset::after {
+  content: "";
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin: auto;
+  border-radius: 50%;
+  background: var(--ednx-ink-faint);
+}
+
+.preset:hover::after { background: var(--ednx-ink); }
+.preset[aria-pressed="true"] { border-color: var(--ednx-orange); }
+.preset[aria-pressed="true"]::after { background: var(--ednx-orange); }
+.preset:focus-visible { outline: 2px solid var(--ednx-ink); outline-offset: 2px; }

@@ -7,9 +7,12 @@
   <link rel="stylesheet" href="css/config.css">
 </head>
 <!--
-  Broadcaster configuration page. There is nothing to configure here: *what* viewers see is chosen in
-  the EDNexus desktop app (Settings → Twitch), because that is where the data originates and where a
-  section left switched off is never published in the first place. So this page is setup guidance.
+  Broadcaster configuration page. *What* viewers see is chosen in the EDNexus desktop app (Settings →
+  Twitch), because that is where the data originates and where a section left switched off is never
+  published in the first place, so most of this page is setup guidance. The one setting here is
+  *where* the overlay card starts on the stream (js/config.js, saved to Twitch's configuration
+  service and read by js/card.js), which is why it lives on Twitch's side: it is about the player,
+  not the game.
 
   The one form below is a development aid. It is revealed by js/config.js only when this page is
   served from localhost (the local dev server), so it can point a local test at a local EBS. On
@@ -20,8 +23,8 @@
     <h1>EDNexus commander card</h1>
     <p class="lede">
       Shows your live Elite Dangerous session to viewers as a card they can pull out over the stream
-      and hide again. It is fed by the EDNexus desktop app running on the PC you play on, so there is
-      nothing to set up on this page.
+      and hide again. It is fed by the EDNexus desktop app running on the PC you play on, so the only
+      thing to set up here is where on the stream it starts.
     </p>
 
     <section class="panel">
@@ -48,6 +51,34 @@
         summary box where you place it (component) while you are playing; the overlay and component show
         nothing at all otherwise. The card is cleared when you switch it off, sign out, or close EDNexus.
       </p>
+    </section>
+
+    <section class="panel" id="position-panel">
+      <h2>Where the card appears</h2>
+      <p class="hint">
+        Choose where the card starts on your stream, so it stays clear of your webcam, chat or game
+        interface. Viewers can still move it for themselves; this is only where it begins for them.
+      </p>
+      <p class="hint">
+        The preview shows the card <strong>open</strong>, since that is when it covers the most. Drag
+        it, click a spot, pick one below, or select it and use the arrow keys.
+      </p>
+
+      <!-- A stand-in for the player. Its size relative to the card matches a typical stream; the
+           position is set from the card's place in it (js/config.js). -->
+      <div class="stage" id="stage" role="group" aria-label="Preview of your stream">
+        <button type="button" class="stage__card" id="stage-card" aria-describedby="stage-help">EDNexus card</button>
+      </div>
+      <p class="sr" id="stage-help">Arrow keys move the card; Shift moves it further. Home returns it to the default.</p>
+      <p class="hint stage__text" id="position-text"></p>
+
+      <div class="presets" role="group" aria-label="Quick positions" id="presets"></div>
+
+      <div class="actions">
+        <button type="button" id="position-save" class="button">Save position</button>
+        <button type="button" id="position-default" class="button button--quiet">Use the default</button>
+        <span class="status" id="position-status" role="status" aria-live="polite"></span>
+      </div>
     </section>
 
     <section class="panel">
@@ -89,6 +120,7 @@
        which carries auth, the configuration service and the PubSub subscription. -->
   <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
   <script src="js/state.js"></script>
+  <script src="js/position.js"></script>
   <script src="js/config.js"></script>
 </body>
 </html>

@@ -52,7 +52,7 @@ jobs:
 
           # Paths configured in the developer console, resolved against the Base URI.
           views="video_overlay.html panel.html component.html mobile.html config.html"
-          scripts="js/state.js js/model.js js/render.js js/session.js js/card.js js/page.js js/component.js js/config.js"
+          scripts="js/state.js js/model.js js/render.js js/session.js js/position.js js/card.js js/page.js js/component.js js/config.js"
           styles="css/tokens.css css/sections.css css/card.css css/page.css css/mobile.css css/component.css css/config.css"
           for required in $views $scripts $styles; do
             if [ ! -f "bundle/$required" ]; then
