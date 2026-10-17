@@ -54,3 +54,7 @@ appsettings.*.Development.json
 installer/**/publish/
 installer/**/stage/
 installer/**/out/
+
+# Python bytecode (extension/dev/serve-https.py)
+__pycache__/
+*.pyc
