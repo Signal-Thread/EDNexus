@@ -146,7 +146,7 @@ public class TwitchCredentialCheckTests
     {
         var (client, status) = PubSub(code);
 
-        Assert.False(await client.BroadcastAsync("chan", State(), CancellationToken.None));
+        Assert.Equal(PubSubBroadcastResult.CredentialsRejected, await client.BroadcastAsync("chan", State(), CancellationToken.None));
 
         Assert.Equal(TwitchCredentialState.Rejected, status.State);
     }
@@ -159,7 +159,8 @@ public class TwitchCredentialCheckTests
     {
         var (client, status) = PubSub(code);
 
-        Assert.False(await client.BroadcastAsync("chan", State(), CancellationToken.None));
+        // An ordinary failure, reported as one: never as a credentials problem.
+        Assert.Equal(PubSubBroadcastResult.Failed, await client.BroadcastAsync("chan", State(), CancellationToken.None));
 
         Assert.Equal(TwitchCredentialState.Unknown, status.State);
     }
@@ -171,10 +172,24 @@ public class TwitchCredentialCheckTests
         status.MarkRejected(403);
         var (client, _) = PubSub(HttpStatusCode.NoContent, status);
 
-        Assert.True(await client.BroadcastAsync("chan", State(), CancellationToken.None));
+        Assert.Equal(PubSubBroadcastResult.Published, await client.BroadcastAsync("chan", State(), CancellationToken.None));
 
         Assert.Equal(TwitchCredentialState.Accepted, status.State);
         Assert.Null(status.Current.HttpStatus);
+    }
+
+    [Fact]
+    public async Task An_ordinary_failure_after_a_refusal_is_reported_as_one_and_does_not_change_the_status()
+    {
+        var status = new TwitchCredentialStatus();
+        status.MarkRejected(403);
+        var (client, _) = PubSub(HttpStatusCode.InternalServerError, status);
+
+        Assert.Equal(PubSubBroadcastResult.Failed, await client.BroadcastAsync("chan", State(), CancellationToken.None));
+
+        // Still what the last real refusal said: a 500 proves nothing about the credentials either way.
+        Assert.Equal(TwitchCredentialState.Rejected, status.State);
+        Assert.Equal(403, status.Current.HttpStatus);
     }
 
     [Fact]
@@ -197,8 +212,7 @@ public class TwitchCredentialCheckTests
     {
         using var factory = new EbsHostFactory();
         var (client, _) = factory.CreateBroadcasterClient("chan-rejected");
-        factory.PubSub.RejectFor.Add("chan-rejected");
-        factory.Services.GetRequiredService<TwitchCredentialStatus>().MarkRejected(403);
+        factory.PubSub.RejectCredentialsFor.Add("chan-rejected");   // Twitch refuses the EBS's credentials for this call
 
         var response = await client.PostAsJsonAsync("/api/update-state", new { state = new { v = 1, headline = "Docked at Home" } });
 
@@ -215,6 +229,22 @@ public class TwitchCredentialCheckTests
         using var factory = new EbsHostFactory();
         var (client, _) = factory.CreateBroadcasterClient("chan-flaky");
         factory.PubSub.RejectFor.Add("chan-flaky");   // fails, but Twitch never said the credentials were refused
+
+        var response = await client.PostAsJsonAsync("/api/update-state", new { state = new { v = 1, headline = "Docked at Home" } });
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.False(response.Headers.Contains(TwitchCredentialStatus.RejectedHeader));
+    }
+
+    [Fact]
+    public async Task A_stale_rejection_does_not_make_a_later_ordinary_failure_look_like_a_credentials_problem()
+    {
+        using var factory = new EbsHostFactory();
+        var (client, _) = factory.CreateBroadcasterClient("chan-stale");
+        // Some earlier call was refused, so the shared status says "rejected"...
+        factory.Services.GetRequiredService<TwitchCredentialStatus>().MarkRejected(403);
+        // ...but THIS broadcast fails for an ordinary reason (a Twitch outage, a 400).
+        factory.PubSub.RejectFor.Add("chan-stale");
 
         var response = await client.PostAsJsonAsync("/api/update-state", new { state = new { v = 1, headline = "Docked at Home" } });
 

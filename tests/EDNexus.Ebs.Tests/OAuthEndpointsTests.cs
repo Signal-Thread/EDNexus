@@ -65,7 +65,7 @@ public class OAuthEndpointsTests : IClassFixture<OAuthEndpointsTests.Factory>
     /// <summary>Fake PubSub relay — the OAuth flow tests only care that authentication succeeded, not that Twitch PubSub itself is reachable.</summary>
     public sealed class FakePubSubClient : ITwitchPubSubClient
     {
-        public Task<bool> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken) => Task.FromResult(true);
+        public Task<PubSubBroadcastResult> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken) => Task.FromResult(PubSubBroadcastResult.Published);
     }
 
     public sealed class FakeTwitchOAuthClient : ITwitchOAuthClient

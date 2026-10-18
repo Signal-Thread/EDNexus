@@ -193,6 +193,15 @@ public sealed class TwitchStreamCardService : IDisposable
         // the EBS's initial state. The host calls RequestPublish() once the replay is done.
     }
 
+    /// <summary>
+    /// How long to wait between retries while the backend's Twitch credentials are being refused:
+    /// 24 times the publish floor, capped at <see cref="MaxRetryAfter"/> (so two minutes at the default
+    /// five-second floor). Scaled from the floor rather than fixed so a test with a tiny floor does not
+    /// have to wait minutes.
+    /// </summary>
+    internal TimeSpan BackendFaultRetryInterval =>
+        TimeSpan.FromTicks(Math.Min(MaxRetryAfter.Ticks, _minInterval.Ticks * 24));
+
     /// <summary>The floor between two publishes this service was built with.</summary>
     public TimeSpan MinInterval => _minInterval;
 
@@ -300,7 +309,21 @@ public sealed class TwitchStreamCardService : IDisposable
                     // Capped, so a misconfigured proxy's header cannot silence the card for the session.
                     if (published.RetryAfter is { } wait && wait > backoff)
                         backoff = wait < MaxRetryAfter ? wait : MaxRetryAfter;
-                    retry = ++_consecutiveFailures <= MaxPublishRetries;
+                    if (published.Status == StreamStatePublishStatus.BackendRejectedByTwitch)
+                    {
+                        // A backend fault lasts as long as it takes an operator to fix a secret: minutes or
+                        // hours, not the seconds a bounded retry covers. The warning on screen promises it keeps
+                        // retrying, and with no earlier success even the heartbeat wake is skipped, so giving up
+                        // would leave an idle commander's card stale until something changed. So retry for as long
+                        // as it takes, slowly (one small request every BackendFaultRetryInterval), and outside
+                        // the bounded budget that stops a dead EBS from being polled forever.
+                        if (backoff < BackendFaultRetryInterval) backoff = BackendFaultRetryInterval;
+                        retry = true;
+                    }
+                    else
+                    {
+                        retry = ++_consecutiveFailures <= MaxPublishRetries;
+                    }
                 }
                 else if (published is not null)
                 {

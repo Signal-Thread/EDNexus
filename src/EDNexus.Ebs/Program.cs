@@ -336,7 +336,6 @@ try
             UpdateStateRequest body,
             IChannelStateStore stateStore,
             ITwitchPubSubClient pubSubClient,
-            TwitchCredentialStatus credentials,
             IBroadcasterTokenStore tokenStore,
             ChannelLocks channelLocks,
             IOptions<EbsOptions> ebsOptions,
@@ -371,7 +370,7 @@ try
             // not the request's original whitespace, which the limit never saw.
             using var compactState = JsonDocument.Parse(pubSubRequest.Message);
 
-            bool published;
+            PubSubBroadcastResult broadcast;
             using (await channelLocks.AcquireAsync(channelId, cancellationToken).ConfigureAwait(false))
             {
                 // Authenticated again now that this channel is ours alone: a sign-out (POST /oauth/revoke) that
@@ -384,18 +383,20 @@ try
                 }
 
                 stateStore.Set(channelId, compactState.RootElement);
-                published = await pubSubClient.BroadcastAsync(channelId, compactState.RootElement, cancellationToken).ConfigureAwait(false);
+                broadcast = await pubSubClient.BroadcastAsync(channelId, compactState.RootElement, cancellationToken).ConfigureAwait(false);
             }
 
-            if (!published)
+            if (broadcast != PubSubBroadcastResult.Published)
             {
                 logger.LogWarning("Failed to publish state update for channel {ChannelId} to Twitch PubSub.", channelId);
 
                 // Twitch refusing the EBS's own credentials is a server misconfiguration, not an outage,
                 // and no amount of retrying fixes it. Say so with a header (a proxy in front can replace
                 // a 502's body) and a 503 (which one does not rewrite), so the desktop app can tell the
-                // commander it is not their sign-in, instead of a bare "502".
-                if (credentials.State == TwitchCredentialState.Rejected)
+                // commander it is not their sign-in, instead of a bare "502". Decided from THIS call's
+                // outcome, not the shared status: that stays "rejected" after an earlier refusal, and a
+                // later 400 or Twitch outage must not be reported as a credentials problem.
+                if (broadcast == PubSubBroadcastResult.CredentialsRejected)
                 {
                     httpRequest.HttpContext.Response.Headers[TwitchCredentialStatus.RejectedHeader] = "credentials";
                     return Results.Problem(

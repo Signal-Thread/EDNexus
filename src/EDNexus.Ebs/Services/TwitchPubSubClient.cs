@@ -44,7 +44,7 @@ public sealed class TwitchPubSubClient : ITwitchPubSubClient
         string.IsNullOrWhiteSpace(options.ExtensionId) ? options.ClientId : options.ExtensionId;
 
     /// <inheritdoc />
-    public async Task<bool> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken)
+    public async Task<PubSubBroadcastResult> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken)
     {
         var request = PubSubBroadcastRequest.Create(broadcasterId, state, _ebsOptions.MaxStatePayloadBytes);
         var token = _jwtService.CreateExternalServiceToken(broadcasterId);
@@ -71,12 +71,16 @@ public sealed class TwitchPubSubClient : ITwitchPubSubClient
             // Only a refusal of the signed token says anything about the credentials; a 400 is the
             // payload and a 5xx is Twitch, and neither should flip the state.
             if (TwitchCredentialStatus.IsCredentialRefusal((int)response.StatusCode))
+            {
                 _credentials.MarkRejected((int)response.StatusCode);
-            return false;
+                return PubSubBroadcastResult.CredentialsRejected;
+            }
+
+            return PubSubBroadcastResult.Failed;
         }
 
         // A real broadcast is the authority: it clears a rejection the startup check recorded.
         _credentials.MarkAccepted();
-        return true;
+        return PubSubBroadcastResult.Published;
     }
 }

@@ -137,7 +137,7 @@ public class TwitchPubSubClientHeaderTests
         var handler = new RecordingHandler(HttpStatusCode.NoContent);
         var client = Create(handler, new TwitchEbsOptions { ClientId = "oauth-app", ExtensionId = "the-extension", ExtensionSecret = Secret });
 
-        Assert.True(await client.BroadcastAsync("123", JsonSerializer.SerializeToElement(new { v = 1 }), CancellationToken.None));
+        Assert.Equal(PubSubBroadcastResult.Published, await client.BroadcastAsync("123", JsonSerializer.SerializeToElement(new { v = 1 }), CancellationToken.None));
 
         Assert.Equal("the-extension", Assert.Single(handler.ClientIds));
     }
