@@ -111,6 +111,47 @@ end to end instead of finding out when a viewer reports a blank card:
 5. Switch the card off (`DELETE /api/update-state`, or the app's toggle) and confirm the card disappears
    and `initial-state` answers `404`.
 
+### Credential self-check
+
+A wrong `Twitch__ExtensionSecret` used to be silent: the service started, stored every card, answered
+`/healthz` with `ok`, and never delivered a live update. Viewers who load the channel still saw the
+card (it is served from the store), so nothing looked broken until someone noticed a card that never
+changed. Three things now make it loud:
+
+1. **A startup check.** About 10 seconds after start, then every 6 hours, the EBS sends the real
+   Helix PubSub endpoint a request signed exactly like a broadcast but aimed at a target Twitch cannot
+   deliver to, so **nothing is ever sent to a viewer**. Twitch refusing the signed token
+   (`401`/`403`) logs at **error**: `Twitch REJECTED the EBS's PubSub credentials (403: ...)`, naming
+   the three settings to check. A `400` (the credentials got through and only the bogus target was
+   refused) logs `Twitch did not refuse the EBS's PubSub credentials`. Anything else (a network error,
+   a 5xx, a 429) is "inconclusive" and changes nothing. It never throws or stops the service.
+2. **Real broadcasts keep the record.** Every actual PubSub call updates the same status: a refusal
+   sets it, a success clears it. This is the authority, so a stale startup verdict cannot outlive the
+   first real publish.
+3. **`/healthz` reports it, and publishes carry it.** `/healthz` still answers `status: "ok"` (a wrong
+   secret must not get the container restarted in a loop, which would not fix it) with
+   `pubsub: "unknown" | "accepted" | "rejected"`, plus `pubsubStatus` (the HTTP status behind a
+   rejection) and `pubsubCheckedAt`. A `POST /api/update-state` that fails *because* Twitch is
+   refusing these credentials returns **`503`** with the header `X-EDNexus-Pubsub-Rejected: credentials`
+   instead of a bare `502` (a proxy in front can replace a 502's body, so the header and the status
+   code carry the meaning). The desktop app turns that into a warning on its main window.
+
+```bash
+curl -s https://<your ebs>/healthz
+# {"status":"ok","pubsub":"rejected","pubsubStatus":403,"pubsubCheckedAt":"2026-10-18T17:50:43+00:00"}
+```
+
+What `rejected` means and how to fix it: `Twitch__ExtensionSecret` must be this extension's own base64
+secret from the Developer Console (not another extension's, a rotated one, or the application's Client
+Secret); `Twitch__ExtensionId` must be this extension's Client ID; and set `Twitch__OwnerUserId` to the
+numeric Twitch user id of the extension's owner. Restart the service and watch `/healthz` (it updates
+on the next real publish; the check also re-runs on its 6 hour cycle).
+
+> **What the check does not prove.** Twitch verifying the token before it looks at the request body is
+> reasoned from its documentation, not observed: the refusal side was seen in production (`403 JWT could
+> not be verified`), the acceptance side was not. So `accepted` from the startup check means "not
+> refused"; only a real broadcast proves the credentials work, and that is why it overrides the check.
+
 ## Behind a reverse proxy
 
 The container speaks plain HTTP and expects a TLS-terminating proxy (Caddy in the compose file) in
@@ -203,7 +244,10 @@ Called by the desktop client on behalf of the broadcaster.
 - **Responses**: `200 OK` on success, `401 Unauthorized` for a missing/invalid/revoked token,
   `400 Bad Request` for a missing/`null`/non-object `state`, `413 Payload Too Large` if the state
   or the request body exceeds its limit, `429 Too Many Requests` if
-  the per-channel rate limit is exceeded, `502 Bad Gateway` if Twitch PubSub rejects the message.
+  the per-channel rate limit is exceeded, `502 Bad Gateway` if Twitch PubSub fails the message, and
+  `503 Service Unavailable` with `X-EDNexus-Pubsub-Rejected: credentials` when the failure is Twitch
+  refusing **this service's own credentials** (see [Credential self-check](#credential-self-check)).
+  The state is stored in every one of these cases, so new viewers still get the card.
 
 ### `DELETE /api/update-state`
 

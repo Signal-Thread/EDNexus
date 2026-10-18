@@ -126,6 +126,7 @@ public class TwitchPubSubClientHeaderTests
         new TwitchExtensionJwtService(Microsoft.Extensions.Options.Options.Create(twitch)),
         Microsoft.Extensions.Options.Options.Create(twitch),
         Microsoft.Extensions.Options.Options.Create(new EbsOptions()),
+        new TwitchCredentialStatus(),
         NullLogger<TwitchPubSubClient>.Instance);
 
     private const string Secret = "c3VwZXItc2VjcmV0LWV4dGVuc2lvbi1rZXktMTIzNA==";

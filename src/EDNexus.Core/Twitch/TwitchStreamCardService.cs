@@ -290,7 +290,8 @@ public sealed class TwitchStreamCardService : IDisposable
             try
             {
                 var published = await PublishIfChangedAsync(ct).ConfigureAwait(false);
-                if (published is { Status: StreamStatePublishStatus.RateLimited or StreamStatePublishStatus.Failed })
+                if (published is { Status: StreamStatePublishStatus.RateLimited or StreamStatePublishStatus.Failed
+                    or StreamStatePublishStatus.BackendRejectedByTwitch })
                 {
                     // Give a struggling EBS (or a tighter-than-expected rate limit) room to recover
                     // rather than retrying at the floor interval.

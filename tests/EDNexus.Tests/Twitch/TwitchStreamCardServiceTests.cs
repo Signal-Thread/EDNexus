@@ -469,6 +469,46 @@ public class TwitchStreamCardServiceTests
     }
 
     [Fact]
+    public async Task A_backend_whose_credentials_Twitch_refuses_is_retried_and_recovers_once_fixed()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var attempts = 0;
+        var client = new FakeStreamStateApiClient();
+        // The operator fixes the secret while the app is running: no commander action is needed, so
+        // the pump must keep coming back by itself and the card must start updating again.
+        client.Respond = _ => ++attempts < 3
+            ? new StreamStatePublishResult(StreamStatePublishStatus.BackendRejectedByTwitch, "HTTP 503")
+            : StreamStatePublishResult.Ok;
+
+        using var service = Create(state, client);
+        service.RequestPublish();
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline && attempts < 3)
+            await Task.Delay(FastInterval * 2);
+
+        Assert.True(attempts >= 3, $"Expected the pump to keep retrying a backend fault; it stopped after {attempts} attempt(s).");
+    }
+
+    [Fact]
+    public async Task A_backend_fault_does_not_stop_publishing_the_way_a_revoked_token_does()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var reauth = 0;
+        var client = new FakeStreamStateApiClient
+        {
+            Respond = _ => new StreamStatePublishResult(StreamStatePublishStatus.BackendRejectedByTwitch, "HTTP 503"),
+        };
+
+        using var service = Create(state, client);
+        service.ReauthRequired += () => reauth++;
+        service.RequestPublish();
+        await Task.Delay(FastInterval * 6);
+
+        Assert.Equal(0, reauth);   // the commander's sign-in is not the problem
+    }
+
+    [Fact]
     public async Task Retries_are_bounded_so_a_dead_ebs_is_not_polled_forever()
     {
         var state = new CommanderState { StarSystem = "Nervi" };

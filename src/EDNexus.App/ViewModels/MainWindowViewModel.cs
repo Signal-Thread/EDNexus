@@ -265,6 +265,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             {
                 if (result.IsSuccess) Trace.TraceInformation("Twitch: stream card published.");
                 else Trace.TraceWarning($"Twitch: stream card publish failed ({result.Status}) — {result.Error}");
+                UpdateTwitchWarning(result);
                 TwitchPublishCompleted?.Invoke(result);
             };
             twitchCard.ReauthRequired += () =>
@@ -374,6 +375,24 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private void OnDiscordSettingsChanged(DiscordSettings settings) => _host.ApplyDiscordSettings(settings);
 
     [ObservableProperty] private string _journalStatus = "";
+
+    /// <summary>
+    /// A warning, shown on the main window, that the stream card is failing for a reason the commander
+    /// cannot fix (Twitch refusing the backend's credentials). Empty when there is nothing to say. The
+    /// Settings window's status line is only seen with Settings open; this is seen while playing.
+    /// </summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasTwitchWarning))] private string _twitchWarning = "";
+
+    public bool HasTwitchWarning => TwitchWarning.Length > 0;
+
+    /// <summary>Raises or clears <see cref="TwitchWarning"/> from a publish result; runs on the UI thread, since results arrive on the publisher's.</summary>
+    private void UpdateTwitchWarning(EDNexus.Core.Twitch.StreamStatePublishResult result)
+    {
+        if (EDNexus.Core.Twitch.StreamCardWarning.For(result) is { } warning)
+            Dispatcher.UIThread.Post(() => TwitchWarning = warning);
+        else if (EDNexus.Core.Twitch.StreamCardWarning.Clears(result))
+            Dispatcher.UIThread.Post(() => TwitchWarning = "");
+    }
     [ObservableProperty] private string _privacyStatus = "";
     [ObservableProperty] private string _commanderName = "—";
     [ObservableProperty] private string _balance = "0 cr";

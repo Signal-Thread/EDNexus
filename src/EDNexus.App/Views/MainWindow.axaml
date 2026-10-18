@@ -217,6 +217,14 @@
       </Grid>
     </Border>
 
+    <!-- Twitch warning bar: the stream card is failing for a reason the commander cannot fix (Twitch is
+         refusing the backend's credentials). Seen while playing, unlike the Settings status line. -->
+    <Border DockPanel.Dock="Bottom" Background="{StaticResource AmberChipBg}" BorderBrush="{StaticResource CardBorder}"
+            BorderThickness="0,0,0,1" Padding="20,8" IsVisible="{Binding HasTwitchWarning}">
+      <TextBlock Text="{Binding TwitchWarning, StringFormat='⚠ {0}'}" Foreground="{StaticResource AmberBrush}"
+                 TextWrapping="Wrap" />
+    </Border>
+
     <!-- Footer / status bar -->
     <Border DockPanel.Dock="Bottom" Background="{StaticResource Surface100}" BorderBrush="{StaticResource CardBorder}"
             BorderThickness="0,1,0,0" Padding="20,8">

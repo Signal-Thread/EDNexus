@@ -122,6 +122,14 @@ try
         // long a single misbehaving/slow call can hold resources.
         client.Timeout = TimeSpan.FromSeconds(10);
     });
+    // Whether Twitch accepts the credentials PubSub calls are signed with: written by every real
+    // broadcast and by the startup check, read by /healthz and by the update-state response.
+    builder.Services.AddSingleton<TwitchCredentialStatus>();
+    builder.Services.AddHttpClient<ITwitchCredentialProbe, TwitchCredentialProbe>(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(10);
+    });
+    builder.Services.AddHostedService<TwitchCredentialCheckBackgroundService>();
     builder.Services.AddHttpClient<ITwitchOAuthClient, TwitchOAuthClient>(client =>
     {
         // Same reasoning as above, and a login/refresh waits on this: fail in seconds, not the 100s default.
@@ -306,7 +314,20 @@ try
     // project site rather than a 404.
     app.MapGet("/", () => Results.Redirect("https://signal-thread.github.io/EDNexus/"));
 
-    app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+    // "ok" means the process is up and answering, which is all a container health check should
+    // gate on, so a credential problem is reported alongside it, never instead of it: a wrong secret
+    // should not get the container restarted in a loop. `pubsub` is "unknown", "accepted" or "rejected".
+    app.MapGet("/healthz", (TwitchCredentialStatus credentials) =>
+    {
+        var (state, httpStatus, at) = credentials.Current;
+        return Results.Ok(new
+        {
+            status = "ok",
+            pubsub = state.ToString().ToLowerInvariant(),
+            pubsubStatus = httpStatus,
+            pubsubCheckedAt = at,
+        });
+    });
 
     app.MapOAuthEndpoints();
 
@@ -315,6 +336,7 @@ try
             UpdateStateRequest body,
             IChannelStateStore stateStore,
             ITwitchPubSubClient pubSubClient,
+            TwitchCredentialStatus credentials,
             IBroadcasterTokenStore tokenStore,
             ChannelLocks channelLocks,
             IOptions<EbsOptions> ebsOptions,
@@ -368,6 +390,19 @@ try
             if (!published)
             {
                 logger.LogWarning("Failed to publish state update for channel {ChannelId} to Twitch PubSub.", channelId);
+
+                // Twitch refusing the EBS's own credentials is a server misconfiguration, not an outage,
+                // and no amount of retrying fixes it. Say so with a header (a proxy in front can replace
+                // a 502's body) and a 503 (which one does not rewrite), so the desktop app can tell the
+                // commander it is not their sign-in, instead of a bare "502".
+                if (credentials.State == TwitchCredentialState.Rejected)
+                {
+                    httpRequest.HttpContext.Response.Headers[TwitchCredentialStatus.RejectedHeader] = "credentials";
+                    return Results.Problem(
+                        "Twitch is rejecting this service's PubSub credentials, so live updates cannot be delivered. The card is stored and new viewers still see it. This is a server configuration problem.",
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+
                 return Results.Problem("Failed to publish the update to Twitch PubSub.", statusCode: StatusCodes.Status502BadGateway);
             }
 
