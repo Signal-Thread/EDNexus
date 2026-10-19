@@ -469,6 +469,89 @@ public class TwitchStreamCardServiceTests
     }
 
     [Fact]
+    public async Task A_backend_whose_credentials_Twitch_refuses_is_retried_and_recovers_once_fixed()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var attempts = 0;
+        var client = new FakeStreamStateApiClient();
+        // The operator fixes the secret while the app is running: no commander action is needed, so
+        // the pump must keep coming back by itself and the card must start updating again.
+        client.Respond = _ => ++attempts < 3
+            ? new StreamStatePublishResult(StreamStatePublishStatus.BackendRejectedByTwitch, "HTTP 503")
+            : StreamStatePublishResult.Ok;
+
+        using var service = Create(state, client);
+        service.RequestPublish();
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline && attempts < 3)
+            await Task.Delay(FastInterval * 2);
+
+        Assert.True(attempts >= 3, $"Expected the pump to keep retrying a backend fault; it stopped after {attempts} attempt(s).");
+    }
+
+    [Fact]
+    public async Task A_backend_fault_keeps_being_retried_past_the_cap_so_an_idle_card_recovers_when_it_is_fixed()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var attempts = 0;
+        var fixedAt = TwitchStreamCardService.MaxPublishRetries + 4;    // well past the bounded budget
+        var client = new FakeStreamStateApiClient();
+        // No successful publish ever happened this session, so the heartbeat is skipped too: the retry
+        // loop is the card's only way back, and an operator fixing the secret takes far longer than
+        // the handful of retries an ordinary failure gets.
+        client.Respond = _ => ++attempts < fixedAt
+            ? new StreamStatePublishResult(StreamStatePublishStatus.BackendRejectedByTwitch, "HTTP 503")
+            : StreamStatePublishResult.Ok;
+
+        using var service = new TwitchStreamCardService(
+            state, StreamCardSources.Empty, client, static () => Endpoint, static () => "ebs-token",
+            visibility: null, isSuppressed: null, minInterval: TimeSpan.FromMilliseconds(5), clock: null);
+        service.RequestPublish();
+
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < deadline && attempts < fixedAt)
+            await Task.Delay(50);
+
+        Assert.True(attempts >= fixedAt,
+            $"Expected retries to continue past the cap until the backend recovered; stopped after {attempts} attempt(s).");
+    }
+
+    [Fact]
+    public void The_backend_fault_retry_is_slow_in_real_use_and_never_longer_than_the_retry_ceiling()
+    {
+        var state = new CommanderState();
+        using var realistic = new TwitchStreamCardService(
+            state, StreamCardSources.Empty, new FakeStreamStateApiClient(), static () => Endpoint, static () => "t");
+        using var tiny = new TwitchStreamCardService(
+            state, StreamCardSources.Empty, new FakeStreamStateApiClient(), static () => Endpoint, static () => "t",
+            visibility: null, isSuppressed: null, minInterval: TimeSpan.FromMilliseconds(5), clock: null);
+
+        // At the default five-second floor: two minutes, i.e. one small request per two minutes.
+        Assert.Equal(TwitchStreamCardService.MaxRetryAfter, realistic.BackendFaultRetryInterval);
+        Assert.Equal(TimeSpan.FromMilliseconds(120), tiny.BackendFaultRetryInterval);
+        Assert.True(realistic.BackendFaultRetryInterval > realistic.MinInterval * 2, "must be slower than an ordinary retry");
+    }
+
+    [Fact]
+    public async Task A_backend_fault_does_not_stop_publishing_the_way_a_revoked_token_does()
+    {
+        var state = new CommanderState { StarSystem = "Nervi" };
+        var reauth = 0;
+        var client = new FakeStreamStateApiClient
+        {
+            Respond = _ => new StreamStatePublishResult(StreamStatePublishStatus.BackendRejectedByTwitch, "HTTP 503"),
+        };
+
+        using var service = Create(state, client);
+        service.ReauthRequired += () => reauth++;
+        service.RequestPublish();
+        await Task.Delay(FastInterval * 6);
+
+        Assert.Equal(0, reauth);   // the commander's sign-in is not the problem
+    }
+
+    [Fact]
     public async Task Retries_are_bounded_so_a_dead_ebs_is_not_polled_forever()
     {
         var state = new CommanderState { StarSystem = "Nervi" };

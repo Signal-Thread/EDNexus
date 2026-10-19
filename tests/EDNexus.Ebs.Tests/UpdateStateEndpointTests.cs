@@ -335,13 +335,17 @@ public sealed class FakeTwitchPubSubClient : ITwitchPubSubClient
 
     public Dictionary<string, JsonElement> LastMessage { get; } = new();
 
-    /// <summary>Channels whose broadcasts Twitch rejects.</summary>
+    /// <summary>Channels whose broadcasts fail for an ordinary reason (a bad payload, a Twitch outage).</summary>
     public HashSet<string> RejectFor { get; } = new();
 
-    public Task<bool> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken)
+    /// <summary>Channels whose broadcasts fail because Twitch refuses the EBS's own credentials.</summary>
+    public HashSet<string> RejectCredentialsFor { get; } = new();
+
+    public Task<PubSubBroadcastResult> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken)
     {
         BroadcastCalls[broadcasterId] = BroadcastCalls.GetValueOrDefault(broadcasterId) + 1;
         LastMessage[broadcasterId] = state.Clone();
-        return Task.FromResult(!RejectFor.Contains(broadcasterId));
+        if (RejectCredentialsFor.Contains(broadcasterId)) return Task.FromResult(PubSubBroadcastResult.CredentialsRejected);
+        return Task.FromResult(RejectFor.Contains(broadcasterId) ? PubSubBroadcastResult.Failed : PubSubBroadcastResult.Published);
     }
 }

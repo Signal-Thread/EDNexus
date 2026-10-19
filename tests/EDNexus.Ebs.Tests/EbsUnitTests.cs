@@ -126,6 +126,7 @@ public class TwitchPubSubClientHeaderTests
         new TwitchExtensionJwtService(Microsoft.Extensions.Options.Options.Create(twitch)),
         Microsoft.Extensions.Options.Options.Create(twitch),
         Microsoft.Extensions.Options.Options.Create(new EbsOptions()),
+        new TwitchCredentialStatus(),
         NullLogger<TwitchPubSubClient>.Instance);
 
     private const string Secret = "c3VwZXItc2VjcmV0LWV4dGVuc2lvbi1rZXktMTIzNA==";
@@ -136,7 +137,7 @@ public class TwitchPubSubClientHeaderTests
         var handler = new RecordingHandler(HttpStatusCode.NoContent);
         var client = Create(handler, new TwitchEbsOptions { ClientId = "oauth-app", ExtensionId = "the-extension", ExtensionSecret = Secret });
 
-        Assert.True(await client.BroadcastAsync("123", JsonSerializer.SerializeToElement(new { v = 1 }), CancellationToken.None));
+        Assert.Equal(PubSubBroadcastResult.Published, await client.BroadcastAsync("123", JsonSerializer.SerializeToElement(new { v = 1 }), CancellationToken.None));
 
         Assert.Equal("the-extension", Assert.Single(handler.ClientIds));
     }

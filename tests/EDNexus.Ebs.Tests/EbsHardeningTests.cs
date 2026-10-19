@@ -474,7 +474,7 @@ public class EbsHardeningTests
         public ManualResetEventSlim OfflineEntered { get; } = new();
         public TaskCompletionSource ReleaseOffline { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<bool> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken)
+        public async Task<PubSubBroadcastResult> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken)
         {
             if (broadcasterId == gatedChannel && state.TryGetProperty("offline", out _))
             {
@@ -482,7 +482,7 @@ public class EbsHardeningTests
                 await ReleaseOffline.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
             }
 
-            return true;
+            return PubSubBroadcastResult.Published;
         }
     }
 }

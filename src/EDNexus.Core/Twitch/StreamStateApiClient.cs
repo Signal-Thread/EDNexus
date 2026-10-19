@@ -34,6 +34,14 @@ public enum StreamStatePublishStatus
     /// already watching. Worth retrying for their sake; nothing is left public to anyone new.
     /// </summary>
     ClearedNotDelivered,
+
+    /// <summary>
+    /// Twitch is refusing the <i>backend's</i> own PubSub credentials (<c>503</c> with the
+    /// <see cref="StreamStateApiClient.PubSubRejectedHeader"/> header). The card is stored, so new
+    /// viewers still get it, but nothing reaches viewers already watching. It is a server
+    /// misconfiguration: not the commander's sign-in (so no re-login) and not worth retrying hard.
+    /// </summary>
+    BackendRejectedByTwitch,
 }
 
 /// <param name="Status">Whether the snapshot reached viewers, and if not, why not.</param>
@@ -103,6 +111,12 @@ public sealed class StreamStateApiClient : IStreamStateApiClient, IDisposable
     /// </summary>
     public const string SnapshotRemovedHeader = "X-EDNexus-Snapshot-Removed";
 
+    /// <summary>
+    /// Header the EBS sets when Twitch is refusing the EBS's own PubSub credentials. Mirrors
+    /// <c>EDNexus.Ebs.Services.TwitchCredentialStatus.RejectedHeader</c>.
+    /// </summary>
+    public const string PubSubRejectedHeader = "X-EDNexus-Pubsub-Rejected";
+
     public Task<StreamStatePublishResult> PublishAsync(
         string updateStateEndpoint, string token, StreamCardSnapshot snapshot, CancellationToken ct = default)
     {
@@ -156,6 +170,7 @@ public sealed class StreamStateApiClient : IStreamStateApiClient, IDisposable
             var status = response.StatusCode switch
             {
                 _ when response.Headers.Contains(SnapshotRemovedHeader) => StreamStatePublishStatus.ClearedNotDelivered,
+                _ when response.Headers.Contains(PubSubRejectedHeader) => StreamStatePublishStatus.BackendRejectedByTwitch,
                 HttpStatusCode.Unauthorized => StreamStatePublishStatus.Unauthorized,
                 HttpStatusCode.RequestEntityTooLarge => StreamStatePublishStatus.TooLarge,
                 HttpStatusCode.TooManyRequests => StreamStatePublishStatus.RateLimited,

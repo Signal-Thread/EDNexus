@@ -20,6 +20,7 @@ public sealed class TwitchPubSubClient : ITwitchPubSubClient
     private readonly ITwitchExtensionJwtService _jwtService;
     private readonly TwitchEbsOptions _twitchOptions;
     private readonly EbsOptions _ebsOptions;
+    private readonly TwitchCredentialStatus _credentials;
     private readonly ILogger<TwitchPubSubClient> _logger;
 
     public TwitchPubSubClient(
@@ -27,12 +28,14 @@ public sealed class TwitchPubSubClient : ITwitchPubSubClient
         ITwitchExtensionJwtService jwtService,
         IOptions<TwitchEbsOptions> twitchOptions,
         IOptions<EbsOptions> ebsOptions,
+        TwitchCredentialStatus credentials,
         ILogger<TwitchPubSubClient> logger)
     {
         _httpClient = httpClient;
         _jwtService = jwtService;
         _twitchOptions = twitchOptions.Value;
         _ebsOptions = ebsOptions.Value;
+        _credentials = credentials;
         _logger = logger;
     }
 
@@ -41,7 +44,7 @@ public sealed class TwitchPubSubClient : ITwitchPubSubClient
         string.IsNullOrWhiteSpace(options.ExtensionId) ? options.ClientId : options.ExtensionId;
 
     /// <inheritdoc />
-    public async Task<bool> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken)
+    public async Task<PubSubBroadcastResult> BroadcastAsync(string broadcasterId, JsonElement state, CancellationToken cancellationToken)
     {
         var request = PubSubBroadcastRequest.Create(broadcasterId, state, _ebsOptions.MaxStatePayloadBytes);
         var token = _jwtService.CreateExternalServiceToken(broadcasterId);
@@ -65,9 +68,19 @@ public sealed class TwitchPubSubClient : ITwitchPubSubClient
                 broadcasterId,
                 (int)response.StatusCode,
                 body);
-            return false;
+            // Only a refusal of the signed token says anything about the credentials; a 400 is the
+            // payload and a 5xx is Twitch, and neither should flip the state.
+            if (TwitchCredentialStatus.IsCredentialRefusal((int)response.StatusCode))
+            {
+                _credentials.MarkRejected((int)response.StatusCode);
+                return PubSubBroadcastResult.CredentialsRejected;
+            }
+
+            return PubSubBroadcastResult.Failed;
         }
 
-        return true;
+        // A real broadcast is the authority: it clears a rejection the startup check recorded.
+        _credentials.MarkAccepted();
+        return PubSubBroadcastResult.Published;
     }
 }

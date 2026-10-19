@@ -33,7 +33,7 @@ public static class ChannelStateClearing
     public static async Task<bool> ClearAsync(string channelId, IChannelStateStore stateStore, ITwitchPubSubClient pubSubClient, CancellationToken ct)
     {
         stateStore.Remove(channelId);
-        try { return await pubSubClient.BroadcastAsync(channelId, OfflineMessage, ct).ConfigureAwait(false); }
+        try { return await pubSubClient.BroadcastAsync(channelId, OfflineMessage, ct).ConfigureAwait(false) == PubSubBroadcastResult.Published; }
         catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
     }
 }

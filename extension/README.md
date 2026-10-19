@@ -203,7 +203,7 @@ and is not repeated here.
 ### 0. Before touching the console
 
 - [ ] The EBS is deployed and reachable at `https://ednexus.signal-and-thread.com` over valid TLS
-      (`GET /healthz` returns `{"status":"ok"}`), and the same origin is what the desktop app's
+      (`GET /healthz` returns `status: "ok"`, plus `pubsub: "unknown"`, `"accepted"` or `"rejected"`: a `rejected` means Twitch is refusing the EBS's credentials and viewers get no live updates, see the EBS README's credential self-check), and the same origin is what the desktop app's
       `AppSettings.Twitch.EbsBaseUrl` defaults to.
 - [ ] The desktop app build that publishes a **heartbeat** has shipped (see
       [Publishing contract](#publishing-contract-with-the-desktop-app)). Without it, an idle docked
