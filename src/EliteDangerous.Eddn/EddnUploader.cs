@@ -77,6 +77,9 @@ public sealed class EddnUploader : IAsyncDisposable
     private async Task WorkerAsync()
     {
         var ct = _cts.Token;
+
+        // Whether this worker has already told Enqueue it is idle. See the empty-queue branch below.
+        var idle = false;
         try
         {
             while (true)
@@ -84,7 +87,18 @@ public sealed class EddnUploader : IAsyncDisposable
                 Item item;
                 lock (_gate)
                 {
-                    if (_queue.Count == 0 || ct.IsCancellationRequested) return;
+                    if (_queue.Count == 0 || ct.IsCancellationRequested)
+                    {
+                        // "Nothing left" and "I am idle" have to be ONE decision under this lock. When
+                        // the idle flag was cleared later, in the finally block's own lock, an Enqueue in
+                        // between saw a worker still running and started none, and this worker then
+                        // returned without the new message: it sat unsent until the next upload, and was
+                        // lost altogether if the app closed first.
+                        _running = false;
+                        idle = true;
+                        if (ct.IsCancellationRequested) _queue.Clear();
+                        return;
+                    }
                     item = _queue.Dequeue();
                 }
 
@@ -100,10 +114,16 @@ public sealed class EddnUploader : IAsyncDisposable
         }
         finally
         {
-            lock (_gate)
+            // Only for an exit that did not go through the empty-queue branch (cancellation mid-send, or
+            // an unexpected fault). After a normal exit the flag already belongs to whichever worker an
+            // Enqueue has since started: clearing it here would let a second worker run at the same time.
+            if (!idle)
             {
-                _running = false;
-                if (ct.IsCancellationRequested) _queue.Clear();
+                lock (_gate)
+                {
+                    _running = false;
+                    if (ct.IsCancellationRequested) _queue.Clear();
+                }
             }
         }
     }
