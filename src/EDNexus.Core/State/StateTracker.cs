@@ -36,12 +36,14 @@ public sealed class StateTracker
         // Everything that SPENDS or swaps materials. The game writes a full Materials snapshot only at
         // launch and relog, so without these the inventory only ever goes up between snapshots.
         bus.Subscribe("MaterialTrade", OnMaterialTrade);
-        bus.Subscribe("MaterialDiscarded", OnMaterialDiscarded);
+        bus.Subscribe("MaterialDiscarded", OnNamedMaterialSpent);
         bus.Subscribe("EngineerCraft", OnEngineerCraft);
+        bus.Subscribe("EngineerLegacyConvert", OnEngineerLegacyConvert);
         bus.Subscribe("Synthesis", OnSynthesis);
         bus.Subscribe("TechnologyBroker", OnTechnologyBroker);
         bus.Subscribe("EngineerContribution", OnEngineerContribution);
-        bus.Subscribe("ScientificResearch", OnScientificResearch);
+        bus.Subscribe("ScientificResearch", OnNamedMaterialSpent);
+        bus.Subscribe("MissionCompleted", OnMissionCompleted);   // the one thing that GIVES materials besides a pickup or a trade
         bus.Subscribe("ShipLocker", OnShipLocker);
         bus.Subscribe("BackpackChange", OnBackpackChange);
         bus.Subscribe("SuitLoadout", OnSuitLoadout);
@@ -270,7 +272,11 @@ public sealed class StateTracker
         if (changed) _state.RaiseMaterialsChanged();
     }
 
-    private void OnMaterialDiscarded(JournalEntry e)
+    /// <summary>
+    /// Discarding a material and Guardian/Thargoid research each name one <c>{ Name, Category, Count }</c>
+    /// to take out of the inventory.
+    /// </summary>
+    private void OnNamedMaterialSpent(JournalEntry e)
     {
         if (Int(e.Raw, "Count", fallback: 1) is int count && Spend(e.GetString("Name"), count, e.GetString("Category")))
             _state.RaiseMaterialsChanged();
@@ -278,6 +284,16 @@ public sealed class StateTracker
 
     /// <summary>An engineer modification consumes its ingredients (<c>Ingredients</c>: Name/Count, no category).</summary>
     private void OnEngineerCraft(JournalEntry e) => SpendAll(e, "Ingredients");
+
+    /// <summary>
+    /// Converting a legacy engineered module costs ingredients like a roll does, unless the event is only a
+    /// preview of that cost.
+    /// </summary>
+    private void OnEngineerLegacyConvert(JournalEntry e)
+    {
+        if (e.GetBool("IsPreview") == true) return;
+        SpendAll(e, "Ingredients");
+    }
 
     /// <summary>Synthesis (ammo, repair, FSD boost…) consumes the listed materials.</summary>
     private void OnSynthesis(JournalEntry e) => SpendAll(e, "Materials");
@@ -288,21 +304,42 @@ public sealed class StateTracker
     /// </summary>
     private void OnTechnologyBroker(JournalEntry e) => SpendAll(e, "Materials");
 
-    /// <summary>Handing materials to an engineer to unlock them. Commodity contributions are cargo, not this.</summary>
+    /// <summary>
+    /// Handing materials to an engineer to unlock them. Read by what the event names rather than by its
+    /// <c>Type</c>: a commodity, credits, bond or bounty contribution carries no <c>Material</c> (commodities
+    /// are cargo, not this), so only a material contribution has anything to take out.
+    /// </summary>
     private void OnEngineerContribution(JournalEntry e)
     {
-        if (!string.Equals(e.GetString("Type"), "Material", StringComparison.OrdinalIgnoreCase)) return;
-        var name = e.GetString("Material") ?? e.GetString("Name");
-        if (Int(e.Raw, "Quantity", fallback: 1) is int quantity && Spend(name, quantity, e.GetString("Category")))
+        if (Int(e.Raw, "Quantity", fallback: 1) is int quantity && Spend(e.GetString("Material"), quantity, e.GetString("Category")))
             _state.RaiseMaterialsChanged();
     }
 
-    /// <summary>Guardian/Thargoid research consumes materials.</summary>
-    private void OnScientificResearch(JournalEntry e)
+    /// <summary>
+    /// A mission can pay out ship materials (<c>MaterialsReward</c>: Name/Category/Count). Only the three ship
+    /// categories count: an Odyssey reward arrives as <c>$MICRORESOURCE_CATEGORY_*</c>, which is ship-locker
+    /// stock the <c>ShipLocker</c> snapshot keeps right, and must not land in an engineering bucket.
+    /// </summary>
+    private void OnMissionCompleted(JournalEntry e)
     {
-        if (Int(e.Raw, "Count", fallback: 1) is int count && Spend(e.GetString("Name"), count, e.GetString("Category")))
-            _state.RaiseMaterialsChanged();
+        if (!e.Raw.TryGetProperty("MaterialsReward", out var rewards) || rewards.ValueKind != JsonValueKind.Array) return;
+
+        var changed = false;
+        foreach (var reward in rewards.EnumerateArray())
+        {
+            if (reward.ValueKind != JsonValueKind.Object) continue;
+            if (Str(reward, "Name") is not { } name || Str(reward, "Category") is not { } category) continue;
+            if (!IsShipMaterialCategory(category)) continue;
+            changed |= Int(reward, "Count", fallback: 1) is int count && Gain(TargetFor(category), name, count);
+        }
+
+        if (changed) _state.RaiseMaterialsChanged();
     }
+
+    private static bool IsShipMaterialCategory(string category)
+        => category.Equals("Raw", StringComparison.OrdinalIgnoreCase)
+            || category.Equals("Manufactured", StringComparison.OrdinalIgnoreCase)
+            || category.Equals("Encoded", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Spends every <c>{ Name, Count[, Category] }</c> in the named array and raises one change.</summary>
     private void SpendAll(JournalEntry e, string arrayProperty)

@@ -347,6 +347,111 @@ public class MaterialsTrackingTests
         Assert.Equal(0, Held(state, "Raw", "carbon"));
     }
 
+    // --- the other things that change the inventory ------------------------------------------------
+
+    [Fact]
+    public void A_mission_that_pays_ship_materials_adds_them_up_to_the_cap()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, Snapshot(raw: Item("iron", 20), manufactured: Item("imperialshielding", 99)));
+        var raised = 0;
+        state.MaterialsChanged += () => raised++;
+
+        // Fields as documented for MaterialsReward (Name / Category / Count).
+        Publish(bus, """
+            { "timestamp":"2026-10-22T02:00:00Z", "event":"MissionCompleted", "MissionID":1, "Reward":100000,
+              "MaterialsReward":[
+                { "Name":"iron", "Category":"Raw", "Count":5 },
+                { "Name":"imperialshielding", "Category":"Manufactured", "Count":4 },
+                { "Name":"vanadium", "Category":"Raw", "Count":3 } ] }
+            """);
+
+        Assert.Equal(25, Held(state, "Raw", "iron"));
+        Assert.Equal(100, Held(state, "Manufactured", "imperialshielding"));   // grade 5: capped
+        Assert.Equal(3, Held(state, "Raw", "vanadium"));                       // not held before
+        Assert.Equal(1, raised);                                               // one change for the whole reward
+    }
+
+    [Fact]
+    public void An_odyssey_micro_resource_reward_is_not_an_engineering_material()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, Snapshot(raw: Item("iron", 20)));
+        var raised = 0;
+        state.MaterialsChanged += () => raised++;
+
+        // As the game wrote it: on-foot stock, restored by ShipLocker, not one of the three ship categories.
+        Publish(bus, """
+            { "timestamp":"2026-09-18T19:40:00Z", "event":"MissionCompleted", "MissionID":2, "Reward":50000,
+              "MaterialsReward":[ { "Name":"WeaponSchematic", "Name_Localised":"Weapon Schematic",
+                "Category":"$MICRORESOURCE_CATEGORY_Item;", "Category_Localised":"Item", "Count":10 } ] }
+            """);
+
+        Assert.Empty(MaterialInventory.CountsFor(state, "Encoded"));
+        Assert.Equal(20, Held(state, "Raw", "iron"));
+        Assert.Equal(0, raised);
+    }
+
+    [Fact]
+    public void A_mission_without_a_material_reward_changes_nothing()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, Snapshot(raw: Item("iron", 20)));
+
+        foreach (var json in new[]
+        {
+            """{ "timestamp":"2026-10-22T02:00:00Z", "event":"MissionCompleted", "MissionID":3, "Reward":1 }""",
+            """{ "timestamp":"2026-10-22T02:00:00Z", "event":"MissionCompleted", "MaterialsReward":"lots" }""",
+            """{ "timestamp":"2026-10-22T02:00:00Z", "event":"MissionCompleted", "MaterialsReward":[ null, 5, { "Name":"iron" }, { "Category":"Raw", "Count":2 }, { "Name":"iron", "Category":"Raw", "Count":"x" } ] }""",
+        })
+        {
+            Publish(bus, json);
+        }
+
+        Assert.Equal(20, Held(state, "Raw", "iron"));
+    }
+
+    [Fact]
+    public void Converting_a_legacy_module_spends_its_ingredients_unless_it_is_only_a_preview()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, Snapshot(raw: Item("iron", 50), manufactured: Item("heatconductionwiring", 9)));
+
+        // Shape as the community reference trackers read it: the same Ingredients list as EngineerCraft.
+        Publish(bus, """{ "timestamp":"2026-10-22T02:10:00Z", "event":"EngineerLegacyConvert", "IsPreview":true, "Ingredients":[ { "Name":"iron", "Count":10 } ] }""");
+        Assert.Equal(50, Held(state, "Raw", "iron"));
+
+        Publish(bus, """{ "timestamp":"2026-10-22T02:10:30Z", "event":"EngineerLegacyConvert", "IsPreview":false, "Ingredients":[ { "Name":"iron", "Count":10 }, { "Name":"heatconductionwiring", "Count":2 } ] }""");
+        Assert.Equal(40, Held(state, "Raw", "iron"));
+        Assert.Equal(7, Held(state, "Manufactured", "heatconductionwiring"));
+    }
+
+    [Fact]
+    public void An_engineer_contribution_is_read_by_the_material_it_names_not_by_its_type_string()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, Snapshot(raw: Item("iron", 40)));
+
+        Publish(bus, """{ "timestamp":"2026-10-22T01:11:00Z", "event":"EngineerContribution", "Engineer":"Hera Tani", "Type":"Materials", "Material":"iron", "Quantity":15, "TotalQuantity":15 }""");
+        Assert.Equal(25, Held(state, "Raw", "iron"));
+
+        // Credits, bonds and bounties name no material, whatever else they carry.
+        Publish(bus, """{ "timestamp":"2026-10-22T01:12:00Z", "event":"EngineerContribution", "Engineer":"Hera Tani", "Type":"Credits", "Quantity":1000000, "TotalQuantity":1000000 }""");
+        Assert.Equal(25, Held(state, "Raw", "iron"));
+    }
+
+    [Fact]
+    public void A_wrong_category_on_an_event_still_finds_the_material_in_the_bucket_that_holds_it()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, Snapshot(manufactured: Item("chemicalmanipulators", 10)));
+
+        Publish(bus, """{ "timestamp":"2026-10-22T02:20:00Z", "event":"MaterialDiscarded", "Category":"Raw", "Name":"chemicalmanipulators", "Count":3 }""");
+
+        Assert.Equal(7, Held(state, "Manufactured", "chemicalmanipulators"));
+        Assert.False(MaterialInventory.CountsFor(state, "Raw").ContainsKey("chemicalmanipulators"));
+    }
+
     // --- the property that ties it together ----------------------------------------------------------
 
     [Fact]
