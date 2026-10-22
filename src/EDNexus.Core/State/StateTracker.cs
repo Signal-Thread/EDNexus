@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using EDNexus.Core.Engineering;
 using EDNexus.Core.Journal;
 
 namespace EDNexus.Core.State;
@@ -32,6 +33,15 @@ public sealed class StateTracker
         bus.Subscribe("Cargo", OnCargo);
         bus.Subscribe("Materials", OnMaterials);
         bus.Subscribe("MaterialCollected", OnMaterialCollected);
+        // Everything that SPENDS or swaps materials. The game writes a full Materials snapshot only at
+        // launch and relog, so without these the inventory only ever goes up between snapshots.
+        bus.Subscribe("MaterialTrade", OnMaterialTrade);
+        bus.Subscribe("MaterialDiscarded", OnMaterialDiscarded);
+        bus.Subscribe("EngineerCraft", OnEngineerCraft);
+        bus.Subscribe("Synthesis", OnSynthesis);
+        bus.Subscribe("TechnologyBroker", OnTechnologyBroker);
+        bus.Subscribe("EngineerContribution", OnEngineerContribution);
+        bus.Subscribe("ScientificResearch", OnScientificResearch);
         bus.Subscribe("ShipLocker", OnShipLocker);
         bus.Subscribe("BackpackChange", OnBackpackChange);
         bus.Subscribe("SuitLoadout", OnSuitLoadout);
@@ -242,9 +252,120 @@ public sealed class StateTracker
         if (name is null || category is null) return;
 
         var count = (int)(e.GetInt64("Count") ?? 1);
-        TargetFor(category).AddOrUpdate(name, count, (_, v) => v + count);
+        Gain(TargetFor(category), name, count);
         _state.RaiseMaterialsChanged();
     }
+
+    /// <summary>
+    /// A material trader swap: what was paid leaves, what was received arrives. Without this a commander
+    /// who trades sees the old stock and none of the new, until the next game launch.
+    /// </summary>
+    private void OnMaterialTrade(JournalEntry e)
+    {
+        var changed = false;
+        if (e.Raw.TryGetProperty("Paid", out var paid) && paid.ValueKind == JsonValueKind.Object)
+            changed |= Spend(Str(paid, "Material"), Int(paid, "Quantity"), Str(paid, "Category"));
+        if (e.Raw.TryGetProperty("Received", out var received) && received.ValueKind == JsonValueKind.Object
+            && Str(received, "Material") is { } material && Str(received, "Category") is { } category)
+            changed |= Gain(TargetFor(category), material, Int(received, "Quantity"));
+        if (changed) _state.RaiseMaterialsChanged();
+    }
+
+    private void OnMaterialDiscarded(JournalEntry e)
+    {
+        if (Spend(e.GetString("Name"), (int)(e.GetInt64("Count") ?? 1), e.GetString("Category")))
+            _state.RaiseMaterialsChanged();
+    }
+
+    /// <summary>An engineer modification consumes its ingredients (<c>Ingredients</c>: Name/Count, no category).</summary>
+    private void OnEngineerCraft(JournalEntry e) => SpendAll(e, "Ingredients");
+
+    /// <summary>Synthesis (ammo, repair, FSD boost…) consumes the listed materials.</summary>
+    private void OnSynthesis(JournalEntry e) => SpendAll(e, "Materials");
+
+    /// <summary>
+    /// Unlocking a technology broker module consumes materials (and commodities, which are cargo and not
+    /// handled here).
+    /// </summary>
+    private void OnTechnologyBroker(JournalEntry e) => SpendAll(e, "Materials");
+
+    /// <summary>Handing materials to an engineer to unlock them. Commodity contributions are cargo, not this.</summary>
+    private void OnEngineerContribution(JournalEntry e)
+    {
+        if (!string.Equals(e.GetString("Type"), "Material", StringComparison.OrdinalIgnoreCase)) return;
+        var name = e.GetString("Material") ?? e.GetString("Name");
+        if (Spend(name, (int)(e.GetInt64("Quantity") ?? 1), e.GetString("Category")))
+            _state.RaiseMaterialsChanged();
+    }
+
+    /// <summary>Guardian/Thargoid research consumes materials.</summary>
+    private void OnScientificResearch(JournalEntry e)
+    {
+        if (Spend(e.GetString("Name"), (int)(e.GetInt64("Count") ?? 1), e.GetString("Category")))
+            _state.RaiseMaterialsChanged();
+    }
+
+    /// <summary>Spends every <c>{ Name, Count[, Category] }</c> in the named array and raises one change.</summary>
+    private void SpendAll(JournalEntry e, string arrayProperty)
+    {
+        if (!e.Raw.TryGetProperty(arrayProperty, out var items) || items.ValueKind != JsonValueKind.Array) return;
+
+        var changed = false;
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object) continue;
+            changed |= Spend(Str(item, "Name"), Int(item, "Count", fallback: 1), Str(item, "Category"));
+        }
+
+        if (changed) _state.RaiseMaterialsChanged();
+    }
+
+    /// <summary>
+    /// Adds <paramref name="count"/> to a material, up to its cap. The game logs the pickup but only
+    /// holds up to the cap (100 for a grade 5, 300 for a grade 1…), so counting it all would leave the
+    /// inventory above what the commander really has, and every later subtraction would be off by the same
+    /// amount. A material the catalogue does not know has no known cap and is not limited. Never lowers a
+    /// count that is already above the cap, since that would be the catalogue disagreeing with the game.
+    /// </summary>
+    private static bool Gain(ConcurrentDictionary<string, int> bucket, string name, int count)
+    {
+        if (count <= 0) return false;
+        var cap = EngineeringCatalog.Default.Material(name)?.Cap ?? int.MaxValue;
+        bucket.AddOrUpdate(
+            name,
+            Math.Min(count, cap),
+            (_, held) => held >= cap ? held : (int)Math.Min((long)held + count, cap));
+        return true;
+    }
+
+    /// <summary>
+    /// Removes <paramref name="count"/> of a material, never below zero. Ingredients carry no category,
+    /// so unless one is given the material is looked for in all three buckets. A material that is not held
+    /// is ignored: spending what the tracker never saw (a log that starts mid-session) must not invent stock.
+    /// </summary>
+    private bool Spend(string? name, int count, string? category = null)
+    {
+        if (name is null || count <= 0) return false;
+
+        var buckets = category is null
+            ? new[] { _state.Materials.Raw, _state.Materials.Manufactured, _state.Materials.Encoded }
+            : new[] { TargetFor(category), _state.Materials.Raw, _state.Materials.Manufactured, _state.Materials.Encoded };
+
+        foreach (var bucket in buckets)
+        {
+            if (!bucket.TryGetValue(name, out var held)) continue;
+            bucket[name] = Math.Max(0, held - count);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string? Str(JsonElement obj, string prop)
+        => obj.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static int Int(JsonElement obj, string prop, int fallback = 0)
+        => obj.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? n : fallback;
 
     private ConcurrentDictionary<string, int> TargetFor(string category) => category.ToLowerInvariant() switch
     {
