@@ -294,6 +294,59 @@ public class MaterialsTrackingTests
         Assert.Equal(0, raised);
     }
 
+    [Fact]
+    public void A_pickup_at_the_cap_changes_nothing_so_raises_nothing()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, Snapshot(manufactured: Item("imperialshielding", 100)));   // grade 5: already full
+        var raised = 0;
+        state.MaterialsChanged += () => raised++;
+
+        Publish(bus, """{ "timestamp":"2026-10-22T00:41:01Z", "event":"MaterialCollected", "Category":"Manufactured", "Name":"imperialshielding", "Count":4 }""");
+        Publish(bus, """
+            { "timestamp":"2026-10-22T00:41:02Z", "event":"MaterialTrade",
+              "Paid":{ "Material":"neverheld", "Category":"Raw", "Quantity":5 },
+              "Received":{ "Material":"imperialshielding", "Category":"Manufactured", "Quantity":9 } }
+            """);
+
+        Assert.Equal(100, Held(state, "Manufactured", "imperialshielding"));
+        Assert.Equal(0, raised);
+    }
+
+    [Fact]
+    public void Spending_a_material_held_at_zero_changes_nothing_so_raises_nothing()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, Snapshot(manufactured: Item("chemicalmanipulators", 0)));   // the game lists spent-out materials at 0
+        var raised = 0;
+        state.MaterialsChanged += () => raised++;
+
+        Publish(bus, """{ "timestamp":"2026-10-22T00:41:01Z", "event":"EngineerCraft", "Ingredients":[ { "Name":"chemicalmanipulators", "Count":2 } ] }""");
+
+        Assert.Equal(0, raised);
+    }
+
+    [Fact]
+    public void A_missing_quantity_means_one_but_an_unusable_one_is_ignored()
+    {
+        var (bus, state) = Tracked();
+        Publish(bus, Snapshot(raw: Item("iron", 10)));
+
+        Publish(bus, """{ "timestamp":"2026-10-22T00:00:00Z", "event":"MaterialDiscarded", "Category":"Raw", "Name":"iron" }""");
+        Assert.Equal(9, Held(state, "Raw", "iron"));   // absent Count: the game's single-item default
+
+        foreach (var count in new[] { "\"x\"", "null", "1.5", "99999999999" })
+        {
+            Publish(bus, $$"""{ "timestamp":"2026-10-22T00:00:01Z", "event":"MaterialDiscarded", "Category":"Raw", "Name":"iron", "Count":{{count}} }""");
+            Publish(bus, $$"""{ "timestamp":"2026-10-22T00:00:02Z", "event":"EngineerCraft", "Ingredients":[ { "Name":"iron", "Count":{{count}} } ] }""");
+            Publish(bus, $$"""{ "timestamp":"2026-10-22T00:00:03Z", "event":"MaterialTrade", "Paid":{ "Material":"iron", "Category":"Raw", "Quantity":{{count}} }, "Received":{ "Material":"carbon", "Category":"Raw", "Quantity":{{count}} } }""");
+            Publish(bus, $$"""{ "timestamp":"2026-10-22T00:00:04Z", "event":"MaterialCollected", "Category":"Raw", "Name":"iron", "Count":{{count}} }""");
+        }
+
+        Assert.Equal(9, Held(state, "Raw", "iron"));
+        Assert.Equal(0, Held(state, "Raw", "carbon"));
+    }
+
     // --- the property that ties it together ----------------------------------------------------------
 
     [Fact]

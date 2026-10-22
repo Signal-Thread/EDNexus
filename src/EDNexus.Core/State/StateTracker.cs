@@ -251,9 +251,8 @@ public sealed class StateTracker
         var name = e.GetString("Name");
         if (name is null || category is null) return;
 
-        var count = (int)(e.GetInt64("Count") ?? 1);
-        Gain(TargetFor(category), name, count);
-        _state.RaiseMaterialsChanged();
+        if (Int(e.Raw, "Count", fallback: 1) is int count && Gain(TargetFor(category), name, count))
+            _state.RaiseMaterialsChanged();
     }
 
     /// <summary>
@@ -264,16 +263,16 @@ public sealed class StateTracker
     {
         var changed = false;
         if (e.Raw.TryGetProperty("Paid", out var paid) && paid.ValueKind == JsonValueKind.Object)
-            changed |= Spend(Str(paid, "Material"), Int(paid, "Quantity"), Str(paid, "Category"));
+            changed |= Int(paid, "Quantity") is int quantity && Spend(Str(paid, "Material"), quantity, Str(paid, "Category"));
         if (e.Raw.TryGetProperty("Received", out var received) && received.ValueKind == JsonValueKind.Object
             && Str(received, "Material") is { } material && Str(received, "Category") is { } category)
-            changed |= Gain(TargetFor(category), material, Int(received, "Quantity"));
+            changed |= Int(received, "Quantity") is int quantity && Gain(TargetFor(category), material, quantity);
         if (changed) _state.RaiseMaterialsChanged();
     }
 
     private void OnMaterialDiscarded(JournalEntry e)
     {
-        if (Spend(e.GetString("Name"), (int)(e.GetInt64("Count") ?? 1), e.GetString("Category")))
+        if (Int(e.Raw, "Count", fallback: 1) is int count && Spend(e.GetString("Name"), count, e.GetString("Category")))
             _state.RaiseMaterialsChanged();
     }
 
@@ -294,14 +293,14 @@ public sealed class StateTracker
     {
         if (!string.Equals(e.GetString("Type"), "Material", StringComparison.OrdinalIgnoreCase)) return;
         var name = e.GetString("Material") ?? e.GetString("Name");
-        if (Spend(name, (int)(e.GetInt64("Quantity") ?? 1), e.GetString("Category")))
+        if (Int(e.Raw, "Quantity", fallback: 1) is int quantity && Spend(name, quantity, e.GetString("Category")))
             _state.RaiseMaterialsChanged();
     }
 
     /// <summary>Guardian/Thargoid research consumes materials.</summary>
     private void OnScientificResearch(JournalEntry e)
     {
-        if (Spend(e.GetString("Name"), (int)(e.GetInt64("Count") ?? 1), e.GetString("Category")))
+        if (Int(e.Raw, "Count", fallback: 1) is int count && Spend(e.GetString("Name"), count, e.GetString("Category")))
             _state.RaiseMaterialsChanged();
     }
 
@@ -314,7 +313,7 @@ public sealed class StateTracker
         foreach (var item in items.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object) continue;
-            changed |= Spend(Str(item, "Name"), Int(item, "Count", fallback: 1), Str(item, "Category"));
+            changed |= Int(item, "Count", fallback: 1) is int count && Spend(Str(item, "Name"), count, Str(item, "Category"));
         }
 
         if (changed) _state.RaiseMaterialsChanged();
@@ -326,22 +325,25 @@ public sealed class StateTracker
     /// inventory above what the commander really has, and every later subtraction would be off by the same
     /// amount. A material the catalogue does not know has no known cap and is not limited. Never lowers a
     /// count that is already above the cap, since that would be the catalogue disagreeing with the game.
+    /// Returns whether the stored count changed (a pickup at the cap changes nothing).
     /// </summary>
     private static bool Gain(ConcurrentDictionary<string, int> bucket, string name, int count)
     {
         if (count <= 0) return false;
         var cap = EngineeringCatalog.Default.Material(name)?.Cap ?? int.MaxValue;
-        bucket.AddOrUpdate(
-            name,
-            Math.Min(count, cap),
-            (_, held) => held >= cap ? held : (int)Math.Min((long)held + count, cap));
-        return true;
+        var had = bucket.TryGetValue(name, out var held);
+        var next = !had ? Math.Min(count, cap)
+            : held >= cap ? held
+            : (int)Math.Min((long)held + count, cap);
+        bucket[name] = next;
+        return !had || next != held;
     }
 
     /// <summary>
     /// Removes <paramref name="count"/> of a material, never below zero. Ingredients carry no category,
     /// so unless one is given the material is looked for in all three buckets. A material that is not held
     /// is ignored: spending what the tracker never saw (a log that starts mid-session) must not invent stock.
+    /// Returns whether the stored count changed (spending from zero changes nothing).
     /// </summary>
     private bool Spend(string? name, int count, string? category = null)
     {
@@ -354,8 +356,9 @@ public sealed class StateTracker
         foreach (var bucket in buckets)
         {
             if (!bucket.TryGetValue(name, out var held)) continue;
-            bucket[name] = Math.Max(0, held - count);
-            return true;
+            var next = Math.Max(0, held - count);
+            bucket[name] = next;
+            return next != held;
         }
 
         return false;
@@ -364,8 +367,13 @@ public sealed class StateTracker
     private static string? Str(JsonElement obj, string prop)
         => obj.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    private static int Int(JsonElement obj, string prop, int fallback = 0)
-        => obj.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? n : fallback;
+    /// <summary>
+    /// A whole-number property: <paramref name="fallback"/> when it is absent, null when it is present but
+    /// not a usable integer — an invalid quantity is ignored, not read as "one".
+    /// </summary>
+    private static int? Int(JsonElement obj, string prop, int fallback = 0)
+        => !obj.TryGetProperty(prop, out var v) ? fallback
+            : v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? n : null;
 
     private ConcurrentDictionary<string, int> TargetFor(string category) => category.ToLowerInvariant() switch
     {
