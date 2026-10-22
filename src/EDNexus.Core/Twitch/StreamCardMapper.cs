@@ -183,10 +183,9 @@ public static class StreamCardMapper
     /// until one has been seen.
     /// </summary>
     /// <remarks>
-    /// Deliberately not derived from <see cref="Ship.ShipFsdProfile.JumpRangeAt"/>: that models the
-    /// drive for the route plotter and excludes the Guardian booster, so it does not agree with the
-    /// figure on the commander's own ship panel — and a viewer comparing the two would see the card
-    /// as simply wrong.
+    /// Deliberately not derived from <see cref="Ship.ShipFsdProfile.JumpRangeAt"/>: that excludes the
+    /// Guardian booster, so for a boosted build it does not agree with the figure on the commander's
+    /// own ship panel — and a viewer comparing the two would see the card as simply wrong.
     /// </remarks>
     private static double? JumpRange(CommanderState state) =>
         state.Fsd is { MaxJumpRange: > 0 } fsd ? Math.Round(fsd.MaxJumpRange, 2) : null;
