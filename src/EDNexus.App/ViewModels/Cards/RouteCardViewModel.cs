@@ -369,7 +369,10 @@ public sealed partial class RouteCardViewModel : CardViewModel
     }
 
     /// <summary>Rough unladen jump range for the mode hint (full tank, no cargo, incl. Guardian bonus).</summary>
-    private static double ShipRange(ShipFsdProfile f) => f.JumpRangeAt(f.BaseMass + Math.Min(f.MaxFuelPerJump, f.TankSize)) + f.RangeBoost;
+    // The game's own figure when the Loadout carried one (it includes a Guardian booster); the drive model otherwise.
+    private static double ShipRange(ShipFsdProfile f) => f.MaxJumpRange > 0
+        ? f.MaxJumpRange
+        : f.JumpRangeAt(f.BaseMass + Math.Min(f.MaxFuelPerJump, f.TankSize)) + f.RangeBoost;
 
     [RelayCommand]
     private async Task CopyNextSystem()

@@ -67,21 +67,23 @@ public sealed record ShipFsdProfile(
             RangeBoost: rangeBoost,
             CargoCapacity: loadout.GetDouble("CargoCapacity") ?? 0,
             // The game's own headline figure for this build. Taken verbatim rather than derived:
-            // JumpRangeAt() below models the drive for the route plotter and deliberately ignores the
-            // Guardian booster, so it is not the number to show a commander.
+            // JumpRangeAt() below models the drive without the Guardian booster, so for a boosted build
+            // it is not the number to show a commander.
             MaxJumpRange: loadout.GetDouble("MaxJumpRange") ?? 0);
     }
 
     /// <summary>
-    /// The unladen jump range this drive gives at the given mass — the standard FSD formula. Used to
-    /// sanity-check extraction against the journal's own <c>MaxJumpRange</c>. Excludes the Guardian
-    /// booster, whose in-game bonus is non-linear and modelled server-side by Spansh.
+    /// The jump range this drive gives at the given mass — the standard FSD formula,
+    /// <c>optimalMass / mass × (fuel / fuelMultiplier)^(1 / fuelPower)</c>, with <c>fuel</c> the most one
+    /// jump may burn. At <c>BaseMass + MaxFuelPerJump</c> it reproduces the journal's own
+    /// <c>MaxJumpRange</c> exactly for any build without a Guardian booster. Excludes that booster,
+    /// whose in-game bonus is non-linear and modelled server-side by Spansh.
     /// </summary>
     public double JumpRangeAt(double mass)
     {
         if (mass <= 0 || FuelMultiplier <= 0 || FuelPower <= 0) return 0;
         var fuel = Math.Min(MaxFuelPerJump, TankSize);
-        return OptimalMass / mass * Math.Pow(1000 * fuel / FuelMultiplier, 1 / FuelPower);
+        return OptimalMass / mass * Math.Pow(fuel / FuelMultiplier, 1 / FuelPower);
     }
 
     /// <summary>Read the engineered FSDOptimalMass / MaxFuelPerJump overrides the journal records on the module.</summary>

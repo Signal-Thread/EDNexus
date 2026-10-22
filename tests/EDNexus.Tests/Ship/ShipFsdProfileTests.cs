@@ -89,10 +89,30 @@ public class ShipFsdProfileTests
             OptimalMass: 1050, BaseMass: 280, TankSize: 32, ReserveSize: 0.63,
             FuelMultiplier: 0.012, FuelPower: 2.45, MaxFuelPerJump: 5, RangeBoost: 0, CargoCapacity: 0);
 
-        // range = optmass/mass * (1000*fuel/mul)^(1/power); fuel = min(maxfuel, tank) = 5.
-        var expectedAt400 = 1050.0 / 400.0 * System.Math.Pow(1000 * 5 / 0.012, 1 / 2.45);
+        // range = optmass/mass * (fuel/mul)^(1/power); fuel = min(maxfuel, tank) = 5.
+        var expectedAt400 = 1050.0 / 400.0 * System.Math.Pow(5 / 0.012, 1 / 2.45);
         Assert.Equal(expectedAt400, fsd.JumpRangeAt(400), 3);
+        Assert.InRange(fsd.JumpRangeAt(400), 25, 35);               // a 5A on a mid-weight ship: tens of ly, not hundreds
 
         Assert.True(fsd.JumpRangeAt(300) > fsd.JumpRangeAt(500));   // heavier ships jump shorter
+    }
+
+    [Fact]
+    public void Drive_model_reproduces_the_range_the_game_reports_for_a_real_build()
+    {
+        // An engineered long-range SCO drive on an Anaconda Mk II, exactly as a recent Loadout wrote it.
+        // The game's headline range is the unladen ship plus the fuel for one jump.
+        var e = Loadout("""
+        { "event": "Loadout", "Ship": "anacondamkii", "UnladenMass": 2253.880127, "MaxJumpRange": 34.576313,
+          "FuelCapacity": { "Main": 64.0, "Reserve": 1.08 },
+          "Modules": [ { "Slot": "FrameShiftDrive", "Item": "int_hyperdrive_overcharge_size8_class5", "On": true,
+            "Engineering": { "BlueprintName": "FSD_LongRange", "Level": 3, "Modifiers": [
+              { "Label": "Mass", "Value": 192.0, "OriginalValue": 160.0 },
+              { "Label": "FSDOptimalMass", "Value": 6187.75, "OriginalValue": 4670.0 } ] } } ] }
+        """);
+
+        var fsd = ShipFsdProfile.FromLoadout(e)!;
+
+        Assert.Equal(34.576313, fsd.JumpRangeAt(fsd.BaseMass + fsd.MaxFuelPerJump), 3);
     }
 }

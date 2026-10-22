@@ -307,9 +307,9 @@ public class StreamCardMapperTests
     [Fact]
     public void Jump_range_is_the_figure_the_game_reports_not_a_derived_one()
     {
-        // Real values off an Anaconda's Loadout: the game says 25.05 ly, while the route plotter's
-        // drive model (JumpRangeAt) answers in the hundreds because it is solving a different
-        // problem. A viewer comparing the card to the commander's ship panel must see 25.05.
+        // The card shows what the Loadout reported (25.05 ly here), not a figure re-derived from the
+        // drive model — which leaves out a Guardian booster. A viewer comparing the card to the
+        // commander's ship panel must see 25.05.
         var state = new CommanderState
         {
             Ship = "anaconda",
