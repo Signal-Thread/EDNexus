@@ -70,6 +70,36 @@ public class TwitchCredentialCheckTests
     }
 
     [Fact]
+    public async Task A_403_permission_denied_for_the_target_means_the_token_was_verified_and_is_not_a_rejection()
+    {
+        // Exactly what Twitch answered the check once the credentials were right: it verifies the token
+        // first and only then finds the bogus target is not one the token may use.
+        var (probe, status, _) = Probe(HttpStatusCode.Forbidden, """{"error":"Forbidden","status":403,"message":"Error (403): Permission denied to use target"}""");
+
+        Assert.Equal(TwitchCredentialProbeResult.Accepted, await probe.CheckAsync(CancellationToken.None));
+        Assert.Equal(TwitchCredentialState.Accepted, status.State);
+        Assert.Null(status.Current.HttpStatus);
+    }
+
+    [Fact]
+    public async Task Any_other_403_is_still_a_rejection()
+    {
+        var (probe, status, _) = Probe(HttpStatusCode.Forbidden, """{"error":"Forbidden","status":403,"message":"Error (403): Wrong channel requested"}""");
+
+        Assert.Equal(TwitchCredentialProbeResult.Rejected, await probe.CheckAsync(CancellationToken.None));
+        Assert.Equal(TwitchCredentialState.Rejected, status.State);
+    }
+
+    [Fact]
+    public async Task A_401_is_a_rejection_even_if_its_body_mentions_the_permission_message()
+    {
+        var (probe, status, _) = Probe(HttpStatusCode.Unauthorized, """{"message":"Permission denied to use target"}""");
+
+        Assert.Equal(TwitchCredentialProbeResult.Rejected, await probe.CheckAsync(CancellationToken.None));
+        Assert.Equal(TwitchCredentialState.Rejected, status.State);
+    }
+
+    [Fact]
     public async Task A_400_means_the_credentials_got_through_and_only_the_bogus_target_was_refused()
     {
         var (probe, status, _) = Probe(HttpStatusCode.BadRequest, """{"error":"Bad Request","message":"Invalid target"}""");

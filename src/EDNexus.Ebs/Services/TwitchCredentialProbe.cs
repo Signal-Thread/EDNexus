@@ -31,17 +31,19 @@ public interface ITwitchCredentialProbe
 /// real broadcast but carries a deliberately invalid target, so it can never reach a viewer.
 /// </summary>
 /// <remarks>
-/// Twitch verifies the signed token before it looks at the body, so a refused credential comes back
-/// <c>401</c>/<c>403</c> and an accepted one comes back <c>400</c> (the bogus target is what it then
-/// rejects). Going through the same endpoint, <c>Client-Id</c> and token claims as a real publish
-/// is the point: a different endpoint would be checking a different set of rules.
+/// Twitch checks the request in this order: the body is validated first (a missing field is a
+/// <c>400</c> whatever the token), then the token is verified (<c>403 JWT could not be verified</c> when
+/// the secret, extension id or owner id is wrong), then the token's permissions are checked against the
+/// target. So the bogus target here comes back <c>403 Permission denied to use target</c> for valid
+/// credentials and <c>403 JWT could not be verified</c> for refused ones; both orderings were observed
+/// against the live endpoint. Going through the same endpoint, <c>Client-Id</c> and token claims as a
+/// real publish is the point: a different endpoint would be checking a different set of rules.
 /// <para>
-/// Two limits, stated rather than hidden. The refusal side is the one seen in production
-/// (<c>403 JWT could not be verified</c>); that Twitch really does check the token before the body is
-/// reasoned from its documentation, not observed, so an <see cref="TwitchCredentialProbeResult.Accepted"/>
-/// here means "not refused", and only a real broadcast proves the credentials work. And this never
-/// guesses: anything it does not recognise is <see cref="TwitchCredentialProbeResult.Inconclusive"/>,
-/// which changes nothing.
+/// Two limits, stated rather than hidden. An <see cref="TwitchCredentialProbeResult.Accepted"/> here
+/// means "not refused", and only a real broadcast proves the credentials work. And this never guesses
+/// a rejection: a <c>401</c> or a <c>403</c> it does not recognise as the permission answer is recorded
+/// as a rejection, but a status that says nothing about the credentials is
+/// <see cref="TwitchCredentialProbeResult.Inconclusive"/>, which changes nothing.
 /// </para>
 /// </remarks>
 public sealed class TwitchCredentialProbe : ITwitchCredentialProbe
@@ -50,6 +52,9 @@ public sealed class TwitchCredentialProbe : ITwitchCredentialProbe
 
     /// <summary>Not a target Twitch knows (<c>broadcast</c>, <c>global</c>, <c>whisper-…</c>), so it is refused whatever else is true.</summary>
     internal const string InvalidTarget = "__ednexus_credential_check__";
+
+    /// <summary>What Twitch says (as a 403) to a verified token that asks for a target it has no permission for.</summary>
+    internal const string TargetRefusedMessage = "Permission denied to use target";
 
     private readonly HttpClient _httpClient;
     private readonly ITwitchExtensionJwtService _jwtService;
@@ -115,6 +120,14 @@ public sealed class TwitchCredentialProbe : ITwitchCredentialProbe
         if (TwitchCredentialStatus.IsCredentialRefusal(status))
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+            // Twitch verifies the token first and only then checks what it may do, so valid credentials
+            // meet this check's bogus target with a 403 "Permission denied to use target" (seen in
+            // production, where the same request with a wrong secret got "JWT could not be verified").
+            // That is the expected answer, not a rejection.
+            if (status == 403 && body.Contains(TargetRefusedMessage, StringComparison.OrdinalIgnoreCase))
+                return AcceptedWithInvalidTarget();
+
             _status.MarkRejected(status);
             _logger.LogError(
                 "Twitch REJECTED the EBS's PubSub credentials ({StatusCode}: {Body}). Live updates will NOT reach viewers " +
@@ -129,15 +142,24 @@ public sealed class TwitchCredentialProbe : ITwitchCredentialProbe
         // have; the credentials are plainly not refused, but it is worth saying.
         if (status == 400 || response.IsSuccessStatusCode)
         {
-            _status.MarkAccepted();
             if (response.IsSuccessStatusCode)
+            {
+                _status.MarkAccepted();
                 _logger.LogWarning("The Twitch credential check was accepted outright ({StatusCode}); it should have been refused for its invalid target.", status);
-            else
-                _logger.LogInformation("Twitch did not refuse the EBS's PubSub credentials (the check's invalid target was refused, as intended).");
-            return TwitchCredentialProbeResult.Accepted;
+                return TwitchCredentialProbeResult.Accepted;
+            }
+
+            return AcceptedWithInvalidTarget();
         }
 
         _logger.LogWarning("The Twitch credential check got {StatusCode}, which says nothing about the credentials; leaving the status unchanged.", status);
         return TwitchCredentialProbeResult.Inconclusive;
+    }
+
+    private TwitchCredentialProbeResult AcceptedWithInvalidTarget()
+    {
+        _status.MarkAccepted();
+        _logger.LogInformation("Twitch did not refuse the EBS's PubSub credentials (the check's invalid target was refused, as intended).");
+        return TwitchCredentialProbeResult.Accepted;
     }
 }

@@ -122,8 +122,9 @@ changed. Three things now make it loud:
    Helix PubSub endpoint a request signed exactly like a broadcast but aimed at a target Twitch cannot
    deliver to, so **nothing is ever sent to a viewer**. Twitch refusing the signed token
    (`401`/`403`) logs at **error**: `Twitch REJECTED the EBS's PubSub credentials (403: ...)`, naming
-   the three settings to check. A `400` (the credentials got through and only the bogus target was
-   refused) logs `Twitch did not refuse the EBS's PubSub credentials`. Anything else (a network error,
+   the three settings to check. A `400`, or a `403` saying `Permission denied to use target` (Twitch
+   verifies the token first, so this is what valid credentials get for the bogus target), logs
+   `Twitch did not refuse the EBS's PubSub credentials`. Anything else (a network error,
    a 5xx, a 429) is "inconclusive" and changes nothing. It never throws or stops the service.
 2. **Real broadcasts keep the record.** Every actual PubSub call updates the same status: a refusal
    sets it, a success clears it. This is the authority, so a stale startup verdict cannot outlive the
