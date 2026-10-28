@@ -124,7 +124,32 @@ public class InaraBridgeResilienceTests
     }
 
     [Fact]
-    public async Task A_live_shutdown_flushes_without_waiting_out_the_min_interval()
+    public async Task Never_more_than_two_requests_in_any_rolling_window_even_for_shutdown()
+    {
+        var bus = new JournalEventBus();
+        var handler = new RecordingHandler(HttpStatusCode.OK, Ok);
+        // minInterval 300 ms => window 600 ms, two sends allowed per window.
+        await using var bridge = NewBridge(bus, handler, TimeSpan.FromMilliseconds(300), TimeSpan.FromMilliseconds(5));
+        var stamps = new List<long>();
+        var started = Environment.TickCount64;
+
+        bus.Publish(Entry(Commander));
+        for (var i = 0; i < 3; i++)
+        {
+            bus.Publish(Entry(Dock));
+            await WaitForAsync(() => handler.CallCount >= i + 1, timeoutMs: 5000);
+            stamps.Add(Environment.TickCount64 - started);
+        }
+        bus.Publish(Entry("""{ "timestamp": "2020-01-01T00:12:00Z", "event": "Loadout", "Ship": "python", "ShipID": 7 }"""));
+        bus.Publish(Entry("""{ "timestamp": "2020-01-01T00:13:00Z", "event": "Shutdown" }"""));
+        await WaitForAsync(() => handler.CallCount >= 4, timeoutMs: 5000);
+
+        Assert.Equal(4, handler.CallCount);
+        Assert.True(stamps[2] >= 550, $"3rd request went out {stamps[2]} ms after the first, inside the 600 ms window");
+    }
+
+    [Fact]
+    public async Task A_live_shutdown_flushes_when_the_window_has_room()
     {
         var bus = new JournalEventBus();
         var handler = new RecordingHandler(HttpStatusCode.OK, Ok);
@@ -141,7 +166,7 @@ public class InaraBridgeResilienceTests
     }
 
     [Fact]
-    public async Task Dispose_does_not_wait_out_the_min_interval()
+    public async Task Dispose_sends_when_the_window_has_room()
     {
         var bus = new JournalEventBus();
         var handler = new RecordingHandler(HttpStatusCode.OK, Ok);
@@ -155,6 +180,24 @@ public class InaraBridgeResilienceTests
         await bridge.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task Dispose_drops_the_final_batch_rather_than_exceed_the_limit_or_hang()
+    {
+        var bus = new JournalEventBus();
+        var handler = new RecordingHandler(HttpStatusCode.OK, Ok);
+        var bridge = NewBridge(bus, handler, TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(5));
+
+        bus.Publish(Entry(Commander));
+        bus.Publish(Entry(Dock));
+        bus.Publish(Entry(Dock));
+        await WaitForAsync(() => handler.CallCount >= 2);
+        bus.Publish(Entry("""{ "timestamp": "2020-01-01T00:11:00Z", "event": "Loadout", "Ship": "python", "ShipID": 7 }"""));
+
+        await bridge.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, handler.CallCount);   // the third would have been the 3rd request inside a minute
     }
 
     // --- InaraClient response handling ---
