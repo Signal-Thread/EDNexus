@@ -1014,12 +1014,12 @@
                              Text="Nothing on the list. Add an item above, or link the colonisation depot or a pinned engineering goal." />
 
                   <StackPanel IsVisible="{Binding !IsEmpty}">
-                    <Grid ColumnDefinitions="*,110,110,150,Auto" Margin="0,0,0,2">
+                    <Grid ColumnDefinitions="*,110,110,150,32" Margin="0,0,0,2">
                       <TextBlock Grid.Column="0" Classes="label" Text="NAME" />
                       <TextBlock Grid.Column="1" Classes="label" Text="HELD / NEEDED" HorizontalAlignment="Right" />
                       <TextBlock Grid.Column="2" Classes="label" Text="FROM" Margin="12,0,0,0" />
                       <TextBlock Grid.Column="3" Classes="label" Text="ACTION" Margin="12,0,0,0" />
-                      <Border Grid.Column="4" Width="28" />
+                      
                     </Grid>
 
                     <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto"
@@ -1027,7 +1027,7 @@
                       <ItemsControl ItemsSource="{Binding Rows}">
                         <ItemsControl.ItemTemplate>
                           <DataTemplate x:DataType="vm:ShoppingRowViewModel">
-                            <Grid ColumnDefinitions="*,110,110,150,Auto" Margin="0,5">
+                            <Grid ColumnDefinitions="*,110,110,150,32" Margin="0,5">
                               <StackPanel Grid.Column="0" Margin="0,0,12,0" VerticalAlignment="Center">
                                 <TextBlock Text="{Binding Name}" Classes="value" FontSize="13" TextTrimming="CharacterEllipsis" />
                                 <ProgressBar Minimum="0" Maximum="1" Value="{Binding Progress}" Height="4"
@@ -1047,7 +1047,7 @@
                                          TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis"
                                          VerticalAlignment="Center" IsVisible="{Binding !CanFind}"
                                          ToolTip.Tip="{Binding Hint}" />
-                              <Button Grid.Column="4" Classes="mini" Content="✕" Width="28" Margin="4,0,0,0"
+                              <Button Grid.Column="4" Classes="mini" Content="✕" Width="28" Margin="4,0,0,0" HorizontalAlignment="Left"
                                       VerticalAlignment="Center" IsVisible="{Binding IsManual}"
                                       Command="{Binding $parent[ItemsControl].((vm:ShoppingListCardViewModel)DataContext).RemoveManualCommand}"
                                       CommandParameter="{Binding}"
