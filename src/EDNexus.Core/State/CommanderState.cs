@@ -125,6 +125,10 @@ public sealed class CommanderState : ObservableObject
     /// <summary>The current ship's Frame Shift Drive, derived from the last <c>Loadout</c>. Null until one is seen. Drives no-boost route plots.</summary>
     public Ship.ShipFsdProfile? Fsd { get => _fsd; set => Set(ref _fsd, value); }
 
+    private double _fsdInjectionMultiplier = 1;
+    /// <summary>Range multiplier an FSD Injection has granted the next jump (1 = none). Cleared by the next <c>FSDJump</c>.</summary>
+    public double FsdInjectionMultiplier { get => _fsdInjectionMultiplier; set => Set(ref _fsdInjectionMultiplier, value); }
+
     private string? _lastLoadoutJson;
     /// <summary>
     /// The raw text of the last <c>Loadout</c> event, kept verbatim (not just the fields we parse) so it

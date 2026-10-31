@@ -183,6 +183,9 @@ public sealed class StateTracker
         _state.StationName = stillDocked ? e.GetString("StationName") : null;
         _state.StationType = stillDocked ? e.GetString("StationType") : null;
 
+        // Any ship jump uses up a pending FSD injection, whether or not the jump needed it.
+        if (e.Event == "FSDJump") _state.FsdInjectionMultiplier = 1;
+
         // A completed carrier jump fulfils any pending request — clear it so the UI stops advertising it.
         if (e.Event == "CarrierJump")
         {
@@ -300,7 +303,12 @@ public sealed class StateTracker
     }
 
     /// <summary>Synthesis (ammo, repair, FSD boost…) consumes the listed materials.</summary>
-    private void OnSynthesis(JournalEntry e) => SpendAll(e, "Materials");
+    private void OnSynthesis(JournalEntry e)
+    {
+        SpendAll(e, "Materials");
+        // An FSD injection boosts the next jump's range; route plots need to know.
+        if (Ship.FsdInjection.MultiplierFor(e.GetString("Name")) is { } boost) _state.FsdInjectionMultiplier = boost;
+    }
 
     /// <summary>
     /// Unlocking a technology broker module consumes materials (and commodities, which are cargo and not
