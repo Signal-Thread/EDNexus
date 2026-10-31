@@ -175,9 +175,13 @@ public sealed class StateTracker
         _state.JumpDestination = null;
         _state.StarSystem = e.GetString("StarSystem") ?? _state.StarSystem;
         _state.Body = e.GetString("Body") ?? e.GetString("StarSystem");
-        _state.Docked = false;
-        _state.StationName = null;
-        _state.StationType = null;
+
+        // A ship jump leaves any station behind. A carrier jump carries the station with it: the
+        // commander is still sitting on the pad, and the event says so (and names the carrier).
+        var stillDocked = e.Event == "CarrierJump" && e.GetBool("Docked") == true;
+        _state.Docked = stillDocked;
+        _state.StationName = stillDocked ? e.GetString("StationName") : null;
+        _state.StationType = stillDocked ? e.GetString("StationType") : null;
 
         // A completed carrier jump fulfils any pending request — clear it so the UI stops advertising it.
         if (e.Event == "CarrierJump")

@@ -92,6 +92,33 @@ public class CarrierStateTrackerTests
         Assert.Equal("Ga Gu", state.CarrierPendingSystem);   // the carrier is still booked to move
     }
 
+    [Fact]
+    public void A_carrier_jump_taken_while_docked_on_the_carrier_stays_docked()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """{ "timestamp":"2026-10-31T01:31:45Z", "event":"Docked", "StationName":"X8J-LVZ", "StationType":"FleetCarrier", "StarSystem":"HD 232819" }""");
+        Publish(bus, """
+        { "timestamp":"2026-10-31T01:50:13Z", "event":"CarrierJump", "Docked":true, "StationName":"X8J-LVZ",
+          "StationType":"FleetCarrier", "StarSystem":"Ga Gu", "Body":"Ga Gu 2 a" }
+        """);
+
+        Assert.Equal("Ga Gu", state.StarSystem);
+        Assert.True(state.Docked);
+        Assert.Equal("X8J-LVZ", state.StationName);
+        Assert.Equal("FleetCarrier", state.StationType);
+    }
+
+    [Fact]
+    public void A_ship_FSDJump_still_clears_the_docked_state()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """{ "timestamp":"2026-10-31T01:31:45Z", "event":"Docked", "StationName":"X8J-LVZ", "StationType":"FleetCarrier" }""");
+        Publish(bus, """{ "timestamp":"2026-10-31T01:58:00Z", "event":"FSDJump", "StarSystem":"Merope" }""");
+
+        Assert.False(state.Docked);
+        Assert.Null(state.StationName);
+    }
+
     // --- Carrier name vs. callsign (#90). ---
 
     private const string OwnCarrierStats = """
