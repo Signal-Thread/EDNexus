@@ -23,7 +23,9 @@ public enum RouteMode
 /// tonnes — matching the figure shown on the carrier management screen) for a fleet-carrier plot.
 /// <see cref="Efficiency"/>
 /// is Spansh's 0–100 neutron detour tolerance (higher = more boosts, fewer jumps, longer path); 60
-/// matches Spansh's own default.
+/// matches Spansh's own default. <see cref="FirstJumpMultiplier"/> is a one-shot range boost (an FSD
+/// Injection) that applies to the first jump only, so the plotter plots that jump at the boosted range
+/// and the rest at normal range.
 /// </summary>
 public sealed record RoutePlotRequest(
     string From,
@@ -33,7 +35,8 @@ public sealed record RoutePlotRequest(
     RouteMode Mode = RouteMode.NeutronHighway,
     ShipFsdProfile? Ship = null,
     double CarrierCargoUsed = 0,
-    double CargoTons = 0);
+    double CargoTons = 0,
+    double FirstJumpMultiplier = 1);
 
 /// <summary>
 /// One waypoint on a plotted route: the system to jump to, how many jumps it takes from the previous

@@ -23,6 +23,7 @@ public sealed partial class RouteCardViewModel : CardViewModel
 {
     private SampleRoutePlotter? _sampleRoutes;
     private ShipFsdProfile? _fsd;
+    private double _injection = 1;   // pending FSD Injection range multiplier for the next jump
     private double _cargoTons;
     private double _carrierUsedCapacity;
 
@@ -84,7 +85,10 @@ public sealed partial class RouteCardViewModel : CardViewModel
     {
         ShowJumpRange = CurrentMode == RouteMode.NeutronHighway;
         ShowCarrierFuel = CurrentMode == RouteMode.FleetCarrier;
-        ModeHint = CurrentMode switch
+        var injector = _injection > 1 && CurrentMode != RouteMode.FleetCarrier
+            ? $" FSD injector active: next jump ×{_injection:0.##} range."
+            : "";
+        ModeHint = injector + CurrentMode switch
         {
             RouteMode.FleetCarrier => "Fleet carrier: fixed 500 ly hops, tritium-fuelled — no neutron boosting.",
             RouteMode.NoBoost => _fsd is { } f
@@ -102,6 +106,8 @@ public sealed partial class RouteCardViewModel : CardViewModel
         if (RouteFrom.Length == 0 && s.StarSystem is { Length: > 0 } sys) RouteFrom = sys;
 
         _fsd = s.Fsd;
+        var injectionChanged = _injection != s.FsdInjectionMultiplier;
+        _injection = s.FsdInjectionMultiplier;
         _cargoTons = s.CargoTons;
         _carrierUsedCapacity = s.CarrierUsedCapacity;
         if (s.CarrierFuel > 0)
@@ -125,7 +131,7 @@ public sealed partial class RouteCardViewModel : CardViewModel
             ShowCarrierPending = false;
         }
 
-        if (ModeNoBoost) RefreshMode();   // keep the hint's ship-range figure current
+        if (ModeNoBoost || injectionChanged) RefreshMode();   // keep the hint's ship-range / injector figure current
     }
 
     [RelayCommand]
@@ -191,7 +197,7 @@ public sealed partial class RouteCardViewModel : CardViewModel
                     error = "Enter the ship's jump range in light years (e.g. 48.5).";
                     return false;
                 }
-                request = new RoutePlotRequest(from, to, range, Mode: mode);
+                request = new RoutePlotRequest(from, to, range, Mode: mode, FirstJumpMultiplier: _injection);
                 return true;
 
             case RouteMode.NoBoost:
@@ -202,7 +208,7 @@ public sealed partial class RouteCardViewModel : CardViewModel
                 }
                 // Range is a fallback the dev sample plotter uses; live plots read the FSD. Current cargo
                 // keeps the jumps achievable for a laden ship rather than optimistically unladen.
-                request = new RoutePlotRequest(from, to, hasRange ? range : 0, Mode: mode, Ship: _fsd, CargoTons: _cargoTons);
+                request = new RoutePlotRequest(from, to, hasRange ? range : 0, Mode: mode, Ship: _fsd, CargoTons: _cargoTons, FirstJumpMultiplier: _injection);
                 return true;
 
             default: // FleetCarrier — no range or ship needed, but used capacity shapes the fuel model.
