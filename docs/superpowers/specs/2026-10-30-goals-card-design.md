@@ -28,7 +28,7 @@ extension and overlay exposure.
 
 ### `GoalList` (pure service, no UI dependencies)
 
-Add/remove/rename/reorder goals and steps, toggle done, set active goal, progress (`done/total`),
+Add/remove/rename goals; add/remove/rename/reorder steps (goals are not reorderable — the window sorts them by urgency); toggle done, set active goal, progress (`done/total`),
 next unchecked step. Deleting the active goal falls back to the first not-done goal, else none.
 
 ### `DueStatus` (pure)
@@ -86,9 +86,12 @@ by `SettingsStore`. The card saves after every edit.
 
 ## Developer mode
 
-`GoalsSampleSource` is registered in `DeveloperMode.Sources` (behind `FeatureFlags.DeveloperTools`).
-There is no journal event to emit, so it seeds an **in-memory** goal list with a mix of overdue,
-due-soon and comfortable dates. It never reads or writes the user's saved goals.
+`JournalSampleSource`/`DeveloperMode.Sources` only emit journal-event JSON, and goals have no
+journal event. So, as with the Route, Galnet and Mining cards, the card branches on
+`Context.DevEnabled`: while developer mode is on it swaps to an **in-memory** goal list built by
+`SampleGoals` (a mix of overdue, due-soon and comfortable dates) and never saves. Turning developer
+mode off reloads the user's saved goals, which were never touched. `Bootstrap.ApplyGoals` also
+refuses to save while developer mode is on, as `LearnCommodityPrices` does.
 
 ## Testing
 
