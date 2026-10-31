@@ -42,6 +42,7 @@ public sealed partial class TradeCardViewModel : CardViewModel
     /// </summary>
     public override void Update(CommanderState s)
     {
+        if (s.StarSystem is { Length: > 0 } known) _lastSystem = known;
         if (TradeReferenceSystem.Length == 0 && s.StarSystem is { Length: > 0 } sys) TradeReferenceSystem = sys;
         if (TradeCommodity.Length == 0 && !s.Cargo.IsEmpty)
             TradeCommodity = s.Cargo
@@ -49,6 +50,28 @@ public sealed partial class TradeCardViewModel : CardViewModel
                 .OrderByDescending(k => k.Value)
                 .Select(k => k.Key)
                 .FirstOrDefault() ?? "";
+    }
+
+    // Latest known system, so a search started from another card can fill the reference system.
+    private string _lastSystem = "";
+
+    /// <summary>
+    /// Start a "where can I buy this" search (used by the shopping list's Find). Shows the card,
+    /// switches to source mode, fills the reference system from the current one when empty, and runs
+    /// the search. <paramref name="commodity"/> must be a display name, not a stemmed key.
+    /// </summary>
+    public void BeginBuySearch(string commodity)
+    {
+        if (string.IsNullOrWhiteSpace(commodity)) return;
+        TradeCommodity = commodity.Trim();
+        TradeSelling = false;
+        IsCollapsed = false;
+        if (TradeReferenceSystem.Length == 0)
+        {
+            var sys = _lastSystem.Length > 0 ? _lastSystem : Context.Host.State.StarSystem;
+            if (sys is { Length: > 0 }) TradeReferenceSystem = sys;
+        }
+        if (SearchTradeCommand.CanExecute(null)) SearchTradeCommand.Execute(null);
     }
 
     [RelayCommand]

@@ -143,6 +143,60 @@ public static class ShoppingListService
         return (trimmed.ToLowerInvariant(), trimmed);
     }
 
+    /// <summary>
+    /// Returns a copy of <paramref name="current"/> with <paramref name="quantity"/> of <paramref name="text"/>
+    /// added to the manual lines, summed into an existing line for the same normalised item. Blank text
+    /// or a non-positive quantity changes nothing. Never mutates <paramref name="current"/>.
+    /// </summary>
+    public static ShoppingListSettings AddManual(ShoppingListSettings current, ShoppingItemKind kind, string text, int quantity)
+    {
+        var next = Copy(current);
+        if (string.IsNullOrWhiteSpace(text) || quantity <= 0) return next;
+
+        var (key, name) = Resolve(kind, text);
+        var norm = Normalise(kind, key);
+        if (norm.Length == 0) return next;
+
+        var i = next.Manual.FindIndex(e => e.Kind == kind && Normalise(e.Kind, e.Key) == norm);
+        if (i >= 0)
+        {
+            var existing = next.Manual[i];
+            long total = (long)existing.Needed + quantity;
+            next.Manual[i] = existing with { Needed = (int)Math.Min(total, int.MaxValue) };
+        }
+        else
+        {
+            next.Manual.Add(new ShoppingEntry(kind, key, name, quantity, ShoppingItemSource.Manual));
+        }
+        return next;
+    }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="current"/> without the manual line for <paramref name="key"/>
+    /// (a stored key or a built <see cref="ShoppingRow.Key"/>). Never mutates <paramref name="current"/>.
+    /// </summary>
+    public static ShoppingListSettings RemoveManual(ShoppingListSettings current, ShoppingItemKind kind, string key)
+    {
+        var next = Copy(current);
+        var asRowKey = (key ?? string.Empty).Trim().ToLowerInvariant();
+        var asStoredKey = Normalise(kind, key);
+        next.Manual.RemoveAll(e =>
+        {
+            if (e.Kind != kind) return false;
+            var n = Normalise(e.Kind, e.Key);
+            return n.Length > 0 && (n == asRowKey || n == asStoredKey);
+        });
+        return next;
+    }
+
+    private static ShoppingListSettings Copy(ShoppingListSettings s) => new()
+    {
+        Manual = new List<ShoppingEntry>(s.Manual),
+        LinkColonisation = s.LinkColonisation,
+        LinkEngineering = s.LinkEngineering,
+        HideCompleted = s.HideCompleted,
+    };
+
     private static string CatalogSource(ShoppingItemKind kind, string key)
     {
         foreach (var (symbol, _, category, source) in CatalogItems())

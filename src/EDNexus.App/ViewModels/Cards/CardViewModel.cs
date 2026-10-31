@@ -131,6 +131,12 @@ public sealed class DashboardContext
     /// </summary>
     public bool SharedProjectLookupEnabled => _sharedProjectLookupEnabled();
 
+    /// <summary>
+    /// Set by the shell: runs a "buy this commodity" search on the Trade card for the given display
+    /// name. Null until the shell has created its cards.
+    /// </summary>
+    public Action<string>? FindToBuy { get; set; }
+
     /// <summary>Read the shopping list's persisted manual lines and link toggles.</summary>
     public ShoppingListSettings GetShoppingSettings() => _getShopping();
 
