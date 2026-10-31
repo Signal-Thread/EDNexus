@@ -35,6 +35,8 @@ public sealed class DashboardContext
     private readonly Action<DateTimeOffset, long> _recordMiningRefined;
     private readonly Action<RefinedUnit, int> _recordMiningSpot;
     private readonly Func<bool> _sharedProjectLookupEnabled;
+    private readonly Func<ShoppingListSettings> _getShopping;
+    private readonly Action<ShoppingListSettings> _saveShopping;
 
     public DashboardContext(
         Func<EngineHost> host,
@@ -52,7 +54,9 @@ public sealed class DashboardContext
         Action<DateTimeOffset, long> recordMiningRefined,
         Action<RefinedUnit, int> recordMiningSpot,
         RadioPlayerSelector radio,
-        Func<bool>? sharedProjectLookupEnabled = null)
+        Func<bool>? sharedProjectLookupEnabled = null,
+        Func<ShoppingListSettings>? getShopping = null,
+        Action<ShoppingListSettings>? saveShopping = null)
     {
         _host = host;
         Radio = radio;
@@ -70,6 +74,8 @@ public sealed class DashboardContext
         _recordMiningRefined = recordMiningRefined;
         _recordMiningSpot = recordMiningSpot;
         _sharedProjectLookupEnabled = sharedProjectLookupEnabled ?? (() => true);
+        _getShopping = getShopping ?? (() => new ShoppingListSettings());
+        _saveShopping = saveShopping ?? (_ => { });
     }
 
     /// <summary>The live engine host — always the current one, even after a reset-to-live rebuild.</summary>
@@ -124,6 +130,12 @@ public sealed class DashboardContext
     /// (Raven Colonial). Doing so sends the system name and market id to that third-party service.
     /// </summary>
     public bool SharedProjectLookupEnabled => _sharedProjectLookupEnabled();
+
+    /// <summary>Read the shopping list's persisted manual lines and link toggles.</summary>
+    public ShoppingListSettings GetShoppingSettings() => _getShopping();
+
+    /// <summary>Persist the shopping list's manual lines and link toggles.</summary>
+    public void SaveShoppingSettings(ShoppingListSettings shopping) => _saveShopping(shopping);
 }
 
 /// <summary>

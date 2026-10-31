@@ -77,7 +77,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             (when, credits) => _boot.RecordMiningRefined(when, credits),
             (unit, price) => _boot.RecordMiningSpot(unit, price),
             _radio,
-            () => _boot.Settings.Colonisation.SharedProjectLookup);
+            () => _boot.Settings.Colonisation.SharedProjectLookup,
+            () => _boot.Settings.Shopping,
+            shopping => _boot.ApplyShoppingSettings(shopping));
         Cards = new ObservableCollection<CardViewModel>
         {
             new LocationCardViewModel(_context),
