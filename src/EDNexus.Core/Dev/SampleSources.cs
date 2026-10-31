@@ -461,6 +461,40 @@ public sealed class CargoSampleSource : JournalSampleSource
 }
 
 /// <summary>
+/// Everything the unified shopping list reads held counts from: a cargo hold, ship materials
+/// (reusing the Cargo and Materials samplers) and an on-foot <c>ShipLocker</c> drawn from the
+/// Odyssey catalog, so commodity, engineering and on-foot rows all move on a reshuffle.
+/// </summary>
+public sealed class ShoppingListSampleSource : JournalSampleSource
+{
+    public override string CardKey => "shopping";
+    public override string DisplayName => "Shopping list";
+
+    public override IReadOnlyList<string> Sample(Random rng)
+    {
+        var lines = new List<string>();
+        lines.AddRange(new CargoSampleSource().Sample(rng));
+        lines.AddRange(new MaterialsSampleSource().Sample(rng));
+
+        var pool = Odyssey.OdysseyCatalog.Default.Materials;
+        lines.Add(Event("ShipLocker", o =>
+        {
+            foreach (var (prop, category) in new[]
+                { ("Items", "Item"), ("Components", "Component"), ("Consumables", "Consumable"), ("Data", "Data") })
+            {
+                var arr = new JsonArray();
+                var ofCategory = pool.Where(m => string.Equals(m.Category, category, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (ofCategory.Count > 0)
+                    foreach (var m in SamplePools.PickDistinct(rng, ofCategory, rng.Next(1, ofCategory.Count + 1)))
+                        arr.Add(new JsonObject { ["Name"] = m.Symbol, ["OwnerID"] = 0, ["Count"] = rng.Next(1, 30) });
+                o[prop] = arr;
+            }
+        }));
+        return lines;
+    }
+}
+
+/// <summary>
 /// A random colonisation construction depot for the Colonisation card, plus a small cargo hold
 /// carrying some of what the depot still needs — so the "in hold" cross-reference highlight shows.
 /// </summary>
