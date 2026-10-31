@@ -25,7 +25,8 @@ public static class ShoppingListService
             if (groups.TryGetValue(id, out var g))
             {
                 if (!g.Sources.Contains(e.Source)) g.Sources.Add(e.Source);
-                groups[id] = (g.Name, g.Needed + e.Needed, g.Sources);
+                var name = IsRawSymbol(g.Name) && !IsRawSymbol(e.Name) && !string.IsNullOrWhiteSpace(e.Name) ? e.Name : g.Name;
+                groups[id] = (name, g.Needed + e.Needed, g.Sources);
             }
             else
             {
@@ -35,11 +36,12 @@ public static class ShoppingListService
             }
         }
 
+        var hold = BuildHoldLookup(state);
         var rows = new List<ShoppingRow>(order.Count);
         foreach (var id in order)
         {
             var (name, needed, sources) = groups[id];
-            rows.Add(new ShoppingRow(id.Item1, id.Item2, name, needed, Held(id.Item1, id.Item2, state), sources, string.Empty));
+            rows.Add(new ShoppingRow(id.Item1, id.Item2, name, needed, HeldNormalised(id.Item1, id.Item2, hold, state), sources, string.Empty));
         }
 
         IEnumerable<ShoppingRow> result = rows;
@@ -53,17 +55,26 @@ public static class ShoppingListService
     }
 
     /// <summary>Units of an item currently held; zero for unknown kinds or keys.</summary>
-    internal static int Held(ShoppingItemKind kind, string key, CommanderState state)
+    internal static int Held(ShoppingItemKind kind, string key, CommanderState state) =>
+        HeldNormalised(kind, Normalise(kind, key), BuildHoldLookup(state), state);
+
+    /// <summary>Stemmed, canonicalised copy of the cargo hold (journal and display forms merged).</summary>
+    private static Dictionary<string, int> BuildHoldLookup(CommanderState state)
     {
-        if (kind == ShoppingItemKind.Commodity)
+        var hold = new Dictionary<string, int>();
+        foreach (var (name, count) in state.Cargo)
         {
-            var want = Stem(CommodityName.Canonicalize(key));
-            if (want.Length == 0) return 0;
-            var total = 0;
-            foreach (var (name, count) in state.Cargo)
-                if (Stem(CommodityName.Canonicalize(name)) == want) total += count;
-            return total;
+            var key = Normalise(ShoppingItemKind.Commodity, name);
+            if (key.Length == 0) continue;
+            hold[key] = hold.TryGetValue(key, out var existing) ? existing + count : count;
         }
+        return hold;
+    }
+
+    private static int HeldNormalised(ShoppingItemKind kind, string key, Dictionary<string, int> hold, CommanderState state)
+    {
+        if (key.Length == 0) return 0;
+        if (kind == ShoppingItemKind.Commodity) return hold.TryGetValue(key, out var c) ? c : 0;
 
         var bucket = kind switch
         {
@@ -76,20 +87,22 @@ public static class ShoppingListService
             ShoppingItemKind.Consumable => state.OnFoot.Consumables,
             _ => null,
         };
-        if (bucket is null) return 0;
-        var k = key?.Trim() ?? string.Empty;
-        return k.Length > 0 && bucket.TryGetValue(k, out var n) ? n : 0;
+        return bucket is not null && bucket.TryGetValue(key, out var n) ? n : 0;
     }
+
+    private static bool IsRawSymbol(string? name) => name is not null && name.TrimStart().StartsWith('$');
 
     /// <summary>
     /// The journal symbol is singular ("lowtemperaturediamond") while the localised label is plural
     /// ("Low Temperature Diamonds"); dropping one trailing 's' lets both forms meet in the hold.
+    /// Trade-off: two distinct commodities differing only by a trailing 's' would collide (none known).
+    /// Not idempotent, so apply it exactly once, inside <see cref="Normalise"/>.
     /// </summary>
     private static string Stem(string canonical) =>
         canonical.Length > 3 && canonical[^1] == 's' ? canonical[..^1] : canonical;
 
     private static string Normalise(ShoppingItemKind kind, string? key) =>
         kind == ShoppingItemKind.Commodity
-            ? CommodityName.Canonicalize(key)
+            ? Stem(CommodityName.Canonicalize(key))
             : (key ?? string.Empty).Trim().ToLowerInvariant();
 }

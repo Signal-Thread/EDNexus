@@ -105,4 +105,33 @@ public class ShoppingListServiceTests
             [new ShoppingEntry(ShoppingItemKind.Encoded, "nope", "Nope", 2)], s);
         Assert.Equal(0, Assert.Single(rows).Held);
     }
+
+    [Fact]
+    public void Journal_symbol_and_display_name_merge_into_one_row()
+    {
+        var s = new CommanderState();
+        s.Cargo["lowtemperaturediamond"] = 4;
+        var rows = ShoppingListService.Build(
+        [
+            new ShoppingEntry(ShoppingItemKind.Commodity, "$lowtemperaturediamond_name;", "$lowtemperaturediamond_name;", 5, ShoppingItemSource.Colonisation),
+            new ShoppingEntry(ShoppingItemKind.Commodity, "Low Temperature Diamonds", "Low Temperature Diamonds", 10, ShoppingItemSource.Manual),
+        ], s);
+
+        var row = Assert.Single(rows);
+        Assert.Equal(15, row.Needed);
+        Assert.Equal(4, row.Held);
+        Assert.Equal("Low Temperature Diamonds", row.Name);
+        Assert.Contains(ShoppingItemSource.Colonisation, row.Sources);
+        Assert.Contains(ShoppingItemSource.Manual, row.Sources);
+    }
+
+    [Fact]
+    public void Journal_symbol_entry_matches_plain_cargo_key()
+    {
+        var s = new CommanderState();
+        s.Cargo["steel"] = 6;
+        var rows = ShoppingListService.Build(
+            [new ShoppingEntry(ShoppingItemKind.Commodity, "$steel_name;", "Steel", 10)], s);
+        Assert.Equal(6, Assert.Single(rows).Held);
+    }
 }
