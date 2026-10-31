@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
+using Avalonia.Controls.ApplicationLifetimes;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EDNexus.Core.Dev;
@@ -58,6 +59,9 @@ public sealed partial class GoalsCardViewModel : CardViewModel
 
     /// <summary>The focused goal's steps, in order.</summary>
     public ObservableCollection<StepRow> Steps { get; } = new();
+
+    /// <summary>The steps of the <see cref="Selected"/> goal (which may not be the focused one), for the window.</summary>
+    public ObservableCollection<StepRow> SelectedSteps { get; } = new();
 
     /// <summary>Unfinished goals other than the focused one, most urgent first, for the switcher strip.</summary>
     public ObservableCollection<GoalRow> Others { get; } = new();
@@ -215,11 +219,40 @@ public sealed partial class GoalsCardViewModel : CardViewModel
         Commit();
     }
 
-    /// <summary>Opens the management window.</summary>
+    // The management window while it is open, so a second click brings it forward instead of stacking.
+    private Views.GoalsWindow? _manager;
+
+    /// <summary>Opens the management window, or brings the one already open to the front.</summary>
     [RelayCommand]
     private void OpenManage()
     {
-        // The window arrives with GoalsWindow; until then the button does nothing.
+        if (_manager is not null)
+        {
+            _manager.Activate();
+            return;
+        }
+
+        var owner = (Avalonia.Application.Current?.ApplicationLifetime
+            as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
+
+        var window = new Views.GoalsWindow { DataContext = this };
+        window.Closed += (_, _) => _manager = null;
+        _manager = window;
+
+        // Owned by the dashboard, so it cannot keep the app running after the main window closes.
+        if (owner is not null) window.Show(owner);
+        else window.Show();
+    }
+
+    partial void OnSelectedChanged(GoalRow? value) => RebuildSelectedSteps(value);
+
+    private void RebuildSelectedSteps(GoalRow? row)
+    {
+        SelectedSteps.Clear();
+        if (row is null || _list is null) return;
+        var now = Now;
+        var next = _list.NextStep(row.Goal);
+        foreach (var step in row.Goal.Steps) SelectedSteps.Add(new StepRow(step, ReferenceEquals(step, next), now));
     }
 
     /// <summary>
@@ -290,6 +323,31 @@ public sealed partial class GoalsCardViewModel : CardViewModel
         Selected = AllByUrgency.FirstOrDefault(r => r.Goal.Id == selectedId) ?? Focused;
     }
 
+    /// <summary>Local calendar date of a deadline, for the window's date picker; null when there is none.</summary>
+    public static DateTime? DatePart(DateTimeOffset? due) => due?.ToLocalTime().Date;
+
+    /// <summary>
+    /// Local time of day of a deadline, for the window's time picker. Null when there is none, or when it
+    /// is the end-of-day default a date-only pick produces (so "no time" round-trips as no time).
+    /// </summary>
+    public static TimeSpan? TimePart(DateTimeOffset? due)
+    {
+        if (due is not { } d) return null;
+        var local = d.ToLocalTime();
+        return local == DueStatus.EndOfDay(local.Date) ? null : new TimeSpan(local.Hour, local.Minute, 0);
+    }
+
+    /// <summary>
+    /// The deadline a date and optional time picked in the window stand for: no date is no deadline, a date
+    /// alone is the end of that local day, and a date with a time is that local moment.
+    /// </summary>
+    public static DateTimeOffset? Combine(DateTime? date, TimeSpan? time)
+    {
+        if (date is not { } d) return null;
+        if (time is not { } t) return DueStatus.EndOfDay(d);
+        return new DateTimeOffset(DateTime.SpecifyKind(d.Date + t, DateTimeKind.Local));
+    }
+
     /// <summary>Short local due date for a row, or empty when there is none.</summary>
     internal static string FormatDue(DateTimeOffset? due) =>
         due is { } d ? "due " + d.ToLocalTime().ToString("d MMM HH:mm", CultureInfo.CurrentCulture) : "";
@@ -320,6 +378,12 @@ public sealed class GoalRow
 
     /// <summary>The goal's own deadline, or empty.</summary>
     public string DueText { get; }
+
+    /// <summary>The deadline's local date for the window's date picker, or null.</summary>
+    public DateTime? DueDate => GoalsCardViewModel.DatePart(Goal.Due);
+
+    /// <summary>The deadline's local time for the window's time picker; null when none or end of day.</summary>
+    public TimeSpan? DueTime => GoalsCardViewModel.TimePart(Goal.Due);
 
     /// <summary>Worst status across the goal's deadline and its unfinished steps (switcher dots, badge).</summary>
     public DueState State { get; }
@@ -367,6 +431,12 @@ public sealed class StepRow
 
     /// <summary>The step's deadline, or empty.</summary>
     public string DueText { get; }
+
+    /// <summary>The deadline's local date for the window's date picker, or null.</summary>
+    public DateTime? DueDate => GoalsCardViewModel.DatePart(Step.Due);
+
+    /// <summary>The deadline's local time for the window's time picker; null when none or end of day.</summary>
+    public TimeSpan? DueTime => GoalsCardViewModel.TimePart(Step.Due);
 
     /// <summary>The step's own due status (none once done).</summary>
     public DueState State { get; }

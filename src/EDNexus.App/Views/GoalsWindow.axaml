@@ -1,0 +1,208 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:EDNexus.App.ViewModels"
+        x:Class="EDNexus.App.Views.GoalsWindow"
+        x:DataType="vm:GoalsCardViewModel"
+        Title="EDNexus — Goals"
+        Icon="/Assets/ednexus.png"
+        Width="900" Height="640" MinWidth="560" MinHeight="420"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource Surface0}">
+
+  <Window.Styles>
+    <!-- Due status picks out the due text and a thin row edge, never the whole row.
+         Warning = due within 24 hours, Bad = overdue. -->
+    <Style Selector="TextBlock.goalDue">
+      <Setter Property="Foreground" Value="{StaticResource InkDim}" />
+      <Setter Property="FontSize" Value="11" />
+    </Style>
+    <Style Selector="TextBlock.goalDue.soon">
+      <Setter Property="Foreground" Value="{StaticResource Warning}" />
+    </Style>
+    <Style Selector="TextBlock.goalDue.overdue">
+      <Setter Property="Foreground" Value="{StaticResource Bad}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Border.goalEdge">
+      <Setter Property="BorderBrush" Value="{StaticResource SurfaceField}" />
+      <Setter Property="BorderThickness" Value="2,0,0,0" />
+    </Style>
+    <Style Selector="Border.goalEdge.soon">
+      <Setter Property="BorderBrush" Value="{StaticResource Warning}" />
+    </Style>
+    <Style Selector="Border.goalEdge.overdue">
+      <Setter Property="BorderBrush" Value="{StaticResource Bad}" />
+    </Style>
+    <!-- Finished goals and steps sit dimmed at the end of the list. -->
+    <Style Selector="StackPanel.dimmable.done">
+      <Setter Property="Opacity" Value="0.5" />
+    </Style>
+    <Style Selector="TextBlock.stepText.done">
+      <Setter Property="Foreground" Value="{StaticResource InkDim}" />
+      <Setter Property="TextDecorations" Value="Strikethrough" />
+    </Style>
+    <Style Selector="TextBox.plain">
+      <Setter Property="Background" Value="{StaticResource SurfaceField}" />
+      <Setter Property="Foreground" Value="{StaticResource Ink}" />
+      <Setter Property="BorderBrush" Value="{StaticResource CardBorder}" />
+    </Style>
+    <Style Selector="Button.action">
+      <Setter Property="Background" Value="{StaticResource SurfaceRaised}" />
+      <Setter Property="Foreground" Value="{StaticResource Ink}" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Padding" Value="12,6" />
+    </Style>
+    <Style Selector="Button.mini">
+      <Setter Property="Background" Value="{StaticResource SurfaceRaised}" />
+      <Setter Property="Foreground" Value="{StaticResource Ink}" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Padding" Value="8,2" />
+      <Setter Property="MinWidth" Value="0" />
+    </Style>
+    <Style Selector="TextBlock.sectionLabel">
+      <Setter Property="Foreground" Value="{StaticResource InkDim}" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="LetterSpacing" Value="1" />
+      <Setter Property="Margin" Value="0,16,0,6" />
+    </Style>
+  </Window.Styles>
+
+  <!-- Shares the dashboard card's GoalsCardViewModel, so edits here and on the card stay in step. -->
+  <DockPanel>
+    <Border DockPanel.Dock="Top" Background="{StaticResource Surface100}" BorderBrush="{StaticResource CardBorder}"
+            BorderThickness="0,0,0,1" Padding="16,12">
+      <StackPanel VerticalAlignment="Center">
+        <TextBlock Text="GOALS" Foreground="{StaticResource AmberBrush}" FontSize="12"
+                   FontWeight="SemiBold" LetterSpacing="2" />
+        <TextBlock Text="Your own to-do list. Steps and deadlines are optional." Foreground="{StaticResource InkDim}"
+                   FontSize="12" TextWrapping="Wrap" Margin="0,2,0,0" />
+      </StackPanel>
+    </Border>
+
+    <Grid ColumnDefinitions="300,Auto,*">
+      <!-- Left: every goal, most urgent first with finished goals last, and the add-goal box. -->
+      <DockPanel Grid.Column="0">
+        <Border DockPanel.Dock="Bottom" Padding="8" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,1,0,0">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBox x:Name="NewGoalBox" Grid.Column="0" Classes="plain" PlaceholderText="Add a goal"
+                     KeyDown="OnNewGoalKeyDown" />
+            <Button Grid.Column="1" Classes="mini" Content="Add" Margin="6,0,0,0" Click="OnAddGoalClick" />
+          </Grid>
+        </Border>
+
+        <ListBox ItemsSource="{Binding AllByUrgency}" SelectedItem="{Binding Selected}"
+                 Background="Transparent" BorderThickness="0" Padding="8">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:GoalRow">
+              <Border Classes="goalEdge" Classes.soon="{Binding IsDueSoon}" Classes.overdue="{Binding IsOverdue}"
+                      Padding="8,2" Margin="0,2">
+                <StackPanel Classes="dimmable" Classes.done="{Binding Goal.IsDone}">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0" Text="{Binding Title}" Foreground="{StaticResource Ink}" FontSize="13"
+                               TextWrapping="Wrap" Classes="stepText" Classes.done="{Binding Goal.IsDone}" />
+                    <TextBlock Grid.Column="1" Text="{Binding ProgressText}" Foreground="{StaticResource InkDim}"
+                               FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
+                  </Grid>
+                  <TextBlock Classes="goalDue" Classes.soon="{Binding OwnIsDueSoon}" Classes.overdue="{Binding OwnIsOverdue}"
+                             Text="{Binding DueText}"
+                             IsVisible="{Binding DueText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+
+      <GridSplitter Grid.Column="1" Width="1" Background="{StaticResource CardBorder}" ResizeDirection="Columns" />
+
+      <!-- Right: the selected goal. -->
+      <ScrollViewer Grid.Column="2" Padding="20,16" VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled">
+        <StackPanel>
+          <TextBlock Foreground="{StaticResource InkDim}" FontSize="13" TextWrapping="Wrap"
+                     IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNull}}"
+                     Text="No goal selected. Add one on the left, then give it steps and a deadline here." />
+
+          <StackPanel IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Classes="sectionLabel" Text="TITLE" Margin="0,0,0,6" />
+            <TextBox x:Name="TitleBox" Classes="plain" Text="{Binding Selected.Title, Mode=OneWay}"
+                     LostFocus="OnTitleCommit" KeyDown="OnTitleKeyDown" />
+
+            <TextBlock Classes="sectionLabel" Text="DEADLINE" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <CalendarDatePicker x:Name="GoalDate" SelectedDateChanged="OnGoalDateChanged" />
+              <TimePicker x:Name="GoalTime" ClockIdentifier="24HourClock" MinuteIncrement="1"
+                          SelectedTimeChanged="OnGoalTimeChanged" />
+              <Button Classes="mini" Content="Clear" Click="OnGoalDueClear" VerticalAlignment="Center" />
+            </StackPanel>
+            <TextBlock Classes="goalDue" Classes.soon="{Binding Selected.OwnIsDueSoon}"
+                       Classes.overdue="{Binding Selected.OwnIsOverdue}" Margin="0,6,0,0"
+                       Text="{Binding Selected.DueText}"
+                       IsVisible="{Binding Selected.DueText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+            <TextBlock Classes="sectionLabel" Text="NOTES" />
+            <TextBox x:Name="NotesBox" Classes="plain" Text="{Binding Selected.Goal.Notes, Mode=OneWay}"
+                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="160"
+                     LostFocus="OnNotesCommit" />
+
+            <TextBlock Classes="sectionLabel" Text="STEPS" />
+            <ItemsControl ItemsSource="{Binding SelectedSteps}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:StepRow">
+                  <Border Classes="goalEdge" Classes.soon="{Binding IsDueSoon}" Classes.overdue="{Binding IsOverdue}"
+                          Background="{StaticResource SurfaceField}" CornerRadius="4" Padding="8,4" Margin="0,0,0,4">
+                    <StackPanel Spacing="4">
+                      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+                        <CheckBox Grid.Column="0" IsChecked="{Binding IsDone, Mode=OneWay}" MinWidth="0"
+                                  VerticalAlignment="Center"
+                                  Command="{Binding $parent[ItemsControl].((vm:GoalsCardViewModel)DataContext).ToggleStepCommand}"
+                                  CommandParameter="{Binding}" />
+                        <TextBox Grid.Column="1" Classes="plain" Text="{Binding Text, Mode=OneWay}"
+                                 VerticalAlignment="Center" LostFocus="OnStepTextCommit" KeyDown="OnStepTextKeyDown" />
+                        <Button Grid.Column="2" Classes="mini" Content="▲" Margin="6,0,0,0" Click="OnStepUp"
+                                ToolTip.Tip="Move up" />
+                        <Button Grid.Column="3" Classes="mini" Content="▼" Margin="4,0,0,0" Click="OnStepDown"
+                                ToolTip.Tip="Move down" />
+                        <Button Grid.Column="4" Classes="mini" Content="✕" Margin="4,0,0,0"
+                                Command="{Binding $parent[ItemsControl].((vm:GoalsCardViewModel)DataContext).DeleteStepCommand}"
+                                CommandParameter="{Binding}" ToolTip.Tip="Delete step" />
+                      </Grid>
+                      <StackPanel Orientation="Horizontal" Spacing="8" Margin="28,0,0,0">
+                        <CalendarDatePicker DataContextChanged="OnStepDateContext" SelectedDateChanged="OnStepDateChanged" />
+                        <TimePicker ClockIdentifier="24HourClock" MinuteIncrement="1"
+                                    DataContextChanged="OnStepTimeContext" SelectedTimeChanged="OnStepTimeChanged" />
+                        <Button Classes="mini" Content="Clear" Click="OnStepDueClear" VerticalAlignment="Center" />
+                        <TextBlock Classes="goalDue" Classes.soon="{Binding IsDueSoon}" Classes.overdue="{Binding IsOverdue}"
+                                   Text="{Binding DueText}" VerticalAlignment="Center" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+              <TextBox x:Name="NewStepBox" Grid.Column="0" Classes="plain" PlaceholderText="Add a step, then press Enter"
+                       KeyDown="OnNewStepKeyDown" />
+              <Button Grid.Column="1" Classes="mini" Content="Add" Margin="6,0,0,0" Click="OnAddStepClick" />
+            </Grid>
+
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,20,0,0">
+              <Button Classes="action" Content="Focus on this goal"
+                      IsEnabled="{Binding !Selected.IsActive}"
+                      Command="{Binding FocusCommand}" CommandParameter="{Binding Selected}" />
+              <Button Classes="action" Content="Mark done"
+                      IsVisible="{Binding !Selected.Goal.IsDone}"
+                      Command="{Binding ToggleGoalCommand}" CommandParameter="{Binding Selected}" />
+              <Button Classes="action" Content="Reopen"
+                      IsVisible="{Binding Selected.Goal.IsDone}"
+                      Command="{Binding ToggleGoalCommand}" CommandParameter="{Binding Selected}" />
+              <Button Classes="action" Content="Delete goal" Foreground="{StaticResource Bad}"
+                      Command="{Binding DeleteGoalCommand}" CommandParameter="{Binding Selected}" />
+            </StackPanel>
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </DockPanel>
+</Window>

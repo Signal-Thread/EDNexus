@@ -273,6 +273,53 @@ public sealed class GoalsCardViewModelTests
     }
 
     [Fact]
+    public void SelectedSteps_FollowTheSelectedGoal_NotTheFocusedOne()
+    {
+        var card = Card();
+        Assert.Equal(["s1", "s2", "s3"], card.SelectedSteps.Select(s => s.Step.Id));
+
+        card.Selected = card.AllByUrgency.Single(r => r.Goal.Id == "g2");
+
+        Assert.Equal(["s4"], card.SelectedSteps.Select(s => s.Step.Id));
+        Assert.True(card.SelectedSteps[0].IsNext);
+        Assert.Equal(["s1", "s2", "s3"], card.Steps.Select(s => s.Step.Id));
+        Assert.Equal("g1", card.Focused!.Goal.Id);
+    }
+
+    [Fact]
+    public void SelectedSteps_RefreshAfterAnEdit_AndEmptyWhenNothingSelected()
+    {
+        var card = Card();
+        card.Selected = card.AllByUrgency.Single(r => r.Goal.Id == "g3");
+        Assert.Empty(card.SelectedSteps);
+
+        card.AddStepTo(card.Selected, "Sell data");
+
+        Assert.Equal("g3", card.Selected!.Goal.Id);
+        Assert.Equal("Sell data", Assert.Single(card.SelectedSteps).Text);
+
+        card.Selected = null;
+        Assert.Empty(card.SelectedSteps);
+    }
+
+    [Fact]
+    public void DuePickers_DateAloneIsEndOfDay_AndRoundTripsAsNoTime()
+    {
+        var date = new DateTime(2026, 11, 2);
+
+        var dateOnly = GoalsCardViewModel.Combine(date, null);
+        Assert.Equal(DueStatus.EndOfDay(date), dateOnly);
+        Assert.Equal(date, GoalsCardViewModel.DatePart(dateOnly));
+        Assert.Null(GoalsCardViewModel.TimePart(dateOnly));
+
+        var withTime = GoalsCardViewModel.Combine(date, new TimeSpan(9, 30, 0));
+        Assert.Equal(new DateTimeOffset(2026, 11, 2, 9, 30, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2026, 11, 2, 9, 30, 0))), withTime);
+        Assert.Equal(new TimeSpan(9, 30, 0), GoalsCardViewModel.TimePart(withTime));
+
+        Assert.Null(GoalsCardViewModel.Combine(null, new TimeSpan(9, 30, 0)));
+    }
+
+    [Fact]
     public void AddStepTo_AddsToThatGoal_WithoutChangingFocus()
     {
         var card = Card();
