@@ -51,8 +51,9 @@ contribution does not disturb the others.
 - **Engineering**: `ImportEngineering(plan)` links to the pinned blueprint/queue
   (`EngineeringPlanner.Plan`) and the on-foot pin; contribution = per-material `Needed`
   (held is computed by the list itself, not taken from the plan, to avoid double counting).
-- Links are stored as `(Source, sourceId)` in settings and re-evaluated against current state;
-  a link whose source no longer exists is dropped. `Unlink(source)` removes it on demand.
+- Links are two booleans in settings (`LinkColonisation`, `LinkEngineering`): the link follows
+  whichever depot is currently active / whatever is currently pinned, and is re-evaluated against
+  current state each tick. Unlinking clears the boolean. The ship pin is costed for one roll.
 
 ### 3. Where-to-buy
 
