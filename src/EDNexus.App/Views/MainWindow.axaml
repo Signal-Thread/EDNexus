@@ -977,6 +977,92 @@
             </Border>
           </DataTemplate>
 
+          <!-- Shopping list -->
+          <DataTemplate DataType="vm:ShoppingListCardViewModel">
+            <Border Classes="card">
+              <StackPanel>
+                <Grid ColumnDefinitions="*,Auto,Auto">
+                  <TextBlock Grid.Column="0" Classes="cardHeader" Text="{Binding Title}" />
+                  <Button Grid.Column="1" Classes="dice" Content="🎲" Margin="0,0,6,0"
+                          IsVisible="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).DevMode}"
+                          Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).RandomizeCardCommand}"
+                          CommandParameter="{Binding Id}" />
+                  <Button Grid.Column="2" Classes="collapse" Content="{Binding CollapseGlyph}"
+                          Command="{Binding ToggleCollapseCommand}" />
+                </Grid>
+                <StackPanel IsVisible="{Binding !IsCollapsed}">
+                  <WrapPanel Margin="0,0,0,10">
+                    <CheckBox IsChecked="{Binding LinkColonisation}" Foreground="{StaticResource Ink}"
+                              Content="Depot" Margin="0,0,16,0" />
+                    <CheckBox IsChecked="{Binding LinkEngineering}" Foreground="{StaticResource Ink}"
+                              Content="Engineering" Margin="0,0,16,0" />
+                    <CheckBox IsChecked="{Binding HideCompleted}" Foreground="{StaticResource Ink}"
+                              Content="Hide completed" />
+                  </WrapPanel>
+
+                  <Grid ColumnDefinitions="130,*,80,Auto" Margin="0,0,0,12">
+                    <ComboBox Grid.Column="0" ItemsSource="{Binding Kinds}" SelectedItem="{Binding NewKind}"
+                              HorizontalAlignment="Stretch" Margin="0,0,8,0" />
+                    <TextBox Grid.Column="1" Classes="field" Text="{Binding NewName}" PlaceholderText="Item name"
+                             Margin="0,0,8,0" />
+                    <TextBox Grid.Column="2" Classes="field" Text="{Binding NewQuantity}" PlaceholderText="Qty"
+                             Margin="0,0,8,0" />
+                    <Button Grid.Column="3" Classes="action" Content="Add" Command="{Binding AddItemCommand}" />
+                  </Grid>
+
+                  <TextBlock Classes="label" IsVisible="{Binding IsEmpty}" TextWrapping="Wrap"
+                             Text="Nothing on the list. Add an item above, or link the colonisation depot or a pinned engineering goal." />
+
+                  <StackPanel IsVisible="{Binding !IsEmpty}">
+                    <Grid ColumnDefinitions="*,110,110,150,Auto" Margin="0,0,0,2">
+                      <TextBlock Grid.Column="0" Classes="label" Text="NAME" />
+                      <TextBlock Grid.Column="1" Classes="label" Text="HELD / NEEDED" HorizontalAlignment="Right" />
+                      <TextBlock Grid.Column="2" Classes="label" Text="FROM" Margin="12,0,0,0" />
+                      <TextBlock Grid.Column="3" Classes="label" Text="ACTION" Margin="12,0,0,0" />
+                      <Border Grid.Column="4" Width="28" />
+                    </Grid>
+
+                    <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                      <ItemsControl ItemsSource="{Binding Rows}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:ShoppingRowViewModel">
+                            <Grid ColumnDefinitions="*,110,110,150,Auto" Margin="0,5">
+                              <StackPanel Grid.Column="0" Margin="0,0,12,0" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Name}" Classes="value" FontSize="13" TextTrimming="CharacterEllipsis" />
+                                <ProgressBar Minimum="0" Maximum="1" Value="{Binding Progress}" Height="4"
+                                             Foreground="{StaticResource AmberDim}" Background="{StaticResource SurfaceRaised}"
+                                             Margin="0,4,0,0" />
+                              </StackPanel>
+                              <TextBlock Grid.Column="1" Text="{Binding HeldText}" Classes="value" FontSize="13"
+                                         HorizontalAlignment="Right" VerticalAlignment="Center" />
+                              <TextBlock Grid.Column="2" Text="{Binding SourceText}" Classes="label"
+                                         Margin="12,0,0,0" TextWrapping="Wrap" VerticalAlignment="Center" />
+                              <Button Grid.Column="3" Classes="mini" Content="Find" Margin="12,0,0,0"
+                                      HorizontalAlignment="Left" VerticalAlignment="Center"
+                                      IsVisible="{Binding CanFind}"
+                                      Command="{Binding $parent[ItemsControl].((vm:ShoppingListCardViewModel)DataContext).FindCommand}"
+                                      CommandParameter="{Binding}" />
+                              <TextBlock Grid.Column="3" Classes="label" Text="{Binding Hint}" Margin="12,0,0,0"
+                                         TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis"
+                                         VerticalAlignment="Center" IsVisible="{Binding !CanFind}"
+                                         ToolTip.Tip="{Binding Hint}" />
+                              <Button Grid.Column="4" Classes="mini" Content="✕" Width="28" Margin="4,0,0,0"
+                                      VerticalAlignment="Center" IsVisible="{Binding IsManual}"
+                                      Command="{Binding $parent[ItemsControl].((vm:ShoppingListCardViewModel)DataContext).RemoveManualCommand}"
+                                      CommandParameter="{Binding}"
+                                      ToolTip.Tip="Remove this manual item" />
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </ScrollViewer>
+                  </StackPanel>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+
           <!-- Market -->
           <DataTemplate DataType="vm:MarketCardViewModel">
             <Border Classes="card">
