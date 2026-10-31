@@ -25,6 +25,7 @@ public sealed partial class RouteCardViewModel : CardViewModel
     private ShipFsdProfile? _fsd;
     private double _cargoTons;
     private double _carrierUsedCapacity;
+    private string _currentSystem = "";
 
     /// <summary>The plotted route behind the displayed hops — the source of truth <see cref="PersistRoute"/> saves from.</summary>
     private RoutePlan? _lastPlan;
@@ -99,7 +100,8 @@ public sealed partial class RouteCardViewModel : CardViewModel
     /// <summary>Pre-fill the origin from live state, and track the ship FSD / carrier fuel the plot needs.</summary>
     public override void Update(CommanderState s)
     {
-        if (RouteFrom.Length == 0 && s.StarSystem is { Length: > 0 } sys) RouteFrom = sys;
+        _currentSystem = s.StarSystem ?? "";
+        if (RouteFrom.Length == 0 && _currentSystem.Length > 0) RouteFrom = _currentSystem;
 
         _fsd = s.Fsd;
         _cargoTons = s.CargoTons;
@@ -126,6 +128,18 @@ public sealed partial class RouteCardViewModel : CardViewModel
         }
 
         if (ModeNoBoost) RefreshMode();   // keep the hint's ship-range figure current
+    }
+
+    /// <summary>Fill the FROM field with the commander's current system (the compass button beside it).</summary>
+    [RelayCommand]
+    private void UseCurrentSystem()
+    {
+        if (_currentSystem.Length == 0)
+        {
+            RouteStatus = "Current system unknown — no location seen in the journal yet.";
+            return;
+        }
+        RouteFrom = _currentSystem;
     }
 
     [RelayCommand]
