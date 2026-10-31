@@ -89,23 +89,37 @@ public sealed partial class GoalsCardViewModel : CardViewModel
         _signature = "";
     }
 
-    /// <summary>Adds a goal; blank titles are ignored.</summary>
+    /// <summary>Adds a goal and selects it in the window; blank titles are ignored.</summary>
     [RelayCommand]
     public void AddGoal(string? title)
     {
         EnsureSource();
-        if (_list!.AddGoal(title ?? "") is not null) Commit();
+        if (_list!.AddGoal(title ?? "") is not { } goal) return;
+        Commit();
+        Selected = AllByUrgency.FirstOrDefault(r => r.Goal.Id == goal.Id) ?? Selected;
     }
 
     /// <summary>Adds a step to the focused goal; blank text is ignored.</summary>
     [RelayCommand]
     public void AddStep(string? text)
     {
-        EnsureSource();
-        if (_list!.Active is not { } goal) return;
-        if (_list.AddStep(goal.Id, text ?? "") is null) return;
-        NewStepText = "";
+        // A swap means the focused goal the commander was typing into is gone.
+        if (!EnsureSource() || Focused is not { } focused) return;
+        if (TryAddStep(focused.Goal.Id, text)) NewStepText = "";
+    }
+
+    /// <summary>Adds a step to <paramref name="goal"/> without changing focus; blank text is ignored.</summary>
+    public void AddStepTo(GoalRow goal, string text)
+    {
+        if (!EnsureSource()) return;
+        TryAddStep(goal.Goal.Id, text);
+    }
+
+    private bool TryAddStep(string goalId, string? text)
+    {
+        if (_list!.AddStep(goalId, text ?? "") is null) return false;
         Commit();
+        return true;
     }
 
     /// <summary>Ticks or unticks a step.</summary>
@@ -291,6 +305,7 @@ public sealed class GoalRow
         ProgressText = progress.Total == 0 ? "" : $"{progress.Done}/{progress.Total}";
         DueText = GoalsCardViewModel.FormatDue(goal.Due);
         State = DueStatus.Effective(goal, now);
+        OwnState = DueStatus.For(goal.Due, goal.IsDone, now);
         IsActive = isActive;
     }
 
@@ -306,17 +321,26 @@ public sealed class GoalRow
     /// <summary>The goal's own deadline, or empty.</summary>
     public string DueText { get; }
 
-    /// <summary>Worst status across the goal's deadline and its unfinished steps.</summary>
+    /// <summary>Worst status across the goal's deadline and its unfinished steps (switcher dots, badge).</summary>
     public DueState State { get; }
+
+    /// <summary>Status of the goal's own deadline only, which colours its <see cref="DueText"/>.</summary>
+    public DueState OwnState { get; }
 
     /// <summary>True for the goal the card is focused on.</summary>
     public bool IsActive { get; }
 
-    /// <summary>Drives the red highlight.</summary>
+    /// <summary>Red marker from the effective <see cref="State"/>.</summary>
     public bool IsOverdue => State == DueState.Overdue;
 
-    /// <summary>Drives the yellow highlight.</summary>
+    /// <summary>Yellow marker from the effective <see cref="State"/>.</summary>
     public bool IsDueSoon => State == DueState.DueSoon;
+
+    /// <summary>Red due text: the goal's own deadline has passed.</summary>
+    public bool OwnIsOverdue => OwnState == DueState.Overdue;
+
+    /// <summary>Yellow due text: the goal's own deadline is within 24 hours.</summary>
+    public bool OwnIsDueSoon => OwnState == DueState.DueSoon;
 }
 
 /// <summary>One step of the focused goal as the card renders it.</summary>

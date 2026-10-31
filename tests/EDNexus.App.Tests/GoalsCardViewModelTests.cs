@@ -145,7 +145,13 @@ public sealed class GoalsCardViewModelTests
         Assert.True(card.Steps[2].IsOverdue);
         Assert.False(card.Steps[2].IsDueSoon);
         Assert.True(card.Focused!.IsOverdue);
+        // g1 has no deadline of its own, so the header's own-state highlight stays off.
+        Assert.Equal(DueState.None, card.Focused.OwnState);
+        Assert.False(card.Focused.OwnIsOverdue);
         Assert.Equal(2, card.OverdueCount);
+
+        // g2's own deadline is past, so its own state is overdue too.
+        Assert.True(card.Others.Single(r => r.Goal.Id == "g2").OwnIsOverdue);
     }
 
     [Fact]
@@ -225,24 +231,86 @@ public sealed class GoalsCardViewModelTests
         Assert.Equal(before, SavedJson());
     }
 
-    [Fact]
-    public void DevMode_TurnedOnBetweenTicks_NeverTouchesTheLiveList()
+    // Each case is one edit made with rows from the live list; every one would change the live goals
+    // (or save) if it ran against them.
+    private static readonly Dictionary<string, Action<GoalsCardViewModel, GoalRow, GoalRow, StepRow>> LiveEdits = new()
+    {
+        ["AddGoal"] = (c, _, _, _) => c.AddGoal("Dev goal"),
+        ["AddStep"] = (c, _, _, _) => c.AddStep("Dev step"),
+        ["AddStepTo"] = (c, g, _, _) => c.AddStepTo(g, "Dev step"),
+        ["ToggleStep"] = (c, _, _, s) => c.ToggleStep(s),
+        ["Focus"] = (c, _, other, _) => c.Focus(other),
+        ["ToggleGoal"] = (c, g, _, _) => c.ToggleGoal(g),
+        ["DeleteGoal"] = (c, g, _, _) => c.DeleteGoal(g),
+        ["DeleteStep"] = (c, _, _, s) => c.DeleteStep(s),
+        ["RenameGoal"] = (c, g, _, _) => c.RenameGoal(g, "Renamed"),
+        ["SetGoalDue"] = (c, g, _, _) => c.SetGoalDue(g, Start),
+        ["SetNotes"] = (c, g, _, _) => c.SetNotes(g, "notes"),
+        ["RenameStep"] = (c, _, _, s) => c.RenameStep(s, "Renamed step"),
+        ["SetStepDue"] = (c, _, _, s) => c.SetStepDue(s, Start),
+        ["MoveStep"] = (c, _, _, s) => c.MoveStep(s, 1),
+    };
+
+    public static TheoryData<string> LiveEditNames() => new(LiveEdits.Keys);
+
+    [Theory]
+    [MemberData(nameof(LiveEditNames))]
+    public void DevMode_TurnedOnBetweenTicks_EditNeverTouchesTheLiveList(string edit)
     {
         var before = SavedJson();
         var card = Card();
-        var liveStep = card.Steps[1];
         var liveGoal = card.Focused!;
+        var otherGoal = card.Others.Single(r => r.Goal.Id == "g3");
+        var liveStep = card.Steps[1];
 
-        // Developer mode flips on, and an edit arrives before the next tick.
+        // Developer mode flips on, and this edit arrives before the next tick.
         _dev = true;
-        card.ToggleStep(liveStep);
-        card.AddStep("Dev step");
-        card.RenameGoal(liveGoal, "Renamed");
-        card.DeleteGoal(liveGoal);
+        LiveEdits[edit](card, liveGoal, otherGoal, liveStep);
 
         Assert.Empty(_saves);
         Assert.Equal(before, SavedJson());
         Assert.StartsWith("sample-", card.Focused!.Goal.Id);
+    }
+
+    [Fact]
+    public void AddStepTo_AddsToThatGoal_WithoutChangingFocus()
+    {
+        var card = Card();
+
+        card.AddStepTo(card.Others.Single(r => r.Goal.Id == "g3"), "  Sell data  ");
+
+        Assert.Single(_saves);
+        Assert.Equal("Sell data", Assert.Single(_saved.Goals[2].Steps).Text);
+        Assert.Equal("g1", card.Focused!.Goal.Id);
+        Assert.Equal("g1", _saved.ActiveGoalId);
+    }
+
+    [Fact]
+    public void AddGoal_SelectsTheNewGoal_AndPersists()
+    {
+        var card = Card();
+
+        card.AddGoal("  Reach Colonia  ");
+
+        Assert.Single(_saves);
+        Assert.Equal(4, _saved.Goals.Count);
+        Assert.Equal("Reach Colonia", card.Selected!.Title);
+        Assert.Same(_saved.Goals[3], card.Selected.Goal);
+        Assert.Equal("g1", card.Focused!.Goal.Id);
+    }
+
+    [Fact]
+    public void FocusedHeader_UsesTheGoalsOwnDeadline_NotItsSteps()
+    {
+        _saved.Goals[2].Steps.Add(new GoalStep { Id = "s5", Text = "Late step", Due = Start.AddHours(-1) });
+        _saved.ActiveGoalId = "g3";
+        var card = Card();
+
+        Assert.Equal(DueState.Ok, card.Focused!.OwnState);
+        Assert.False(card.Focused.OwnIsOverdue);
+        Assert.False(card.Focused.OwnIsDueSoon);
+        Assert.Equal(DueState.Overdue, card.Focused.State);
+        Assert.True(card.Focused.IsOverdue);
     }
 
     [Fact]

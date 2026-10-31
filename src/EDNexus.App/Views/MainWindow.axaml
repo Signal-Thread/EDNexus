@@ -1578,8 +1578,8 @@
                       <TextBlock Grid.Column="1" Classes="label" Text="{Binding Focused.ProgressText}"
                                  Margin="10,0,0,0" VerticalAlignment="Center" />
                     </Grid>
-                    <TextBlock Classes="goalDue" Classes.soon="{Binding Focused.IsDueSoon}"
-                               Classes.overdue="{Binding Focused.IsOverdue}" Text="{Binding Focused.DueText}"
+                    <TextBlock Classes="goalDue" Classes.soon="{Binding Focused.OwnIsDueSoon}"
+                               Classes.overdue="{Binding Focused.OwnIsOverdue}" Text="{Binding Focused.DueText}"
                                IsVisible="{Binding Focused.DueText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
                     <ItemsControl ItemsSource="{Binding Steps}" Margin="0,8,0,0">
