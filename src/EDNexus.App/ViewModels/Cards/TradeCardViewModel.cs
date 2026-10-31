@@ -66,17 +66,35 @@ public sealed partial class TradeCardViewModel : CardViewModel
         TradeCommodity = commodity.Trim();
         TradeSelling = false;
         IsCollapsed = false;
+        IsVisible = true;
         if (TradeReferenceSystem.Length == 0)
         {
             var sys = _lastSystem.Length > 0 ? _lastSystem : Context.Host.State.StarSystem;
             if (sys is { Length: > 0 }) TradeReferenceSystem = sys;
         }
-        if (SearchTradeCommand.CanExecute(null)) SearchTradeCommand.Execute(null);
+        // An async command cannot run twice at once: let the running search finish, then search again
+        // with the new field values.
+        if (SearchTradeCommand.IsRunning) _rerunPending = true;
+        else if (SearchTradeCommand.CanExecute(null)) SearchTradeCommand.Execute(null);
     }
+
+    private bool _rerunPending;
 
     [RelayCommand]
     private async Task SearchTrade()
     {
+        do
+        {
+            _rerunPending = false;
+            await RunSearchAsync();
+        }
+        while (_rerunPending);
+    }
+
+    private async Task RunSearchAsync()
+    {
+        // Snapshot the inputs: the fields can change (a Find from another card) while the request is in flight.
+        var selling = TradeSelling;
         var commodity = TradeCommodity.Trim();
         var reference = TradeReferenceSystem.Trim();
         if (commodity.Length == 0)
@@ -90,18 +108,18 @@ public sealed partial class TradeCardViewModel : CardViewModel
             return;
         }
 
-        var mode = TradeSelling ? TradeMode.Sell : TradeMode.Buy;
+        var mode = selling ? TradeMode.Sell : TradeMode.Buy;
         TradeBusy = true;
         TradeHasResults = false;
         TradeResults.Clear();
-        TradeStatus = TradeSelling ? $"Best places to sell {commodity} near {reference} …"
+        TradeStatus = selling ? $"Best places to sell {commodity} near {reference} …"
                                    : $"Best places to buy {commodity} near {reference} …";
         try
         {
             var quotes = await Trader.SearchAsync(new TradeQuery(commodity, reference, mode), CancellationToken.None);
             if (quotes.Count == 0)
             {
-                TradeStatus = $"No station found {(TradeSelling ? "buying" : "selling")} {commodity} nearby.";
+                TradeStatus = $"No station found {(selling ? "buying" : "selling")} {commodity} nearby.";
                 return;
             }
 
@@ -111,7 +129,7 @@ public sealed partial class TradeCardViewModel : CardViewModel
                     q.System, q.Station,
                     $"{q.DistanceLy:0.0} ly",
                     $"{q.Price:N0} cr",
-                    q.Quantity > 0 ? $"{q.Quantity:N0} {(TradeSelling ? "dmd" : "sup")}" : "",
+                    q.Quantity > 0 ? $"{q.Quantity:N0} {(selling ? "dmd" : "sup")}" : "",
                     HumanizeAge(q.Age(now))));
 
             TradeHasResults = true;

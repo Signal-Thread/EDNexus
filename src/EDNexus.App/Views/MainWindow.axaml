@@ -1013,13 +1013,15 @@
                   <TextBlock Classes="label" IsVisible="{Binding IsEmpty}" TextWrapping="Wrap"
                              Text="Nothing on the list. Add an item above, or link the colonisation depot or a pinned engineering goal." />
 
-                  <StackPanel IsVisible="{Binding !IsEmpty}">
+                  <TextBlock Classes="label" IsVisible="{Binding IsAllDone}" TextWrapping="Wrap"
+                             Text="All done — nothing left to buy." />
+
+                  <StackPanel IsVisible="{Binding HasRows}">
                     <Grid ColumnDefinitions="*,110,110,150,32" Margin="0,0,0,2">
                       <TextBlock Grid.Column="0" Classes="label" Text="NAME" />
                       <TextBlock Grid.Column="1" Classes="label" Text="HELD / NEEDED" HorizontalAlignment="Right" />
                       <TextBlock Grid.Column="2" Classes="label" Text="FROM" Margin="12,0,0,0" />
                       <TextBlock Grid.Column="3" Classes="label" Text="ACTION" Margin="12,0,0,0" />
-                      
                     </Grid>
 
                     <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto"

@@ -32,11 +32,24 @@ public sealed partial class ShoppingListCardViewModel : CardViewModel
     [ObservableProperty] private bool _hideCompleted;
 
     [ObservableProperty] private ShoppingItemKind _newKind = ShoppingItemKind.Commodity;
-    [ObservableProperty] private string _newName = "";
-    [ObservableProperty] private int _newQuantity = 1;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(AddItemCommand))]
+    private string _newName = "";
 
-    /// <summary>True when there is nothing to show, for the empty-state text.</summary>
-    public bool IsEmpty => Rows.Count == 0;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(AddItemCommand))]
+    private int _newQuantity = 1;
+
+    /// <summary>True when the list has no lines at all, for the empty-state text.</summary>
+    public bool IsEmpty => Rows.Count == 0 && !IsAllDone;
+
+    /// <summary>True when every line is satisfied and "hide completed" is hiding them all.</summary>
+    [ObservableProperty] private bool _isAllDone;
+
+    /// <summary>True when there are rows to show (drives the table's visibility).</summary>
+    public bool HasRows => Rows.Count > 0;
+
+    partial void OnIsAllDoneChanged(bool value) => OnPropertyChanged(nameof(IsEmpty));
 
     partial void OnLinkColonisationChanged(bool value) => OnToggleChanged();
     partial void OnLinkEngineeringChanged(bool value) => OnToggleChanged();
@@ -79,6 +92,7 @@ public sealed partial class ShoppingListCardViewModel : CardViewModel
             entries.AddRange(ShoppingListService.FromEngineering(Context.GetEngineeringPin(), Context.Host.Engineering, s));
 
         var rows = ShoppingListService.Build(entries, s, settings.HideCompleted);
+        IsAllDone = rows.Count == 0 && settings.HideCompleted && ShoppingListService.Build(entries, s).Count > 0;
 
         var signature = string.Join("|", rows.Select(r =>
             $"{r.Kind}:{r.Key}:{r.Name}:{r.Needed}:{r.Held}:{string.Join(',', r.Sources)}:{r.Hint}"));
@@ -88,19 +102,26 @@ public sealed partial class ShoppingListCardViewModel : CardViewModel
         Rows.Clear();
         foreach (var r in rows) Rows.Add(new ShoppingRowViewModel(r));
         OnPropertyChanged(nameof(IsEmpty));
+        OnPropertyChanged(nameof(HasRows));
     }
 
     public override void Reset()
     {
         _signature = "";
         Rows.Clear();
+        IsAllDone = false;
         OnPropertyChanged(nameof(IsEmpty));
+        OnPropertyChanged(nameof(HasRows));
     }
 
-    [RelayCommand]
+    private bool CanAddItem() => !string.IsNullOrWhiteSpace(NewName) && NewQuantity > 0;
+
+    [RelayCommand(CanExecute = nameof(CanAddItem))]
     private void AddItem()
     {
-        var updated = ShoppingListService.AddManual(Context.GetShoppingSettings(), NewKind, NewName, NewQuantity);
+        var current = Context.GetShoppingSettings();
+        var updated = ShoppingListService.AddManual(current, NewKind, NewName, NewQuantity);
+        if (updated.Manual.SequenceEqual(current.Manual)) return;   // nothing changed: no write, keep the input
         Context.SaveShoppingSettings(updated);
         NewName = "";
         NewQuantity = 1;

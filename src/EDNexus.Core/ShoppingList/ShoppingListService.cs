@@ -17,7 +17,7 @@ public static class ShoppingListService
     public static IReadOnlyList<ShoppingRow> Build(
         IEnumerable<ShoppingEntry> entries, CommanderState state, bool hideCompleted = false)
     {
-        var groups = new Dictionary<(ShoppingItemKind, string), (string Name, int Needed, List<ShoppingItemSource> Sources)>();
+        var groups = new Dictionary<(ShoppingItemKind, string), (string Name, int Needed, List<ShoppingItemSource> Sources, bool NameAuthoritative)>();
         var order = new List<(ShoppingItemKind, string)>();
 
         foreach (var e in entries)
@@ -28,13 +28,16 @@ public static class ShoppingListService
             if (groups.TryGetValue(id, out var g))
             {
                 if (!g.Sources.Contains(e.Source)) g.Sources.Add(e.Source);
-                var name = IsRawSymbol(g.Name) && !IsRawSymbol(e.Name) && !string.IsNullOrWhiteSpace(e.Name) ? e.Name : g.Name;
-                groups[id] = (name, g.Needed + e.Needed, g.Sources);
+                var usable = !IsRawSymbol(e.Name) && !string.IsNullOrWhiteSpace(e.Name);
+                // A depot or engineering name beats whatever the commander typed; raw `$..._name;` symbols never win.
+                var takeNew = usable && (IsRawSymbol(g.Name) || (!g.NameAuthoritative && e.Source != ShoppingItemSource.Manual));
+                var name = takeNew ? e.Name : g.Name;
+                groups[id] = (name, g.Needed + e.Needed, g.Sources, g.NameAuthoritative || (takeNew && e.Source != ShoppingItemSource.Manual));
             }
             else
             {
                 var name = string.IsNullOrWhiteSpace(e.Name) ? e.Key.Trim() : e.Name;
-                groups[id] = (name, e.Needed, [e.Source]);
+                groups[id] = (name, e.Needed, [e.Source], e.Source != ShoppingItemSource.Manual && !IsRawSymbol(name));
                 order.Add(id);
             }
         }
@@ -43,7 +46,7 @@ public static class ShoppingListService
         var rows = new List<ShoppingRow>(order.Count);
         foreach (var id in order)
         {
-            var (name, needed, sources) = groups[id];
+            var (name, needed, sources, _) = groups[id];
             rows.Add(new ShoppingRow(id.Item1, id.Item2, name, needed, HeldNormalised(id.Item1, id.Item2, hold, state), sources, string.Empty));
             var row = rows[^1];
             if (!row.Satisfied && row.Kind != ShoppingItemKind.Commodity)
@@ -173,19 +176,13 @@ public static class ShoppingListService
 
     /// <summary>
     /// Returns a copy of <paramref name="current"/> without the manual line for <paramref name="key"/>
-    /// (a stored key or a built <see cref="ShoppingRow.Key"/>). Never mutates <paramref name="current"/>.
+    /// (the built <see cref="ShoppingRow.Key"/>, already normalised). Never mutates <paramref name="current"/>.
     /// </summary>
     public static ShoppingListSettings RemoveManual(ShoppingListSettings current, ShoppingItemKind kind, string key)
     {
         var next = Copy(current);
-        var asRowKey = (key ?? string.Empty).Trim().ToLowerInvariant();
-        var asStoredKey = Normalise(kind, key);
-        next.Manual.RemoveAll(e =>
-        {
-            if (e.Kind != kind) return false;
-            var n = Normalise(e.Kind, e.Key);
-            return n.Length > 0 && (n == asRowKey || n == asStoredKey);
-        });
+        var rowKey = (key ?? string.Empty).Trim().ToLowerInvariant();
+        next.Manual.RemoveAll(e => e.Kind == kind && rowKey.Length > 0 && Normalise(e.Kind, e.Key) == rowKey);
         return next;
     }
 

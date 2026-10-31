@@ -108,3 +108,31 @@ public class ShoppingListManualTests
         Assert.NotSame(s, next);
     }
 }
+
+public class ShoppingListNameMergeTests
+{
+    [Fact]
+    public void Non_manual_name_wins_over_manual_regardless_of_order()
+    {
+        var state = new EDNexus.Core.State.CommanderState();
+        var manual = new ShoppingEntry(ShoppingItemKind.Commodity, "steel", "steel", 5, ShoppingItemSource.Manual);
+        var depot = new ShoppingEntry(ShoppingItemKind.Commodity, "$steel_name;", "Steel", 10, ShoppingItemSource.Colonisation);
+
+        var a = Assert.Single(ShoppingListService.Build([manual, depot], state));
+        var b = Assert.Single(ShoppingListService.Build([depot, manual], state));
+
+        Assert.Equal("Steel", a.Name);
+        Assert.Equal("Steel", b.Name);
+        Assert.Equal(15, a.Needed);
+    }
+
+    [Fact]
+    public void Raw_symbol_name_never_overrides_a_real_name()
+    {
+        var state = new EDNexus.Core.State.CommanderState();
+        var manual = new ShoppingEntry(ShoppingItemKind.Commodity, "steel", "Steel", 5, ShoppingItemSource.Manual);
+        var depot = new ShoppingEntry(ShoppingItemKind.Commodity, "steel", "$steel_name;", 10, ShoppingItemSource.Colonisation);
+
+        Assert.Equal("Steel", Assert.Single(ShoppingListService.Build([manual, depot], state)).Name);
+    }
+}

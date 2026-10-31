@@ -6,6 +6,7 @@ namespace EDNexus.Core.Settings;
 public sealed class ShoppingListSettings
 {
     /// <summary>The commander's hand-entered lines. Linked sources are derived live and never stored here.</summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(LenientShoppingEntryListConverter))]
     public List<ShoppingEntry> Manual { get; set; } = new();
 
     /// <summary>When true, the active colonisation depot's remaining needs are merged into the list.</summary>
