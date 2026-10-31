@@ -303,6 +303,153 @@ public sealed class GoalsCardViewModelTests
     }
 
     [Fact]
+    public void GoalLists_SplitDoneFromActive_AndCompletingMovesTheGoalAndReopeningMovesItBack()
+    {
+        var card = Card();
+        Assert.Equal(["g1", "g2", "g3"], card.ActiveGoals.Select(r => r.Goal.Id).Order());
+        Assert.Empty(card.DoneGoals);
+        Assert.False(card.HasDone);
+
+        card.ToggleGoal(card.ActiveGoals.Single(r => r.Goal.Id == "g3"));
+
+        Assert.Equal(["g3"], card.DoneGoals.Select(r => r.Goal.Id));
+        Assert.DoesNotContain(card.ActiveGoals, r => r.Goal.Id == "g3");
+        Assert.Equal(2, card.ActiveGoals.Count);
+        Assert.True(card.HasDone);
+        Assert.Equal(3, card.AllByUrgency.Count);
+
+        card.ToggleGoal(card.DoneGoals[0]);
+
+        Assert.Empty(card.DoneGoals);
+        Assert.Contains(card.ActiveGoals, r => r.Goal.Id == "g3");
+        Assert.False(card.HasDone);
+    }
+
+    [Fact]
+    public void Selected_CanBeADoneGoal_AndStaysSelectedAcrossRebuilds()
+    {
+        var card = Card();
+        card.ToggleGoal(card.ActiveGoals.Single(r => r.Goal.Id == "g3"));
+        card.Selected = card.DoneGoals.Single();
+        card.AddStepTo(card.Selected, "Late step");
+
+        Assert.Equal("g3", card.Selected!.Goal.Id);
+        Assert.Contains(card.Selected, card.DoneGoals);
+        Assert.Equal("Late step", Assert.Single(card.SelectedSteps).Text);
+    }
+
+    [Fact]
+    public void Rebuild_NeverNullsSelected_AndKeepsItByGoalId()
+    {
+        var card = Card();
+        card.Selected = card.AllByUrgency.Single(r => r.Goal.Id == "g2");
+        var seen = new List<string?>();
+        card.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(GoalsCardViewModel.Selected)) seen.Add(card.Selected?.Goal.Id);
+        };
+
+        _now = _now.AddHours(6);               // g1's step crosses into due-soon: a tick-driven rebuild
+        card.Update(new CommanderState());
+        card.RenameGoal(card.Selected!, "Haul more steel");   // an edit-driven rebuild
+
+        Assert.NotEmpty(seen);
+        Assert.All(seen, id => Assert.Equal("g2", id));
+        Assert.Equal("g2", card.Selected!.Goal.Id);
+        Assert.Equal("Haul more steel", card.Selected.Title);
+    }
+
+    [Fact]
+    public void DevMode_BuildingAndRefreshingSelectedStepsAndDoneList_NeverSavesOrTouchesTheLiveList()
+    {
+        var before = SavedJson();
+        _dev = true;
+        var card = Card();
+
+        foreach (var row in card.AllByUrgency.ToList()) card.Selected = row;
+        card.Selected = null;
+        _now = _now.AddDays(2);
+        card.Update(new CommanderState());
+        card.Update(new CommanderState());
+        _dev = false;
+        card.Update(new CommanderState());
+        foreach (var row in card.AllByUrgency.ToList()) card.Selected = row;
+
+        Assert.Empty(_saves);
+        Assert.Equal(before, SavedJson());
+    }
+
+    [Fact]
+    public void UnchangedEdits_DoNothing_NoSaveNoRebuild()
+    {
+        var card = Card();
+        var goal = card.Focused!;
+        var step = card.Steps[2];
+        var rowsBefore = card.AllByUrgency.ToList();
+
+        card.RenameGoal(goal, "  Unlock Farseer ");
+        card.RenameGoal(goal, "   ");
+        card.SetGoalDue(goal, null);
+        card.SetNotes(goal, null);
+        card.SetNotes(goal, "  ");
+        card.RenameStep(step, "Engineer the FSD");
+        card.SetStepDue(step, Start.AddHours(5));
+
+        Assert.Empty(_saves);
+        Assert.True(rowsBefore.SequenceEqual(card.AllByUrgency));
+    }
+
+    [Fact]
+    public void UnchangedEdit_InDevModeTurnedOnBetweenTicks_StillSwapsToSampleBeforeReturning()
+    {
+        var card = Card();
+        var goal = card.Focused!;
+
+        _dev = true;
+        card.SetGoalDue(goal, null);
+
+        Assert.Empty(_saves);
+        Assert.StartsWith("sample-", card.Focused!.Goal.Id);
+    }
+
+    [Fact]
+    public void Combine_NeverThrows_ForCalendarEdges()
+    {
+        foreach (var date in new DateTime?[] { DateTime.MinValue, DateTime.MaxValue, DateTime.MinValue.Date, DateTime.MaxValue.Date })
+        {
+            foreach (var time in new TimeSpan?[] { null, TimeSpan.Zero, new TimeSpan(23, 59, 0) })
+            {
+                var ex = Record.Exception(() => GoalsCardViewModel.Combine(date, time));
+                Assert.Null(ex);
+            }
+        }
+        Assert.Null(Record.Exception(() => GoalsCardViewModel.TimePart(DateTimeOffset.MinValue)));
+        Assert.Null(Record.Exception(() => GoalsCardViewModel.TimePart(DateTimeOffset.MaxValue)));
+        Assert.Null(Record.Exception(() => GoalsCardViewModel.DatePart(DateTimeOffset.MinValue)));
+    }
+
+    [Fact]
+    public void Combine_TimeInASpringForwardGap_ShiftsForwardByTheGap()
+    {
+        // Find a nonexistent local time in this machine's zone; a zone without DST has nothing to test.
+        var zone = TimeZoneInfo.Local;
+        var t = new DateTime(2026, 1, 1);
+        DateTime? gap = null;
+        for (; t.Year == 2026 && gap is null; t = t.AddMinutes(30))
+        {
+            if (zone.IsInvalidTime(t)) gap = t;
+        }
+        if (gap is not { } missing) return;
+
+        var due = GoalsCardViewModel.Combine(missing.Date, missing.TimeOfDay);
+
+        Assert.NotNull(due);
+        var shifted = due!.Value.ToLocalTime().DateTime;
+        Assert.True(shifted > missing, $"{missing:O} should land after the gap, got {shifted:O}");
+        Assert.False(zone.IsInvalidTime(shifted));
+    }
+
+    [Fact]
     public void DuePickers_DateAloneIsEndOfDay_AndRoundTripsAsNoTime()
     {
         var date = new DateTime(2026, 11, 2);

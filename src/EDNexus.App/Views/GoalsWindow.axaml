@@ -90,9 +90,13 @@
           </Grid>
         </Border>
 
-        <ListBox ItemsSource="{Binding AllByUrgency}" SelectedItem="{Binding Selected}"
-                 Background="Transparent" BorderThickness="0" Padding="8">
-          <ListBox.ItemTemplate>
+        <!-- Unfinished goals in the main list; finished ones in a collapsed "Done" group below it. Only one
+             goal is selected at a time (the code-behind keeps the two lists in step with Selected). -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="8">
+          <StackPanel>
+          <ListBox x:Name="ActiveList" ItemsSource="{Binding ActiveGoals}" SelectionChanged="OnGoalListSelectionChanged"
+                   Background="Transparent" BorderThickness="0" Padding="0">
+            <ListBox.ItemTemplate>
             <DataTemplate x:DataType="vm:GoalRow">
               <Border Classes="goalEdge" Classes.soon="{Binding IsDueSoon}" Classes.overdue="{Binding IsOverdue}"
                       Padding="8,2" Margin="0,2">
@@ -110,7 +114,34 @@
               </Border>
             </DataTemplate>
           </ListBox.ItemTemplate>
-        </ListBox>
+          </ListBox>
+          <Expander IsVisible="{Binding HasDone}" IsExpanded="False" Margin="0,8,0,0"
+                    Header="{Binding DoneGoals.Count, StringFormat='Done ({0})'}"
+                    Foreground="{StaticResource InkDim}">
+            <ListBox x:Name="DoneList" ItemsSource="{Binding DoneGoals}" SelectionChanged="OnGoalListSelectionChanged"
+                   Background="Transparent" BorderThickness="0" Padding="0">
+            <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:GoalRow">
+              <Border Classes="goalEdge" Classes.soon="{Binding IsDueSoon}" Classes.overdue="{Binding IsOverdue}"
+                      Padding="8,2" Margin="0,2">
+                <StackPanel Classes="dimmable" Classes.done="{Binding Goal.IsDone}">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0" Text="{Binding Title}" Foreground="{StaticResource Ink}" FontSize="13"
+                               TextWrapping="Wrap" Classes="stepText" Classes.done="{Binding Goal.IsDone}" />
+                    <TextBlock Grid.Column="1" Text="{Binding ProgressText}" Foreground="{StaticResource InkDim}"
+                               FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
+                  </Grid>
+                  <TextBlock Classes="goalDue" Classes.soon="{Binding OwnIsDueSoon}" Classes.overdue="{Binding OwnIsOverdue}"
+                             Text="{Binding DueText}"
+                             IsVisible="{Binding DueText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+          </ListBox>
+          </Expander>
+          </StackPanel>
+        </ScrollViewer>
       </DockPanel>
 
       <GridSplitter Grid.Column="1" Width="1" Background="{StaticResource CardBorder}" ResizeDirection="Columns" />
@@ -125,7 +156,7 @@
 
           <StackPanel IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNotNull}}">
             <TextBlock Classes="sectionLabel" Text="TITLE" Margin="0,0,0,6" />
-            <TextBox x:Name="TitleBox" Classes="plain" Text="{Binding Selected.Title, Mode=OneWay}"
+            <TextBox x:Name="TitleBox" Classes="plain"
                      LostFocus="OnTitleCommit" KeyDown="OnTitleKeyDown" />
 
             <TextBlock Classes="sectionLabel" Text="DEADLINE" />
@@ -141,8 +172,7 @@
                        IsVisible="{Binding Selected.DueText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
             <TextBlock Classes="sectionLabel" Text="NOTES" />
-            <TextBox x:Name="NotesBox" Classes="plain" Text="{Binding Selected.Goal.Notes, Mode=OneWay}"
-                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="160"
+            <TextBox x:Name="NotesBox" Classes="plain" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="160"
                      LostFocus="OnNotesCommit" />
 
             <TextBlock Classes="sectionLabel" Text="STEPS" />
@@ -157,8 +187,9 @@
                                   VerticalAlignment="Center"
                                   Command="{Binding $parent[ItemsControl].((vm:GoalsCardViewModel)DataContext).ToggleStepCommand}"
                                   CommandParameter="{Binding}" />
-                        <TextBox Grid.Column="1" Classes="plain" Text="{Binding Text, Mode=OneWay}"
-                                 VerticalAlignment="Center" LostFocus="OnStepTextCommit" KeyDown="OnStepTextKeyDown" />
+                        <TextBox Grid.Column="1" Classes="plain" VerticalAlignment="Center"
+                                 DataContextChanged="OnStepTextContext" TextChanged="OnStepTextChanged"
+                                 LostFocus="OnStepTextCommit" KeyDown="OnStepTextKeyDown" />
                         <Button Grid.Column="2" Classes="mini" Content="▲" Margin="6,0,0,0" Click="OnStepUp"
                                 ToolTip.Tip="Move up" />
                         <Button Grid.Column="3" Classes="mini" Content="▼" Margin="4,0,0,0" Click="OnStepDown"

@@ -69,6 +69,15 @@ public sealed partial class GoalsCardViewModel : CardViewModel
     /// <summary>Every goal, most urgent first with done goals last, for the management window.</summary>
     public ObservableCollection<GoalRow> AllByUrgency { get; } = new();
 
+    /// <summary>The unfinished goals of <see cref="AllByUrgency"/>: the window's main list.</summary>
+    public ObservableCollection<GoalRow> ActiveGoals { get; } = new();
+
+    /// <summary>The finished goals of <see cref="AllByUrgency"/>: the window's collapsed "Done" group.</summary>
+    public ObservableCollection<GoalRow> DoneGoals { get; } = new();
+
+    /// <summary>Whether any goal is done, so the window shows its Done group.</summary>
+    [ObservableProperty] private bool _hasDone;
+
     /// <summary>Overdue plus due-soon items, shown on the header badge.</summary>
     public int AttentionCount => OverdueCount + DueSoonCount;
 
@@ -175,6 +184,7 @@ public sealed partial class GoalsCardViewModel : CardViewModel
     public void RenameGoal(GoalRow row, string title)
     {
         if (!EnsureSource()) return;
+        if (string.IsNullOrWhiteSpace(title) || title.Trim() == row.Goal.Title) return;
         _list!.RenameGoal(row.Goal.Id, title);
         Commit();
     }
@@ -183,6 +193,7 @@ public sealed partial class GoalsCardViewModel : CardViewModel
     public void SetGoalDue(GoalRow row, DateTimeOffset? due)
     {
         if (!EnsureSource()) return;
+        if (due == row.Goal.Due) return;
         _list!.SetGoalDue(row.Goal.Id, due);
         Commit();
     }
@@ -191,6 +202,7 @@ public sealed partial class GoalsCardViewModel : CardViewModel
     public void SetNotes(GoalRow row, string? notes)
     {
         if (!EnsureSource()) return;
+        if ((string.IsNullOrWhiteSpace(notes) ? null : notes) == row.Goal.Notes) return;
         _list!.SetNotes(row.Goal.Id, notes);
         Commit();
     }
@@ -199,6 +211,7 @@ public sealed partial class GoalsCardViewModel : CardViewModel
     public void RenameStep(StepRow row, string text)
     {
         if (!EnsureSource() || GoalOf(row) is not { } goal) return;
+        if (string.IsNullOrWhiteSpace(text) || text.Trim() == row.Step.Text) return;
         _list!.RenameStep(goal.Id, row.Step.Id, text);
         Commit();
     }
@@ -207,6 +220,7 @@ public sealed partial class GoalsCardViewModel : CardViewModel
     public void SetStepDue(StepRow row, DateTimeOffset? due)
     {
         if (!EnsureSource() || GoalOf(row) is not { } goal) return;
+        if (due == row.Step.Due) return;
         _list!.SetStepDue(goal.Id, row.Step.Id, due);
         Commit();
     }
@@ -301,11 +315,14 @@ public sealed partial class GoalsCardViewModel : CardViewModel
         var selectedId = Selected?.Goal.Id;
 
         AllByUrgency.Clear();
+        ActiveGoals.Clear();
+        DoneGoals.Clear();
         Others.Clear();
         foreach (var goal in list.ByUrgency(now))
         {
             var row = new GoalRow(goal, list.Progress(goal), goal.Id == activeId, now);
             AllByUrgency.Add(row);
+            (goal.IsDone ? DoneGoals : ActiveGoals).Add(row);
             if (!row.IsActive && !goal.IsDone) Others.Add(row);
         }
 
@@ -320,6 +337,7 @@ public sealed partial class GoalsCardViewModel : CardViewModel
 
         (OverdueCount, DueSoonCount) = list.Counts(now);
         HasGoals = list.Goals.Count > 0;
+        HasDone = DoneGoals.Count > 0;
         Selected = AllByUrgency.FirstOrDefault(r => r.Goal.Id == selectedId) ?? Focused;
     }
 
@@ -334,7 +352,7 @@ public sealed partial class GoalsCardViewModel : CardViewModel
     {
         if (due is not { } d) return null;
         var local = d.ToLocalTime();
-        return local == DueStatus.EndOfDay(local.Date) ? null : new TimeSpan(local.Hour, local.Minute, 0);
+        return Combine(local.Date, null) == local ? null : new TimeSpan(local.Hour, local.Minute, 0);
     }
 
     /// <summary>
@@ -344,8 +362,17 @@ public sealed partial class GoalsCardViewModel : CardViewModel
     public static DateTimeOffset? Combine(DateTime? date, TimeSpan? time)
     {
         if (date is not { } d) return null;
-        if (time is not { } t) return DueStatus.EndOfDay(d);
-        return new DateTimeOffset(DateTime.SpecifyKind(d.Date + t, DateTimeKind.Local));
+        try
+        {
+            if (time is not { } t) return DueStatus.EndOfDay(d);
+            // A time inside a daylight-saving gap does not exist; .NET shifts it forward by the gap.
+            return new DateTimeOffset(DateTime.SpecifyKind(d.Date + t, DateTimeKind.Local));
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // A date at the very edge of the calendar cannot be a deadline; callers treat null with a date as "ignore".
+            return null;
+        }
     }
 
     /// <summary>Short local due date for a row, or empty when there is none.</summary>
