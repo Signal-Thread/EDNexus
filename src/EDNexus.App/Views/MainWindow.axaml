@@ -130,6 +130,60 @@
         </Animation>
       </Style.Animations>
     </Style>
+
+    <!-- Goals card: due status picks out the due text and a thin row edge / dot, never the whole row.
+         Warning = due within 24 hours, Bad = overdue. -->
+    <Style Selector="TextBlock.goalDue">
+      <Setter Property="Foreground" Value="{StaticResource InkDim}" />
+      <Setter Property="FontSize" Value="11" />
+    </Style>
+    <Style Selector="TextBlock.goalDue.soon">
+      <Setter Property="Foreground" Value="{StaticResource Warning}" />
+    </Style>
+    <Style Selector="TextBlock.goalDue.overdue">
+      <Setter Property="Foreground" Value="{StaticResource Bad}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.goalStep">
+      <Setter Property="Foreground" Value="{StaticResource Ink}" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.goalStep.next">
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.goalStep.done">
+      <Setter Property="Foreground" Value="{StaticResource InkDim}" />
+      <Setter Property="TextDecorations" Value="Strikethrough" />
+    </Style>
+    <Style Selector="Border.goalEdge">
+      <Setter Property="BorderBrush" Value="{StaticResource SurfaceField}" />
+      <Setter Property="BorderThickness" Value="2,0,0,0" />
+    </Style>
+    <Style Selector="Border.goalEdge.soon">
+      <Setter Property="BorderBrush" Value="{StaticResource Warning}" />
+    </Style>
+    <Style Selector="Border.goalEdge.overdue">
+      <Setter Property="BorderBrush" Value="{StaticResource Bad}" />
+    </Style>
+    <Style Selector="Border.goalDot">
+      <Setter Property="Width" Value="8" />
+      <Setter Property="Height" Value="8" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Background" Value="{StaticResource CardBorder}" />
+    </Style>
+    <Style Selector="Border.goalDot.soon">
+      <Setter Property="Background" Value="{StaticResource Warning}" />
+    </Style>
+    <Style Selector="Border.goalDot.overdue">
+      <Setter Property="Background" Value="{StaticResource Bad}" />
+    </Style>
+    <Style Selector="Border.goalBadge">
+      <Setter Property="Background" Value="{StaticResource Warning}" />
+    </Style>
+    <Style Selector="Border.goalBadge.overdue">
+      <Setter Property="Background" Value="{StaticResource Bad}" />
+    </Style>
   </Window.Styles>
 
   <DockPanel LastChildFill="True">
@@ -1490,6 +1544,102 @@
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+
+          <!-- Goals — the focused goal's step checklist (next step emphasised, due dates yellow within
+               24h and red once overdue), a strip of the other goals with a status dot, and a header
+               badge counting what needs attention. No 🎲: goals have no journal event, so developer
+               mode swaps in sample goals instead (and never saves them). -->
+          <DataTemplate DataType="vm:GoalsCardViewModel">
+            <Border Classes="card">
+              <StackPanel>
+                <Grid ColumnDefinitions="*,Auto,Auto">
+                  <TextBlock Grid.Column="0" Classes="cardHeader" Text="{Binding Title}" />
+                  <Border Grid.Column="1" Classes="goalBadge" Classes.overdue="{Binding BadgeIsOverdue}"
+                          IsVisible="{Binding HasAttention}" CornerRadius="8" Padding="6,1" Margin="0,0,8,0"
+                          VerticalAlignment="Center" ToolTip.Tip="Overdue, or due within 24 hours">
+                    <TextBlock Text="{Binding AttentionCount}" FontSize="11" FontWeight="Bold"
+                               Foreground="{StaticResource Surface0}" />
+                  </Border>
+                  <Button Grid.Column="2" Classes="collapse" Content="{Binding CollapseGlyph}"
+                          Command="{Binding ToggleCollapseCommand}" />
+                </Grid>
+                <StackPanel IsVisible="{Binding !IsCollapsed}">
+                  <TextBlock Classes="label" TextWrapping="Wrap"
+                             IsVisible="{Binding Focused, Converter={x:Static ObjectConverters.IsNull}}"
+                             Text="No goal in focus. Pick one below, or add one with Manage goals — each can have steps and an optional due date." />
+
+                  <StackPanel IsVisible="{Binding Focused, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Grid.Column="0" Classes="value" FontSize="14" Text="{Binding Focused.Title}" />
+                      <TextBlock Grid.Column="1" Classes="label" Text="{Binding Focused.ProgressText}"
+                                 Margin="10,0,0,0" VerticalAlignment="Center" />
+                    </Grid>
+                    <TextBlock Classes="goalDue" Classes.soon="{Binding Focused.IsDueSoon}"
+                               Classes.overdue="{Binding Focused.IsOverdue}" Text="{Binding Focused.DueText}"
+                               IsVisible="{Binding Focused.DueText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                    <ItemsControl ItemsSource="{Binding Steps}" Margin="0,8,0,0">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:StepRow">
+                          <Border Classes="goalEdge" Classes.soon="{Binding IsDueSoon}" Classes.overdue="{Binding IsOverdue}"
+                                  Background="{StaticResource SurfaceField}" CornerRadius="4" Padding="8,2" Margin="0,0,0,4">
+                            <Grid ColumnDefinitions="Auto,*,Auto">
+                              <CheckBox Grid.Column="0" IsChecked="{Binding IsDone, Mode=OneWay}" MinWidth="0"
+                                        VerticalAlignment="Center"
+                                        Command="{Binding $parent[ItemsControl].((vm:GoalsCardViewModel)DataContext).ToggleStepCommand}"
+                                        CommandParameter="{Binding}" />
+                              <TextBlock Grid.Column="1" Classes="goalStep" Classes.next="{Binding IsNext}"
+                                         Classes.done="{Binding IsDone}" Text="{Binding Text}" VerticalAlignment="Center" />
+                              <TextBlock Grid.Column="2" Classes="goalDue" Classes.soon="{Binding IsDueSoon}"
+                                         Classes.overdue="{Binding IsOverdue}" Text="{Binding DueText}"
+                                         Margin="10,0,0,0" VerticalAlignment="Center" />
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBox Classes="field" Text="{Binding NewStepText}" PlaceholderText="Add a step, then press Enter"
+                             Margin="0,4,0,0">
+                      <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding AddStepCommand}"
+                                    CommandParameter="{Binding NewStepText}" />
+                      </TextBox.KeyBindings>
+                    </TextBox>
+                  </StackPanel>
+
+                  <!-- The other unfinished goals; each dot carries its worst due status, so an
+                       unfocused goal that is overdue still shows. Clicking one focuses it. -->
+                  <ItemsControl ItemsSource="{Binding Others}" Margin="0,10,0,0">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <WrapPanel />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:GoalRow">
+                        <Button Classes="mini" Margin="0,0,6,6"
+                                Command="{Binding $parent[ItemsControl].((vm:GoalsCardViewModel)DataContext).FocusCommand}"
+                                CommandParameter="{Binding}" ToolTip.Tip="Focus on this goal">
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Border Classes="goalDot" Classes.soon="{Binding IsDueSoon}" Classes.overdue="{Binding IsOverdue}"
+                                    VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding Title}" FontSize="12" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding ProgressText}" FontSize="11" VerticalAlignment="Center"
+                                       Foreground="{StaticResource InkDim}" />
+                          </StackPanel>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+
+                  <Button Classes="mini" Content="Manage goals" HorizontalAlignment="Right" Margin="0,4,0,0"
+                          Command="{Binding OpenManageCommand}"
+                          ToolTip.Tip="Open the goals window to add, edit, reorder and focus goals" />
                 </StackPanel>
               </StackPanel>
             </Border>

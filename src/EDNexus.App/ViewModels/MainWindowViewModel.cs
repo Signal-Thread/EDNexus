@@ -95,6 +95,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             new MiningCardViewModel(_context),
             new ExobiologyCardViewModel(_context),
             new MissionsCardViewModel(_context),
+            new GoalsCardViewModel(_context),
             new CommunityGoalsCardViewModel(_context),
             new RanksCardViewModel(_context),
             new GalnetCardViewModel(_context),
