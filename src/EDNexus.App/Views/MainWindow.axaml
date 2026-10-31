@@ -750,7 +750,14 @@
                              IsVisible="{Binding ShowCarrierPending}" />
 
                   <TextBlock Classes="label" Text="FROM" />
-                  <TextBox Classes="field" Text="{Binding RouteFrom}" PlaceholderText="Current system" Margin="0,2,0,8" />
+                  <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,8">
+                    <TextBox Grid.Column="0" Classes="field" Text="{Binding RouteFrom}" PlaceholderText="Current system" />
+                    <Button Grid.Column="1" Classes="mini" Margin="6,0,0,0" Padding="8,0" VerticalAlignment="Stretch"
+                            Command="{Binding UseCurrentSystemCommand}" ToolTip.Tip="Use my current system">
+                      <PathIcon Width="14" Height="14"
+                                Data="F1 M12,2 A10,10 0 1 0 12,22 A10,10 0 1 0 12,2 Z M16.2,7.8 L13.4,13.4 L7.8,16.2 L10.6,10.6 Z M12,10.8 A1.2,1.2 0 1 0 12,13.2 A1.2,1.2 0 1 0 12,10.8 Z" />
+                    </Button>
+                  </Grid>
                   <TextBlock Classes="label" Text="TO" />
                   <TextBox Classes="field" Text="{Binding RouteTo}" PlaceholderText="Destination system" Margin="0,2,0,8" />
 
