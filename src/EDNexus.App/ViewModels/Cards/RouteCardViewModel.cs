@@ -139,7 +139,13 @@ public sealed partial class RouteCardViewModel : CardViewModel
             RouteStatus = "Current system unknown — no location seen in the journal yet.";
             return;
         }
+        if (string.Equals(RouteFrom, _currentSystem, StringComparison.Ordinal)) return;
+
+        // A plotted route belongs to its origin; swapping the origin leaves it stale, so drop it
+        // (and its saved copy) rather than let the stepper/copy actions walk the old hops.
+        if (_lastPlan is not null) DiscardPlan();
         RouteFrom = _currentSystem;
+        RouteStatus = "";
     }
 
     [RelayCommand]
@@ -309,15 +315,21 @@ public sealed partial class RouteCardViewModel : CardViewModel
     [RelayCommand]
     private void ClearRoute()
     {
+        DiscardPlan();
+        RouteFrom = "";
+        RouteTo = "";
+        RouteStatus = "Route cleared.";
+    }
+
+    /// <summary>Drop the displayed plan, its stepper position and its saved copy; leaves the input fields alone.</summary>
+    private void DiscardPlan()
+    {
         _lastPlan = null;
         RouteHops.Clear();
         RouteHasPlan = false;
         RouteSummary = "";
-        RouteFrom = "";
-        RouteTo = "";
         RouteStepIndex = 0;
         RouteNextSystem = "—";
-        RouteStatus = "Route cleared.";
         Context.SaveRoute(new RouteSettings());
     }
 
