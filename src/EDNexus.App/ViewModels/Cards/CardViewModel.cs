@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EDNexus.Core;
 using EDNexus.Core.Dev;
+using EDNexus.Core.Goals;
 using EDNexus.Core.Mining;
 using EDNexus.Core.Settings;
 using EDNexus.Core.State;
@@ -35,6 +36,8 @@ public sealed class DashboardContext
     private readonly Action<DateTimeOffset, long> _recordMiningRefined;
     private readonly Action<RefinedUnit, int> _recordMiningSpot;
     private readonly Func<bool> _sharedProjectLookupEnabled;
+    private readonly Func<GoalsSettings>? _getGoals;
+    private readonly Action<GoalsSettings>? _saveGoals;
 
     public DashboardContext(
         Func<EngineHost> host,
@@ -52,7 +55,9 @@ public sealed class DashboardContext
         Action<DateTimeOffset, long> recordMiningRefined,
         Action<RefinedUnit, int> recordMiningSpot,
         RadioPlayerSelector radio,
-        Func<bool>? sharedProjectLookupEnabled = null)
+        Func<bool>? sharedProjectLookupEnabled = null,
+        Func<GoalsSettings>? getGoals = null,
+        Action<GoalsSettings>? saveGoals = null)
     {
         _host = host;
         Radio = radio;
@@ -70,6 +75,8 @@ public sealed class DashboardContext
         _recordMiningRefined = recordMiningRefined;
         _recordMiningSpot = recordMiningSpot;
         _sharedProjectLookupEnabled = sharedProjectLookupEnabled ?? (() => true);
+        _getGoals = getGoals;
+        _saveGoals = saveGoals;
     }
 
     /// <summary>The live engine host — always the current one, even after a reset-to-live rebuild.</summary>
@@ -124,6 +131,12 @@ public sealed class DashboardContext
     /// (Raven Colonial). Doing so sends the system name and market id to that third-party service.
     /// </summary>
     public bool SharedProjectLookupEnabled => _sharedProjectLookupEnabled();
+
+    /// <summary>Read the Goals card's persisted goals (an empty instance when none are wired).</summary>
+    public GoalsSettings GetGoals() => _getGoals?.Invoke() ?? new GoalsSettings();
+
+    /// <summary>Persist the Goals card's goals; a no-op when none are wired.</summary>
+    public void SaveGoals(GoalsSettings goals) => _saveGoals?.Invoke(goals);
 }
 
 /// <summary>

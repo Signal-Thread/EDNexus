@@ -1,5 +1,6 @@
 using EDNexus.App;
 using EDNexus.App.Telemetry;
+using EDNexus.Core.Goals;
 using EDNexus.Core.Mining;
 using EDNexus.Core.Settings;
 
@@ -87,6 +88,30 @@ public sealed class DeveloperModePersistenceTests : IDisposable
         _boot.RecordMiningSpot(unit, 9000);
 
         Assert.Empty(_boot.Settings.Mining.KnownSpots);
+        Assert.False(SettingsFileExists);
+    }
+
+    [Fact]
+    public void ApplyGoals_Live_IsPersisted()
+    {
+        _boot.Dev.Enabled = false;
+        var goals = new GoalsSettings { Goals = { new Goal { Id = "g1", Title = "Reach Colonia" } }, ActiveGoalId = "g1" };
+
+        _boot.ApplyGoals(goals);
+
+        Assert.Same(goals, _boot.Settings.Goals);
+        Assert.True(SettingsFileExists);
+    }
+
+    [Fact]
+    public void ApplyGoals_InDeveloperMode_IsNotSaved()
+    {
+        Assert.True(_boot.Dev.Available, "developer tools are compiled out; this test cannot exercise the guard");
+        _boot.Dev.Enabled = true;
+
+        _boot.ApplyGoals(new GoalsSettings { Goals = { new Goal { Id = "g1", Title = "Fabricated" } } });
+
+        Assert.Empty(_boot.Settings.Goals.Goals);
         Assert.False(SettingsFileExists);
     }
 

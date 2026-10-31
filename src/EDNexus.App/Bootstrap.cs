@@ -121,6 +121,18 @@ public sealed class Bootstrap
         Store.Save(Settings);
     }
 
+    /// <summary>
+    /// Persist the Goals card's goals. Developer mode drives the card with fabricated goals and is
+    /// documented as never persisted, so nothing is stored (or kept) while it is on.
+    /// </summary>
+    public void ApplyGoals(EDNexus.Core.Goals.GoalsSettings goals)
+    {
+        if (Dev.Enabled) return;
+
+        Settings.Goals = goals;
+        Store.Save(Settings);
+    }
+
     /// <summary>Persist the mining card's "worth mining" credit threshold.</summary>
     public void ApplyMiningThreshold(int credits)
     {
