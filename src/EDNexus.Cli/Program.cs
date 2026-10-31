@@ -176,11 +176,16 @@ static void PrintState(CommanderState s)
 
 static void PrintShoppingList(ColonisationTracker colonisation, EngineeringTracker engineering, CommanderState s)
 {
-    // Read-only view of the persisted settings: manual lines and the engineering pin.
-    var settings = new SettingsStore().Load();
-    var entries = settings.Shopping.Manual
-        .Concat(ShoppingListService.FromColonisation(colonisation.ActiveSite))
-        .Concat(ShoppingListService.FromEngineering(settings.Engineering, engineering, s));
+    // Side-effect-free read of the persisted settings; linked sources follow the card's toggles.
+    AppSettings settings;
+    try { settings = new SettingsStore().Peek(); }
+    catch { settings = new AppSettings(); }
+
+    var entries = new List<ShoppingEntry>(settings.Shopping.Manual);
+    if (settings.Shopping.LinkColonisation)
+        entries.AddRange(ShoppingListService.FromColonisation(colonisation.ActiveSite));
+    if (settings.Shopping.LinkEngineering)
+        entries.AddRange(ShoppingListService.FromEngineering(settings.Engineering, engineering, s));
     var rows = ShoppingListService.Build(entries, s);
 
     Console.WriteLine("\n======== Shopping list ========");

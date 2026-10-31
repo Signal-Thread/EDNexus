@@ -122,8 +122,10 @@ public class DeveloperModeTests
 
         Assert.False(state.Cargo.IsEmpty);
         Assert.True(state.Materials.TotalCount > 0);
-        Assert.True(state.OnFoot.Items.Count + state.OnFoot.Components.Count
-            + state.OnFoot.Consumables.Count + state.OnFoot.Data.Count > 0);
+        // The Odyssey catalog has no Consumables, so only the three categories it does hold are checked.
+        Assert.NotEmpty(state.OnFoot.Components);
+        Assert.NotEmpty(state.OnFoot.Data);
+        Assert.NotEmpty(state.OnFoot.Items);
     }
 
     [Fact]

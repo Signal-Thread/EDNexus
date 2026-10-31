@@ -60,6 +60,26 @@ public sealed class SettingsStore
         return settings;
     }
 
+    /// <summary>
+    /// Reads the current settings without any side effect: no InstallId assignment, no legacy
+    /// migration, no quarantine, no save. Falls back to the <c>.bak</c> file, then to defaults, and
+    /// never throws. For read-only tools such as the CLI harness.
+    /// </summary>
+    public AppSettings Peek()
+    {
+        foreach (var candidate in new[] { _path, _path + ".bak" })
+        {
+            try
+            {
+                if (!File.Exists(candidate)) continue;
+                var parsed = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(candidate));
+                if (parsed is not null) return parsed;
+            }
+            catch { }
+        }
+        return new AppSettings();
+    }
+
     private string BackupPath => _path + ".bak";
 
     /// <summary>
