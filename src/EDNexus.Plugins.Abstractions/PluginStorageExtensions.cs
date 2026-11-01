@@ -8,6 +8,8 @@ public static class PluginStorageExtensions
     /// <summary>
     /// Reads and deserializes the value saved under <paramref name="key"/>. Returns
     /// <see langword="default"/> if it is unset or is not valid JSON for <typeparamref name="T"/>.
+    /// An unreadable value (IO error) is not "unset": that exception propagates so callers do not
+    /// write defaults over good data.
     /// </summary>
     public static T? ReadJson<T>(this IPluginStorage storage, string key)
     {
@@ -15,7 +17,7 @@ public static class PluginStorageExtensions
         var text = storage.GetString(key);
         if (string.IsNullOrWhiteSpace(text)) return default;
         try { return JsonSerializer.Deserialize<T>(text); }
-        catch (Exception ex) when (ex is JsonException or NotSupportedException) { return default; }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException) { return default; }
     }
 
     /// <summary>Serializes <paramref name="value"/> as JSON and saves it under <paramref name="key"/>.</summary>

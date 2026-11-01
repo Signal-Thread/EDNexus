@@ -51,9 +51,9 @@ internal sealed class DeniedCommanderState(string pluginId) : IReadOnlyCommander
 }
 
 /// <summary>
-/// The <see cref="IPluginStorage"/> a plugin gets until the host has a storage backend (and, once it
-/// does, whenever the <c>storage</c> capability was not granted): every call is refused rather than
-/// silently dropping the plugin's data.
+/// The <see cref="IPluginStorage"/> a plugin gets when the <c>storage</c> capability was not granted
+/// or the bridge has no plugins root: every call is refused rather than silently dropping the
+/// plugin's data.
 /// </summary>
 internal sealed class DeniedPluginStorage(string pluginId) : IPluginStorage
 {
