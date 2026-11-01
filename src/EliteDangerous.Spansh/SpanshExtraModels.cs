@@ -25,7 +25,10 @@ public sealed class SpanshSurveyRouteQuery
     /// <summary>Ignore bodies further than this from the arrival star (ls).</summary>
     public int MaxDistanceLs { get; init; } = 1_000_000;
 
-    /// <summary>Ignore bodies worth less than this many credits.</summary>
+    /// <summary>
+    /// Ignore bodies worth less than this many credits. Sent as <c>min_value</c> to both routers; whether
+    /// the exobiology router honours it is unverified.
+    /// </summary>
     public int MinValue { get; init; } = 100_000;
 
     /// <summary>Return to the start system at the end of the route.</summary>
@@ -87,6 +90,7 @@ public sealed class SpanshSurveyRouteResult
 public sealed class SpanshTouristRouteQuery
 {
     public required string From { get; init; }
+    /// <summary>Target systems; sent comma-joined, so names containing a comma are not representable. Must be non-empty.</summary>
     public required IReadOnlyList<string> Systems { get; init; }
     public required double RangeLy { get; init; }
 }
@@ -109,6 +113,8 @@ public sealed class SpanshBodyQuery
     public required string ReferenceSystem { get; init; }
     public required IReadOnlyList<string> SubTypes { get; init; }
     public bool? Landable { get; init; }
+
+    /// <summary>Number of rows requested; clamped to 1..100 before sending.</summary>
     public int MaxResults { get; init; } = 10;
 }
 
@@ -153,6 +159,8 @@ public sealed class SpanshServiceQuery
     public required string ReferenceSystem { get; init; }
     public required IReadOnlyList<string> Services { get; init; }
     public bool RequireLargePad { get; init; }
+
+    /// <summary>Number of rows requested; clamped to 1..100 before sending.</summary>
     public int MaxResults { get; init; } = 10;
 }
 

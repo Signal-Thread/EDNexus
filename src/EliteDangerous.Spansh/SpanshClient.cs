@@ -16,6 +16,10 @@ namespace EliteDangerous.Spansh;
 /// The request/response shapes follow Spansh's documented <c>stations/search</c> schema. They are
 /// isolated to <see cref="BuildRequest"/> and <see cref="Parse"/> so they are easy to reconcile
 /// against the live API — useful because the field names are covered by fixture tests, not a live call.
+/// The Road to Riches, exobiology, tourist, body-search and service-search endpoints (in
+/// <c>SpanshClient.Extras.cs</c>) are NOT covered by that isolation: their request field names and
+/// result shapes are largely unverified against the live API (see issue #98) and are documented as such
+/// on each method.
 /// </remarks>
 public sealed partial class SpanshClient : IDisposable
 {
@@ -196,7 +200,7 @@ public sealed partial class SpanshClient : IDisposable
             }
         }
 
-        return fail("route timed out");
+        return fail("job timed out");
     }
 
     private Task<SpanshRouteResult> RunRouteJobAsync(
@@ -270,112 +274,107 @@ public sealed partial class SpanshClient : IDisposable
     private enum JobPhase { Running, Ready, Failed }
 
     /// <summary>
+    /// Shared poll preamble: parse the body, map queued/running to <c>(false, …)</c> and an error status to a
+    /// finished failure, otherwise hand the root to <paramref name="build"/> for the ready result.
+    /// </summary>
+    private static (bool Done, T Result) ParsePoll<T>(string body, Func<string, T> fail, Func<JsonElement, T> build)
+    {
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        return ReadPhase(root, out var error) switch
+        {
+            JobPhase.Running => (false, fail("still running")),
+            JobPhase.Failed => (true, fail(error!)),
+            _ => (true, build(root)),
+        };
+    }
+
+    /// <summary>
     /// Parse a neutron-plotter poll. Returns <c>(done: false, …)</c> while queued/running and
     /// <c>(done: true, result)</c> once finished. Missing or reshaped fields degrade to a failure or
     /// an empty route rather than throwing.
     /// </summary>
     private static (bool Done, SpanshRouteResult Result) ParseNeutronPoll(string body)
-    {
-        using var doc = JsonDocument.Parse(body);
-        var root = doc.RootElement;
-        switch (ReadPhase(root, out var error))
+        => ParsePoll(body, SpanshRouteResult.Failure, root =>
         {
-            case JobPhase.Running: return (false, SpanshRouteResult.Failure("still running"));
-            case JobPhase.Failed: return (true, SpanshRouteResult.Failure(error!));
-        }
+            if (!root.TryGetProperty("result", out var result) ||
+                !result.TryGetProperty("system_jumps", out var jumps) || jumps.ValueKind != JsonValueKind.Array)
+                return SpanshRouteResult.Ok(Array.Empty<SpanshRouteWaypoint>());
 
-        if (!root.TryGetProperty("result", out var result) ||
-            !result.TryGetProperty("system_jumps", out var jumps) || jumps.ValueKind != JsonValueKind.Array)
-            return (true, SpanshRouteResult.Ok(Array.Empty<SpanshRouteWaypoint>()));
+            var waypoints = new List<SpanshRouteWaypoint>();
+            foreach (var hop in jumps.EnumerateArray())
+                waypoints.Add(new SpanshRouteWaypoint(
+                    System: ReadString(hop, "system") ?? "Unknown",
+                    Jumps: ReadInt(hop, "jumps"),
+                    IsNeutron: hop.TryGetProperty("neutron_star", out var n) && n.ValueKind is JsonValueKind.True,
+                    DistanceJumpedLy: ReadDouble(hop, "distance_jumped"),
+                    DistanceRemainingLy: ReadDouble(hop, "distance_left")));
 
-        var waypoints = new List<SpanshRouteWaypoint>();
-        foreach (var hop in jumps.EnumerateArray())
-            waypoints.Add(new SpanshRouteWaypoint(
-                System: ReadString(hop, "system") ?? "Unknown",
-                Jumps: ReadInt(hop, "jumps"),
-                IsNeutron: hop.TryGetProperty("neutron_star", out var n) && n.ValueKind is JsonValueKind.True,
-                DistanceJumpedLy: ReadDouble(hop, "distance_jumped"),
-                DistanceRemainingLy: ReadDouble(hop, "distance_left")));
-
-        return (true, SpanshRouteResult.Ok(waypoints));
-    }
+            return SpanshRouteResult.Ok(waypoints);
+        });
 
     /// <summary>
     /// Parse a galaxy-plotter poll. Each waypoint is a single plain jump, carrying the ship-fuel figures
     /// Spansh reports. Same running/ready/failed handling as the neutron parser.
     /// </summary>
     private static (bool Done, SpanshRouteResult Result) ParseShipPoll(string body)
-    {
-        using var doc = JsonDocument.Parse(body);
-        var root = doc.RootElement;
-        switch (ReadPhase(root, out var error))
+        => ParsePoll(body, SpanshRouteResult.Failure, root =>
         {
-            case JobPhase.Running: return (false, SpanshRouteResult.Failure("still running"));
-            case JobPhase.Failed: return (true, SpanshRouteResult.Failure(error!));
-        }
+            if (!root.TryGetProperty("result", out var result) ||
+                !result.TryGetProperty("jumps", out var jumps) || jumps.ValueKind != JsonValueKind.Array)
+                return SpanshRouteResult.Ok(Array.Empty<SpanshRouteWaypoint>());
 
-        if (!root.TryGetProperty("result", out var result) ||
-            !result.TryGetProperty("jumps", out var jumps) || jumps.ValueKind != JsonValueKind.Array)
-            return (true, SpanshRouteResult.Ok(Array.Empty<SpanshRouteWaypoint>()));
+            var waypoints = new List<SpanshRouteWaypoint>();
+            var index = 0;
+            foreach (var hop in jumps.EnumerateArray())
+            {
+                waypoints.Add(new SpanshRouteWaypoint(
+                    System: ReadString(hop, "name") ?? "Unknown",
+                    Jumps: index == 0 ? 0 : 1,
+                    IsNeutron: false,   // a no-boost route never scoop-boosts, even past a neutron star
+                    DistanceJumpedLy: ReadDouble(hop, "distance"),
+                    DistanceRemainingLy: ReadDouble(hop, "distance_to_destination"),
+                    FuelUsed: ReadNullableDouble(hop, "fuel_used"),
+                    FuelInTank: ReadNullableDouble(hop, "fuel_in_tank"),
+                    IsScoopable: ReadBool(hop, "is_scoopable"),
+                    MustRestock: ReadBool(hop, "must_refuel")));
+                index++;
+            }
 
-        var waypoints = new List<SpanshRouteWaypoint>();
-        var index = 0;
-        foreach (var hop in jumps.EnumerateArray())
-        {
-            waypoints.Add(new SpanshRouteWaypoint(
-                System: ReadString(hop, "name") ?? "Unknown",
-                Jumps: index == 0 ? 0 : 1,
-                IsNeutron: false,   // a no-boost route never scoop-boosts, even past a neutron star
-                DistanceJumpedLy: ReadDouble(hop, "distance"),
-                DistanceRemainingLy: ReadDouble(hop, "distance_to_destination"),
-                FuelUsed: ReadNullableDouble(hop, "fuel_used"),
-                FuelInTank: ReadNullableDouble(hop, "fuel_in_tank"),
-                IsScoopable: ReadBool(hop, "is_scoopable"),
-                MustRestock: ReadBool(hop, "must_refuel")));
-            index++;
-        }
-
-        return (true, SpanshRouteResult.Ok(waypoints));
-    }
+            return SpanshRouteResult.Ok(waypoints);
+        });
 
     /// <summary>
     /// Parse a fleet-carrier-plotter poll. Each waypoint is one 500 ly hop, carrying the tritium burn,
     /// tank level and restock hints Spansh reports. Same running/ready/failed handling as the others.
     /// </summary>
     private static (bool Done, SpanshRouteResult Result) ParseFleetCarrierPoll(string body)
-    {
-        using var doc = JsonDocument.Parse(body);
-        var root = doc.RootElement;
-        switch (ReadPhase(root, out var error))
+        => ParsePoll(body, SpanshRouteResult.Failure, root =>
         {
-            case JobPhase.Running: return (false, SpanshRouteResult.Failure("still running"));
-            case JobPhase.Failed: return (true, SpanshRouteResult.Failure(error!));
-        }
+            if (!root.TryGetProperty("result", out var result) ||
+                !result.TryGetProperty("jumps", out var jumps) || jumps.ValueKind != JsonValueKind.Array)
+                return SpanshRouteResult.Ok(Array.Empty<SpanshRouteWaypoint>());
 
-        if (!root.TryGetProperty("result", out var result) ||
-            !result.TryGetProperty("jumps", out var jumps) || jumps.ValueKind != JsonValueKind.Array)
-            return (true, SpanshRouteResult.Ok(Array.Empty<SpanshRouteWaypoint>()));
+            var waypoints = new List<SpanshRouteWaypoint>();
+            var index = 0;
+            foreach (var hop in jumps.EnumerateArray())
+            {
+                waypoints.Add(new SpanshRouteWaypoint(
+                    System: ReadString(hop, "name") ?? "Unknown",
+                    Jumps: index == 0 ? 0 : 1,
+                    IsNeutron: false,
+                    DistanceJumpedLy: ReadDouble(hop, "distance"),
+                    DistanceRemainingLy: ReadDouble(hop, "distance_to_destination"),
+                    FuelUsed: ReadNullableDouble(hop, "fuel_used"),
+                    FuelInTank: ReadNullableDouble(hop, "fuel_in_tank"),
+                    MustRestock: ReadInt(hop, "must_restock") != 0,
+                    RestockAmount: ReadNullableDouble(hop, "restock_amount"),
+                    HasIcyRing: ReadBool(hop, "has_icy_ring")));
+                index++;
+            }
 
-        var waypoints = new List<SpanshRouteWaypoint>();
-        var index = 0;
-        foreach (var hop in jumps.EnumerateArray())
-        {
-            waypoints.Add(new SpanshRouteWaypoint(
-                System: ReadString(hop, "name") ?? "Unknown",
-                Jumps: index == 0 ? 0 : 1,
-                IsNeutron: false,
-                DistanceJumpedLy: ReadDouble(hop, "distance"),
-                DistanceRemainingLy: ReadDouble(hop, "distance_to_destination"),
-                FuelUsed: ReadNullableDouble(hop, "fuel_used"),
-                FuelInTank: ReadNullableDouble(hop, "fuel_in_tank"),
-                MustRestock: ReadInt(hop, "must_restock") != 0,
-                RestockAmount: ReadNullableDouble(hop, "restock_amount"),
-                HasIcyRing: ReadBool(hop, "has_icy_ring")));
-            index++;
-        }
-
-        return (true, SpanshRouteResult.Ok(waypoints));
-    }
+            return SpanshRouteResult.Ok(waypoints);
+        });
 
     /// <summary>
     /// Build the <c>stations/search</c> body: rank by distance from the reference system and filter
