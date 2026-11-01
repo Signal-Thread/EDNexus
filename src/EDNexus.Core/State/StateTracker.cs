@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using EDNexus.Core.Engineering;
 using EDNexus.Core.Journal;
+using EDNexus.Core.Surface;
 
 namespace EDNexus.Core.State;
 
@@ -14,6 +15,10 @@ namespace EDNexus.Core.State;
 public sealed class StateTracker
 {
     private readonly CommanderState _state;
+
+    // Body radii (m) from Scan events, keyed by body name: the fallback when Status.json omits PlanetRadius.
+    private const int MaxScanRadii = 4096;
+    private readonly Dictionary<string, double> _scanRadii = new(StringComparer.OrdinalIgnoreCase);
 
     public StateTracker(JournalEventBus bus, CommanderState state)
     {
@@ -29,6 +34,9 @@ public sealed class StateTracker
         bus.Subscribe("Undocked", OnUndocked);
         bus.Subscribe("SupercruiseExit", OnSupercruiseExit);
         bus.Subscribe("Status", OnStatus);
+        bus.Subscribe("Scan", OnScan);
+        bus.Subscribe("ApproachBody", OnApproachBody);
+        bus.Subscribe("SupercruiseEntry", _ => ClearSurface());
         bus.Subscribe("StartJump", OnStartJump);
         bus.Subscribe("Cargo", OnCargo);
         bus.Subscribe("Materials", OnMaterials);
@@ -166,6 +174,7 @@ public sealed class StateTracker
         _state.JumpDestination = null;
         _state.StarSystem = e.GetString("StarSystem") ?? _state.StarSystem;
         _state.Body = e.GetString("Body") ?? _state.Body;
+        if (e.GetInt64("BodyID") is long locBodyId) _state.BodyId = locBodyId;
         _state.Docked = e.GetBool("Docked") ?? _state.Docked;
         _state.StationName = e.GetString("StationName");
         _state.StationType = e.GetString("StationType");
@@ -176,6 +185,8 @@ public sealed class StateTracker
         _state.JumpDestination = null;
         _state.StarSystem = e.GetString("StarSystem") ?? _state.StarSystem;
         _state.Body = e.GetString("Body") ?? e.GetString("StarSystem");
+        _state.BodyId = e.GetInt64("BodyID");
+        ClearSurface();
 
         // A ship jump leaves any station behind. A carrier jump carries the station with it: the
         // commander is still sitting on the pad, and the event says so (and names the carrier).
@@ -213,7 +224,43 @@ public sealed class StateTracker
     private void OnStartJump(JournalEntry e)
         => _state.JumpDestination = e.GetString("JumpType") == "Hyperspace" ? e.GetString("StarSystem") : null;
 
-    private void OnSupercruiseExit(JournalEntry e) => _state.Body = e.GetString("Body") ?? _state.Body;
+    private void OnSupercruiseExit(JournalEntry e)
+    {
+        _state.Body = e.GetString("Body") ?? _state.Body;
+        if (e.GetInt64("BodyID") is long id) _state.BodyId = id;
+    }
+
+    private void OnApproachBody(JournalEntry e)
+    {
+        if (e.GetString("Body") is { Length: > 0 } body) _state.Body = body;
+        if (e.GetInt64("BodyID") is long id) _state.BodyId = id;
+    }
+
+    private void ClearSurface() => _state.Position = null;
+
+    /// <summary>Remember a scanned body's radius, and back-fill the live position if it lacked one.</summary>
+    private void OnScan(JournalEntry e)
+    {
+        if (e.GetString("BodyName") is not { Length: > 0 } name) return;
+        if (e.GetDouble("Radius") is not double r || !double.IsFinite(r) || r <= 0) return;
+        if (_scanRadii.Count >= MaxScanRadii && !_scanRadii.ContainsKey(name)) _scanRadii.Clear();
+        _scanRadii[name] = r;
+
+        if (_state.Position is { PlanetRadius: null } pos && string.Equals(pos.BodyName, name, StringComparison.OrdinalIgnoreCase))
+            _state.Position = pos with { PlanetRadius = r };
+    }
+
+    /// <summary>Position follows the <c>HasLatLong</c> flag exactly: set while it is up, cleared the moment it drops.</summary>
+    private void UpdatePosition(JournalEntry e, long flags)
+    {
+        if (!ShipStatusFlags.HasLatLongFlag(flags)) { ClearSurface(); return; }
+
+        var bodyName = e.GetString("BodyName") ?? _state.Position?.BodyName ?? _state.Body;
+        double? fallback = bodyName is not null && _scanRadii.TryGetValue(bodyName, out var r) ? r : null;
+        var pos = SurfacePosition.FromStatus(e, fallback);
+        if (pos is not null && pos.BodyName is null && bodyName is not null) pos = pos with { BodyName = bodyName };
+        _state.Position = pos;
+    }
 
     private void OnStatus(JournalEntry e)
     {
@@ -222,7 +269,11 @@ public sealed class StateTracker
         if (e.GetInt64("Flags") is long flags
             && ShipStatusFlags.Derive(flags, e.GetInt64("Flags2") ?? 0) is FlightMode mode)
             _state.Flight = mode;
-        if (e.GetInt64("Flags") is long hpFlags) _state.HardpointsDeployed = ShipStatusFlags.HardpointsDeployed(hpFlags);
+        if (e.GetInt64("Flags") is long hpFlags)
+        {
+            _state.HardpointsDeployed = ShipStatusFlags.HardpointsDeployed(hpFlags);
+            UpdatePosition(e, hpFlags);
+        }
 
         if (e.Raw.TryGetProperty("Fuel", out var fuel)
             && fuel.TryGetProperty("FuelMain", out var fm) && fm.TryGetDouble(out var main))

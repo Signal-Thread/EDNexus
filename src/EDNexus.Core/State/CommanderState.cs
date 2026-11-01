@@ -30,6 +30,18 @@ public sealed class CommanderState : ObservableObject
     private string? _body;
     public string? Body { get => _body; set => Set(ref _body, value); }
 
+    private long? _bodyId;
+    /// <summary>The journal <c>BodyID</c> of <see cref="Body"/> when an event supplied one, else null.</summary>
+    public long? BodyId { get => _bodyId; set => Set(ref _bodyId, value); }
+
+    private Surface.SurfacePosition? _position;
+    /// <summary>
+    /// Latitude/longitude/heading/altitude on a planet, from <c>Status.json</c>. Non-null only while the
+    /// game reports a position (the <c>HasLatLong</c> flag: on or near a body); cleared on takeoff,
+    /// launch and supercruise. The record is immutable and replaced wholesale on each update.
+    /// </summary>
+    public Surface.SurfacePosition? Position { get => _position; set => Set(ref _position, value); }
+
     private bool _docked;
     public bool Docked { get => _docked; set => Set(ref _docked, value); }
 

@@ -160,6 +160,12 @@ static void PrintState(CommanderState s)
     Console.WriteLine($"  System    : {s.StarSystem ?? "(unknown)"}");
     Console.WriteLine($"  Body      : {s.Body}");
     Console.WriteLine($"  Location  : {(s.Docked ? $"docked at {s.StationDisplayName}" : "in flight")}");
+    if (s.Position is { } pos)
+        Console.WriteLine($"  Surface   : {EDNexus.Core.Surface.SurfaceCoordinates.Format(pos.Latitude, pos.Longitude)}"
+                          + (pos.Heading is double hd ? $", heading {hd:0}°" : "")
+                          + (pos.Altitude is double alt ? $", alt {alt:N0} m" : "")
+                          + (pos.PlanetRadius is double rad ? $", radius {rad / 1000:N0} km" : ", radius unknown")
+                          + (pos.BodyName is null ? "" : $" on {pos.BodyName}"));
     Console.WriteLine($"  Fuel      : {s.FuelMain:0.0}{(s.FuelCapacity > 0 ? $" / {s.FuelCapacity:0.0}" : "")} t");
     if (s.Fsd is { BaseMass: > 0 } fsd)
         Console.WriteLine($"  Jump range: {fsd.JumpRangeWith(s.FuelMain, s.CargoTons):0.0} ly now"
