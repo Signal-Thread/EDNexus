@@ -31,9 +31,21 @@ dotnet run --project src/EDNexus.Cli -- --once --plan fsd_increased_range 5 3
 dotnet run --project src/EDNexus.Cli -- --twitch-card
 
 # Load plugins (EDNEXUS_PLUGINS_DIR or the default folder) before the replay and print a
-# per-plugin summary; `--plugin <folder>` loads just one plugin folder. All declared
-# capabilities are granted headlessly; UI registrations are counted, not rendered.
+# per-plugin summary. Plugin code runs in-process against your REAL journal with every declared
+# capability granted and no consent prompt (a stderr warning marks network+events/state plugins);
+# only run plugins you trust. UI registrations are counted, not rendered; storage is an in-memory
+# stub. Like the app, loading runs install recovery on the plugins folder, so it is not read-only.
+# With no per-user plugins folder nothing is loaded (no temp-folder fallback).
 dotnet run --project src/EDNexus.Cli -- --once --plugins
+
+# Load just one plugin folder (it is copied to a temp folder first, bounded in size, links skipped,
+# and removed on exit; sibling plugins are never scanned). Not combinable with --plugins.
+dotnet run --project src/EDNexus.Cli -- --once --plugin path/to/com.example.myplugin
+
+# CI mode: as --plugins, but exit 1 on any non-Loaded plugin, handler/log error, drain timeout or
+# unload problem. Exit status otherwise: 0 ok, 1 no journal, 2 usage error / harness cannot start.
+# Plugins are gated against the CLI's AssemblyInformationalVersion; override with EDNEXUS_APP_VERSION.
+dotnet run --project src/EDNexus.Cli -- --once --plugins-strict
 
 # Unit tests (xUnit).
 dotnet test EDNexus.slnx

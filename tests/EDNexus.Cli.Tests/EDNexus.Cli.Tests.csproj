@@ -9,6 +9,8 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="10.1.0" />
+    <!-- Compiles throwaway plugins at test time (TestPlugins.cs is shared with the Hosting tests). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
@@ -16,6 +18,10 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\EDNexus.Plugins.Hosting.Tests\TestPlugins.cs" Link="TestPlugins.cs" />
   </ItemGroup>
 
   <ItemGroup>
