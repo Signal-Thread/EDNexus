@@ -105,6 +105,15 @@ public sealed class Bootstrap
         Store.Save(Settings);
     }
 
+    /// <summary>
+    /// Persist the workspaces and which one is active. The session has already been synced with the
+    /// on-screen arrangement (see <see cref="WorkspaceSession.WriteTo"/>).
+    /// </summary>
+    public void ApplyWorkspaces()
+    {
+        Store.Save(Settings);
+    }
+
     /// <summary>Persist the pinned Odyssey suit/weapon upgrade (null id clears the pin).</summary>
     public void ApplyOnFootPin(string? kind, string? id, int grade)
     {

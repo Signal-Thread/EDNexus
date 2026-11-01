@@ -36,8 +36,29 @@ public sealed class CardLayout
 /// <summary>The commander's dashboard arrangement, persisted through the settings store.</summary>
 public sealed class DashboardSettings
 {
-    /// <summary>Per-card arrangement. Empty until the commander first customises the dashboard.</summary>
+    /// <summary>
+    /// Per-card arrangement from before workspaces existed. Read once to seed the first workspace
+    /// (see <see cref="WorkspaceLayout.Resolve"/>) and thereafter kept as a mirror of the first
+    /// workspace, so the file stays readable by an older build.
+    /// </summary>
+    /// <remarks>
+    /// Downgrade caveat: an older build does not know <see cref="Workspaces"/> and drops it when it
+    /// rewrites the file, keeping only <see cref="Cards"/>. Coming back to a newer build then re-seeds
+    /// one default workspace from <see cref="Cards"/>, so extra pages, their names and the active page
+    /// are lost. There is no way to detect this afterwards (the older build also drops any marker we
+    /// could add), so it is documented rather than repaired; the first page's layout survives.
+    /// </remarks>
     public List<CardLayout> Cards { get; set; } = new();
+
+    /// <summary>
+    /// The commander's workspaces (pages), in tab order. Empty until the layout is first saved by a
+    /// build that knows about workspaces; <see cref="WorkspaceLayout.Resolve"/> then synthesises a
+    /// single default workspace from <see cref="Cards"/>.
+    /// </summary>
+    public List<Workspace> Workspaces { get; set; } = new();
+
+    /// <summary>Id of the workspace shown on startup. Falls back to the first when missing or stale.</summary>
+    public string? ActiveWorkspaceId { get; set; }
 }
 
 /// <summary>A card as the app defines it, before any saved layout is applied.</summary>

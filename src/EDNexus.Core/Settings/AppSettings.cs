@@ -30,8 +30,10 @@ public sealed class AppSettings
     /// <summary>
     /// The commander's dashboard arrangement — card order, visibility, width and collapse state.
     /// Empty until they first customise it, so a fresh install uses the shipped layout.
+    /// A <c>"Dashboard": null</c> in a hand-edited file is read as the default, never null.
     /// </summary>
-    public DashboardSettings Dashboard { get; set; } = new();
+    public DashboardSettings Dashboard { get => _dashboard; set => _dashboard = value ?? new(); }
+    private DashboardSettings _dashboard = new();
 
     /// <summary>The route plotter's last plotted route, so it survives a restart. Empty until one is plotted.</summary>
     public RouteSettings Route { get; set; } = new();
