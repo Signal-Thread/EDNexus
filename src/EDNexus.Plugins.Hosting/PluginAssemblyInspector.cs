@@ -22,8 +22,20 @@ internal static class PluginAssemblyInspector
     {
         try
         {
-            using var stream = File.OpenRead(path);
-            using var pe = new PEReader(stream);
+            return GetReferencedSdkVersion(File.ReadAllBytes(path));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>As <see cref="GetReferencedSdkVersion(string)"/>, over assembly bytes already read.</summary>
+    public static Version? GetReferencedSdkVersion(byte[] image)
+    {
+        try
+        {
+            using var pe = new PEReader(new MemoryStream(image, writable: false));
             if (!pe.HasMetadata)
                 return null;
             var reader = pe.GetMetadataReader();

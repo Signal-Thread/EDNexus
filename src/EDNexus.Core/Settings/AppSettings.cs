@@ -70,6 +70,40 @@ public sealed class AppSettings
     /// EBS. Empty until the commander completes login via <c>EDNexus.Core.Twitch.TwitchAuthService</c>.
     /// </summary>
     public TwitchSettings Twitch { get; set; } = new();
+
+    private PluginSettings _plugins = new();
+
+    /// <summary>
+    /// Which installed plugins the commander has switched off. A <c>null</c> in settings.json (or
+    /// assigned in code) is treated as "none disabled" and normalised to an empty section.
+    /// </summary>
+    public PluginSettings Plugins
+    {
+        get => _plugins;
+        set => _plugins = value ?? new();
+    }
+}
+
+/// <summary>
+/// Persisted plugin choices. Plugins are enabled by default; only the ones the commander has
+/// disabled are recorded (so a newly installed plugin needs no entry). A plugin the host
+/// auto-quarantined for faulting is deliberately <i>not</i> recorded: it gets a fresh chance on the
+/// next launch.
+/// </summary>
+public sealed class PluginSettings
+{
+    private HashSet<string> _disabledIds = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Ids of plugins the commander has disabled. Treat the set as immutable: replace it with a new
+    /// one to change it (copy-on-write), so a save serialising it on another thread never sees it
+    /// mutate. A <c>null</c> in settings.json becomes an empty set.
+    /// </summary>
+    public HashSet<string> DisabledIds
+    {
+        get => _disabledIds;
+        set => _disabledIds = value is null ? new(StringComparer.Ordinal) : new(value, StringComparer.Ordinal);
+    }
 }
 
 /// <summary>

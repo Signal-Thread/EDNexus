@@ -137,8 +137,15 @@ dispose the context (which stops event delivery), wait up to `PluginHost.UnloadT
 5 s) for event handlers already running to return (when the context is an
 `IPluginSessionControl`, which a bridge session is), drop every reference to the plugin and unload
 its load context, which the GC then collects. Every plugin is unloaded even if another
-misbehaves. While loaded, a plugin's assemblies are locked on Windows; they are released after
-unload and collection.
+misbehaves. While loaded, a plugin's dependency assemblies are locked on Windows; they are
+released after unload and collection.
+
+**The entry assembly is loaded from memory.** The host reads the `entryAssembly` file once (at most
+64 MiB; larger is rejected), inspects those bytes and loads those same bytes, so the file is not
+held open and a rebuilt plugin can be copied over a running one and picked up by a reload.
+Consequences for plugin authors: `Assembly.GetExecutingAssembly().Location` is an empty string
+(do not locate sibling files through it; use `context.Storage` for data), and there is no PDB, so stack traces carry no line
+numbers. Dependency DLLs beside the entry assembly are still loaded by path.
 
 A handler that is still running when the wait expires is reported in the unload result's `Errors`
 as a **stuck handler** and `PluginUnloadResult.Stuck` is `true`: the plugin's code is still on a
