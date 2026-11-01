@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EDNexus.Core;
 using EDNexus.Core.Dev;
+using EDNexus.Core.Goals;
 using EDNexus.Core.Mining;
 using EDNexus.Core.Settings;
 using EDNexus.Core.State;
@@ -37,6 +38,8 @@ public sealed class DashboardContext
     private readonly Func<bool> _sharedProjectLookupEnabled;
     private readonly Func<ShoppingListSettings> _getShopping;
     private readonly Action<ShoppingListSettings> _saveShopping;
+    private readonly Func<GoalsSettings>? _getGoals;
+    private readonly Action<GoalsSettings>? _saveGoals;
 
     public DashboardContext(
         Func<EngineHost> host,
@@ -56,7 +59,9 @@ public sealed class DashboardContext
         RadioPlayerSelector radio,
         Func<bool>? sharedProjectLookupEnabled = null,
         Func<ShoppingListSettings>? getShopping = null,
-        Action<ShoppingListSettings>? saveShopping = null)
+        Action<ShoppingListSettings>? saveShopping = null,
+        Func<GoalsSettings>? getGoals = null,
+        Action<GoalsSettings>? saveGoals = null)
     {
         _host = host;
         Radio = radio;
@@ -76,6 +81,8 @@ public sealed class DashboardContext
         _sharedProjectLookupEnabled = sharedProjectLookupEnabled ?? (() => true);
         _getShopping = getShopping ?? (() => new ShoppingListSettings());
         _saveShopping = saveShopping ?? (_ => { });
+        _getGoals = getGoals;
+        _saveGoals = saveGoals;
     }
 
     /// <summary>The live engine host — always the current one, even after a reset-to-live rebuild.</summary>
@@ -142,6 +149,12 @@ public sealed class DashboardContext
 
     /// <summary>Persist the shopping list's manual lines and link toggles.</summary>
     public void SaveShoppingSettings(ShoppingListSettings shopping) => _saveShopping(shopping);
+
+    /// <summary>Read the Goals card's persisted goals (an empty instance when none are wired).</summary>
+    public GoalsSettings GetGoals() => _getGoals?.Invoke() ?? new GoalsSettings();
+
+    /// <summary>Persist the Goals card's goals; a no-op when none are wired.</summary>
+    public void SaveGoals(GoalsSettings goals) => _saveGoals?.Invoke(goals);
 }
 
 /// <summary>

@@ -36,6 +36,9 @@ public sealed class AppSettings
     /// <summary>The route plotter's last plotted route, so it survives a restart. Empty until one is plotted.</summary>
     public RouteSettings Route { get; set; } = new();
 
+    /// <summary>The Goals card's goals, steps and highlighted goal. Empty until the commander adds one.</summary>
+    public Goals.GoalsSettings Goals { get; set; } = new();
+
     /// <summary>The mining card's price threshold and learned galactic-average prices.</summary>
     public MiningSettings Mining { get; set; } = new();
 

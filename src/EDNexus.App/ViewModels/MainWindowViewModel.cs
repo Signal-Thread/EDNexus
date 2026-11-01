@@ -79,7 +79,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             _radio,
             () => _boot.Settings.Colonisation.SharedProjectLookup,
             () => _boot.Settings.Shopping,
-            shopping => _boot.ApplyShoppingSettings(shopping));
+            shopping => _boot.ApplyShoppingSettings(shopping),
+            () => _boot.Settings.Goals,
+            goals => _boot.ApplyGoals(goals));
         Cards = new ObservableCollection<CardViewModel>
         {
             new LocationCardViewModel(_context),
@@ -96,6 +98,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             new MiningCardViewModel(_context),
             new ExobiologyCardViewModel(_context),
             new MissionsCardViewModel(_context),
+            new GoalsCardViewModel(_context),
             new CommunityGoalsCardViewModel(_context),
             new RanksCardViewModel(_context),
             new GalnetCardViewModel(_context),
