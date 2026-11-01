@@ -106,6 +106,54 @@ public sealed class EdsmClient : IDisposable
         }).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Fetch every Galactic Exploration Catalog point of interest from EDAstro (<c>/gec/json/all</c>,
+    /// ~2 MB, EDSM's galactic-mapping shape). The long description and image fields are skipped while
+    /// parsing. Entries without a name are dropped; other missing fields become null/empty. A reply
+    /// that is not an array is treated as "no data".
+    /// </summary>
+    public async Task<EdsmResult<IReadOnlyList<GecPoi>>> GetGecPoisAsync(CancellationToken ct = default)
+    {
+        var url = _options.GecBaseUrl.TrimEnd('/') + "/gec/json/all";
+        return await GetAsync(url, ct, body =>
+        {
+            using var doc = JsonDocument.Parse(body);
+            var pois = new List<GecPoi>();
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                foreach (var el in doc.RootElement.EnumerateArray())
+                {
+                    if (el.ValueKind != JsonValueKind.Object || ReadString(el, "name") is not { Length: > 0 } name) continue;
+                    pois.Add(new GecPoi(
+                        Id: ReadNullableLong(el, "id") ?? 0,
+                        Name: name,
+                        Type: ReadString(el, "type") ?? "",
+                        Region: ReadString(el, "region"),
+                        SystemName: ReadString(el, "galMapSearch"),
+                        SystemId64: ReadNullableLong(el, "id64"),
+                        Coords: ReadCoordArray(el, "coordinates"),
+                        Summary: ReadString(el, "summary"),
+                        Rating: ReadNullableDouble(el, "rating"),
+                        Url: ReadString(el, "poiUrl")));
+                }
+            return EdsmResult<IReadOnlyList<GecPoi>>.Ok(pois);
+        }).ConfigureAwait(false);
+    }
+
+    private static EdsmCoords? ReadCoordArray(JsonElement e, string prop)
+    {
+        if (!e.TryGetProperty(prop, out var a) || a.ValueKind != JsonValueKind.Array || a.GetArrayLength() != 3) return null;
+        var v = new double[3];
+        var i = 0;
+        foreach (var n in a.EnumerateArray())
+        {
+            if (n.ValueKind != JsonValueKind.Number || !n.TryGetDouble(out v[i++])) return null;
+        }
+        return new EdsmCoords(v[0], v[1], v[2]);
+    }
+
+    private static long? ReadNullableLong(JsonElement e, string prop)
+        => e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var l) ? l : null;
+
     private string Base => _options.BaseUrl.TrimEnd('/');
 
     /// <summary>Shared GET + parse plumbing: never throws, mapping every failure onto a Failure result.</summary>

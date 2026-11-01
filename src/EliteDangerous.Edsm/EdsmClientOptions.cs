@@ -17,6 +17,13 @@ public sealed class EdsmClientOptions
     public string BaseUrl { get; init; } = "https://www.edsm.net";
 
     /// <summary>
+    /// The EDAstro base address used for the Galactic Exploration Catalog (GEC) POI API, which serves
+    /// EDSM's galactic-mapping JSON shape. Separate from <see cref="BaseUrl"/> because EDSM itself
+    /// sits behind a bot challenge for that endpoint. Overridable for tests.
+    /// </summary>
+    public string GecBaseUrl { get; init; } = "https://edastro.com";
+
+    /// <summary>
     /// The longest <c>Retry-After</c> the client will wait out before retrying a 429/503 once. A longer
     /// request is not waited for: the call fails promptly and the caller can try again later.
     /// </summary>
