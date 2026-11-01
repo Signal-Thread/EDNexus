@@ -8,6 +8,7 @@
     <Project Path="src/EDNexus.Plugins.Hosting/EDNexus.Plugins.Hosting.csproj" />
     <Project Path="src/EliteDangerous.Eddn/EliteDangerous.Eddn.csproj" />
     <Project Path="src/EliteDangerous.Edsm/EliteDangerous.Edsm.csproj" />
+    <Project Path="src/EliteDangerous.EliteBgs/EliteDangerous.EliteBgs.csproj" />
     <Project Path="src/EliteDangerous.Galnet/EliteDangerous.Galnet.csproj" />
     <Project Path="src/EliteDangerous.Inara/EliteDangerous.Inara.csproj" />
     <Project Path="src/EliteDangerous.RavenColonial/EliteDangerous.RavenColonial.csproj" />
