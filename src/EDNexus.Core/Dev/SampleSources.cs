@@ -470,6 +470,18 @@ public sealed class ShoppingListSampleSource : JournalSampleSource
     public override string CardKey => "shopping";
     public override string DisplayName => "Shopping list";
 
+    /// <summary>
+    /// Development-only list lines, shown by the card while developer mode is on and nothing else is
+    /// listed, so row quantities and the Find action can be exercised on fresh settings. They are
+    /// derived each tick and never written to the commander's settings.
+    /// </summary>
+    public static IReadOnlyList<ShoppingList.ShoppingEntry> SampleEntries { get; } = new[]
+    {
+        new ShoppingList.ShoppingEntry(ShoppingList.ShoppingItemKind.Commodity, "steel", "Steel", 120, ShoppingList.ShoppingItemSource.Colonisation),
+        new ShoppingList.ShoppingEntry(ShoppingList.ShoppingItemKind.Commodity, "aluminium", "Aluminium", 80, ShoppingList.ShoppingItemSource.Colonisation),
+        new ShoppingList.ShoppingEntry(ShoppingList.ShoppingItemKind.Raw, "iron", "Iron", 20, ShoppingList.ShoppingItemSource.Engineering),
+    };
+
     public override IReadOnlyList<string> Sample(Random rng)
     {
         var lines = new List<string>();

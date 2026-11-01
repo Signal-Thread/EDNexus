@@ -91,6 +91,10 @@ public sealed partial class ShoppingListCardViewModel : CardViewModel
         if (settings.LinkEngineering)
             entries.AddRange(ShoppingListService.FromEngineering(Context.GetEngineeringPin(), Context.Host.Engineering, s));
 
+        // Fresh settings in developer mode would leave the card empty; show transient sample lines instead.
+        if (Context.DevEnabled && entries.Count == 0)
+            entries.AddRange(EDNexus.Core.Dev.ShoppingListSampleSource.SampleEntries);
+
         var rows = ShoppingListService.Build(entries, s, settings.HideCompleted);
         IsAllDone = rows.Count == 0 && settings.HideCompleted && ShoppingListService.Build(entries, s).Count > 0;
 

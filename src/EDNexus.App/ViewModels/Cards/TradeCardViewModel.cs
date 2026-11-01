@@ -43,7 +43,7 @@ public sealed partial class TradeCardViewModel : CardViewModel
     public override void Update(CommanderState s)
     {
         if (s.StarSystem is { Length: > 0 } known) _lastSystem = known;
-        if (TradeReferenceSystem.Length == 0 && s.StarSystem is { Length: > 0 } sys) TradeReferenceSystem = sys;
+        if (TradeReferenceSystem.Length == 0 && s.StarSystem is { Length: > 0 } sys) SetAutoReference(sys);
         if (TradeCommodity.Length == 0 && !s.Cargo.IsEmpty)
             TradeCommodity = s.Cargo
                 .Where(k => !CommodityName.IsLimpet(k.Key))
@@ -54,6 +54,24 @@ public sealed partial class TradeCardViewModel : CardViewModel
 
     // Latest known system, so a search started from another card can fill the reference system.
     private string _lastSystem = "";
+
+    // True while TradeReferenceSystem holds a value we filled in ourselves (not one the commander typed),
+    // so a later Find can refresh it to wherever they are now without overwriting a deliberate choice.
+    private bool _referenceIsAuto;
+    private bool _settingAutoReference;
+
+    private void SetAutoReference(string system)
+    {
+        _settingAutoReference = true;
+        try { TradeReferenceSystem = system; }
+        finally { _settingAutoReference = false; }
+        _referenceIsAuto = true;
+    }
+
+    partial void OnTradeReferenceSystemChanged(string value)
+    {
+        if (!_settingAutoReference) _referenceIsAuto = false;
+    }
 
     /// <summary>
     /// Start a "where can I buy this" search (used by the shopping list's Find). Shows the card,
@@ -67,10 +85,10 @@ public sealed partial class TradeCardViewModel : CardViewModel
         TradeSelling = false;
         IsCollapsed = false;
         IsVisible = true;
-        if (TradeReferenceSystem.Length == 0)
+        if (TradeReferenceSystem.Length == 0 || _referenceIsAuto)
         {
             var sys = _lastSystem.Length > 0 ? _lastSystem : Context.Host.State.StarSystem;
-            if (sys is { Length: > 0 }) TradeReferenceSystem = sys;
+            if (sys is { Length: > 0 }) SetAutoReference(sys);
         }
         // An async command cannot run twice at once: let the running search finish, then search again
         // with the new field values.
