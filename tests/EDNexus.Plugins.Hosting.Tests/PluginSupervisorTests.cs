@@ -39,12 +39,13 @@ public sealed class PluginSupervisorTests : IDisposable
         _dir.Dispose();
     }
 
-    private PluginSupervisor Supervisor(IPluginEnablementStore? store = null, int threshold = 3, TimeSpan? window = null, string[]? disabledAtStart = null)
+    private PluginSupervisor Supervisor(IPluginEnablementStore? store = null, int threshold = 3, TimeSpan? window = null, string[]? disabledAtStart = null, TimeSpan? unloadTimeout = null)
     {
         store ??= new InMemoryPluginEnablementStore();
         foreach (var id in disabledAtStart ?? []) store.SetDisabled(id, true);
         var host = new PluginHost(_dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, (manifest, granted) =>
-            new Ctx(manifest, _bridge.Attach(manifest, granted), _lines));
+            new Ctx(manifest, _bridge.Attach(manifest, granted), _lines))
+        { UnloadTimeout = unloadTimeout ?? TimeSpan.FromSeconds(5) };
         _owned.Add(host);
         _host = host;
         _supervisor = new PluginSupervisor(host, store, new PluginFaultPolicy { Threshold = threshold, Window = window ?? TimeSpan.FromMinutes(5) });
@@ -144,11 +145,11 @@ public sealed class PluginSupervisorTests : IDisposable
     public void FaultsSpreadOutsideTheRollingWindow_DoNotQuarantine()
     {
         InstallCounter("com.test.slow", "Slow");
-        var now = DateTimeOffset.UtcNow;
+        var now = TimeSpan.Zero;
         var host = new PluginHost(_dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, (m, g) => new Ctx(m, _bridge.Attach(m, g), _lines));
         _owned.Add(host);
         using var supervisor = new PluginSupervisor(host, new InMemoryPluginEnablementStore(),
-            new PluginFaultPolicy { Threshold = 2, Window = TimeSpan.FromSeconds(10) }, () => now);
+            new PluginFaultPolicy { Threshold = 2, Window = TimeSpan.FromSeconds(10) }, monotonic: () => now);
         supervisor.Start();
 
         for (var i = 0; i < 10; i++)
@@ -183,6 +184,7 @@ public sealed class PluginSupervisorTests : IDisposable
     public void Disable_StopsEvents_Enable_ResumesThem_AndTheChoiceSurvivesRestart()
     {
         InstallCounter("com.test.a", "A");
+        InstallCounter("com.test.b", "B");
         var settings = new AppSettings();
         var saves = 0;
         var store = new AppSettingsPluginEnablementStore(settings, _ => saves++);
@@ -195,9 +197,10 @@ public sealed class PluginSupervisorTests : IDisposable
 
         Assert.Equal(PluginState.Disabled, supervisor.GetStatus("com.test.a")!.State);
         Assert.Contains("shutdown com.test.a", _lines);
-        Assert.Empty(_supervisorHost().Loaded);
+        Assert.DoesNotContain(_supervisorHost().Loaded, p => p.Id == "com.test.a");
         Publish();
-        Thread.Sleep(200);
+        // B is subscribed on the same pump, so once it has seen the event a still-subscribed A would have too.
+        Eventually(() => Count("got com.test.b") == 2, "the other plugin to see the post-disable event");
         Assert.Equal(1, Count("got com.test.a"));
         Assert.Contains("com.test.a", settings.Plugins.DisabledIds);
         Assert.Equal(1, saves);
@@ -280,6 +283,8 @@ public sealed class PluginSupervisorTests : IDisposable
         var status = supervisor.GetStatus("com.test.bad")!;
         Assert.Equal(PluginState.Enabled, status.State);
         Assert.Equal(0, status.TotalFaults);
+        Assert.Null(status.LastError);       // the quarantine message must not linger on a healthy plugin
+        Assert.Null(status.LastErrorAt);
     }
 
     [Fact]
@@ -337,6 +342,237 @@ public sealed class PluginSupervisorTests : IDisposable
 
         Assert.Equal(PluginLoadStatus.Disabled, Assert.Single(report.Plugins).Status);
         Assert.Empty(host.Loaded);
+    }
+
+    // ---- review follow-ups -----------------------------------------------------------------------
+
+    [Fact]
+    public void Enable_OfAQuarantinedPlugin_LoadsItAgainWithACleanStatus()
+    {
+        InstallThrower("com.test.bad", "Bad");
+        var supervisor = Supervisor(threshold: 2);
+        supervisor.Start();
+        for (var i = 0; i < 6; i++) Publish();
+        Eventually(() => supervisor.GetStatus("com.test.bad")!.State == PluginState.Quarantined, "quarantine");
+
+        var result = supervisor.Enable("com.test.bad");
+
+        Assert.Equal(PluginLoadStatus.Loaded, result!.Status);
+        var status = supervisor.GetStatus("com.test.bad")!;
+        Assert.Equal(PluginState.Enabled, status.State);
+        Assert.Null(status.LastError);
+    }
+
+    [Fact]
+    public void StatusChanged_IsRaisedOncePerOperation_WithoutTheLifecycleLockHeld()
+    {
+        InstallCounter("com.test.a", "A");
+        InstallCounter("com.test.b", "B");
+        var supervisor = Supervisor();
+        supervisor.Start();
+        var seen = new List<PluginStatus>();
+        var reentered = false;
+        supervisor.StatusChanged += status =>
+        {
+            seen.Add(status);
+            // Would deadlock if the lifecycle lock were still held (another thread needs it).
+            if (status.Id == "com.test.a" && status.State == PluginState.Enabled)
+                reentered = Task.Run(() => supervisor.Disable("com.test.b")).Wait(Wait);
+        };
+
+        supervisor.Reload("com.test.a");
+
+        Assert.True(reentered);
+        Assert.Single(seen, s => s.Id == "com.test.a");
+        Assert.Equal(PluginState.Disabled, supervisor.GetStatus("com.test.b")!.State);
+    }
+
+    [Fact]
+    public void Disable_OfAStuckPlugin_StillCompletes()
+    {
+        var release = Path.Combine(_dir.Path, "release.flag").Replace('\\', '/');
+        Install("com.test.stuck", "Stuck",
+            "context.Events.SubscribeAny(e => { while (!System.IO.File.Exists(\"" + release + "\")) System.Threading.Thread.Sleep(10); });");
+        var supervisor = Supervisor(unloadTimeout: TimeSpan.FromMilliseconds(300));
+        supervisor.Start();
+        Publish();
+
+        try
+        {
+            Assert.True(supervisor.Disable("com.test.stuck"));
+            Assert.Equal(PluginState.Disabled, supervisor.GetStatus("com.test.stuck")!.State);
+        }
+        finally
+        {
+            File.WriteAllText(release, "x");
+        }
+    }
+
+    [Fact]
+    public void FaultsReportedWhileLoading_AreCounted_OnStartAndOnReload()
+    {
+        InstallCounter("com.test.a", "A");
+        PluginSupervisor? supervisor = null;
+        var reportDuringLoad = true;
+        var host = new PluginHost(_dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, (m, g) =>
+        {
+            if (reportDuringLoad)
+                for (var i = 0; i < 3; i++) supervisor!.ReportFault(m.Id, "during initialise");
+            return new Ctx(m, _bridge.Attach(m, g), _lines);
+        });
+        _owned.Add(host);
+        supervisor = new PluginSupervisor(host, new InMemoryPluginEnablementStore(), new PluginFaultPolicy { Threshold = 2, Window = TimeSpan.FromMinutes(5) });
+        _owned.Add(supervisor);
+
+        supervisor.Start();   // no status exists yet when these arrive
+
+        Eventually(() => supervisor.GetStatus("com.test.a")!.State == PluginState.Quarantined, "quarantine from start-up faults");
+
+        reportDuringLoad = false;
+        supervisor.Reload("com.test.a");
+        Assert.Equal(PluginState.Enabled, supervisor.GetStatus("com.test.a")!.State);
+
+        reportDuringLoad = true;
+        supervisor.Reload("com.test.a");
+        Eventually(() => supervisor.GetStatus("com.test.a")!.State == PluginState.Quarantined, "quarantine from reload faults");
+    }
+
+    [Fact]
+    public void ReportFault_WithAnOldGeneration_IsIgnored()
+    {
+        InstallCounter("com.test.a", "A");
+        var supervisor = Supervisor(threshold: 1);
+        supervisor.Start();
+        var old = supervisor.GetGeneration("com.test.a");
+        supervisor.Reload("com.test.a");
+
+        for (var i = 0; i < 5; i++) supervisor.ReportFault("com.test.a", "from the old copy", old);
+
+        var status = supervisor.GetStatus("com.test.a")!;
+        Assert.Equal(PluginState.Enabled, status.State);
+        Assert.Equal(0, status.TotalFaults);
+    }
+
+    [Fact]
+    public void FaultWindow_FollowsTheMonotonicClock_NotTheWallClock()
+    {
+        InstallCounter("com.test.a", "A");
+        var mono = TimeSpan.FromMinutes(10);
+        var host = new PluginHost(_dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, (m, g) => new Ctx(m, _bridge.Attach(m, g), _lines));
+        _owned.Add(host);
+        using var supervisor = new PluginSupervisor(host, new InMemoryPluginEnablementStore(),
+            new PluginFaultPolicy { Threshold = 2, Window = TimeSpan.FromSeconds(10) },
+            clock: () => DateTimeOffset.UnixEpoch, monotonic: () => mono);   // wall clock frozen; only monotonic time matters
+        supervisor.Start();
+
+        for (var i = 0; i < 5; i++)
+        {
+            supervisor.ReportFault("com.test.a", "x");
+            mono += TimeSpan.FromSeconds(11);
+        }
+
+        Assert.Equal(PluginState.Enabled, supervisor.GetStatus("com.test.a")!.State);
+    }
+
+    [Fact]
+    public void Supervisor_RejectsAnUnboundedThreshold()
+    {
+        var host = new PluginHost(_dir.Path, SemanticVersion.Parse("1.0.0"), Consent.AllowAll, (m, g) => new Ctx(m, _bridge.Attach(m, g), _lines));
+        _owned.Add(host);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new PluginSupervisor(host, new InMemoryPluginEnablementStore(), new PluginFaultPolicy { Threshold = int.MaxValue }));
+    }
+
+    [Fact]
+    public void LoadPlugin_RefusesAFolderWhoseNameDiffersInCaseFromTheManifestId()
+    {
+        WriteFolder(_dir.Path, "myplugin", Manifest("MyPlugin", "My.dll", "My.Plugin"), ("My.dll", Compile("My", PluginSource("My"))));
+        using var host = new RecordingContexts().Host(_dir.Path);
+
+        var result = host.LoadPlugin("MyPlugin");
+
+        Assert.Equal(PluginLoadStatus.Rejected, result.Status);   // missing folder on a case-sensitive filesystem, name mismatch elsewhere
+        Assert.Empty(host.Loaded);
+    }
+
+    [Fact]
+    public void LoadPlugin_RefusesAnIdClaimedByTwoFolders()
+    {
+        InstallCounter("com.test.a", "A");
+        WriteFolder(_dir.Path, "com.test.copy", Manifest("com.test.a", "A.dll", "A.Plugin"), ("A.dll", Compile("A2", PluginSource("A"))));
+        using var host = new RecordingContexts().Host(_dir.Path);
+
+        var result = host.LoadPlugin("com.test.a");
+
+        Assert.Equal(PluginLoadStatus.Rejected, result.Status);
+        Assert.Contains("more than one folder", result.ReasonSummary);
+        Assert.Empty(host.Loaded);
+    }
+
+    [Fact]
+    public void LoadPlugin_RefreshesLastReport()
+    {
+        InstallCounter("com.test.a", "A");
+        using var host = new RecordingContexts().Host(_dir.Path);
+        host.LoadAll();
+        host.Unload("com.test.a");
+
+        var result = host.LoadPlugin("com.test.a");
+
+        var entry = Assert.Single(host.LastReport!.Plugins);
+        Assert.Same(result, entry);
+        Assert.True(entry.Plugin!.IsLoaded);
+    }
+
+    [Fact]
+    public void NullPluginsSections_InSettingsFile_MeanNothingDisabled_AndAreNormalised()
+    {
+        foreach (var json in new[] { """{"Plugins":null}""", """{"Plugins":{"DisabledIds":null}}""" })
+        {
+            var path = Path.Combine(_dir.Path, "settings.json");
+            File.WriteAllText(path, json);
+            var settings = new SettingsStore(path).Load();
+            var store = new AppSettingsPluginEnablementStore(settings, _ => { });
+
+            Assert.False(store.IsDisabled("com.test.a"));
+            store.SetDisabled("com.test.a", true);
+            Assert.True(store.IsDisabled("com.test.a"));
+            store.SetDisabled("com.test.a", false);
+            Assert.False(store.IsDisabled("com.test.a"));
+        }
+
+        var nulled = new AppSettings { Plugins = null! };
+        Assert.NotNull(nulled.Plugins);
+        Assert.Empty(nulled.Plugins.DisabledIds);
+    }
+
+    [Fact]
+    public void NullPluginsSection_DoesNotReportEveryPluginAsDisabled()
+    {
+        InstallCounter("com.test.a", "A");
+        var path = Path.Combine(_dir.Path, "settings.json");
+        File.WriteAllText(path, """{"Plugins":null}""");
+        var settings = new SettingsStore(path).Load();
+        var supervisor = Supervisor(new AppSettingsPluginEnablementStore(settings, _ => { }));
+
+        supervisor.Start();
+
+        Assert.Equal(PluginState.Enabled, supervisor.GetStatus("com.test.a")!.State);
+    }
+
+    [Fact]
+    public void SetDisabled_IsCopyOnWrite_AndSavesTheNewSet()
+    {
+        var settings = new AppSettings();
+        HashSet<string>? seenDuringSave = null;
+        var store = new AppSettingsPluginEnablementStore(settings, s => seenDuringSave = s.Plugins.DisabledIds);
+        var before = settings.Plugins.DisabledIds;
+
+        store.SetDisabled("com.test.a", true);
+
+        Assert.NotSame(before, settings.Plugins.DisabledIds);   // the old set was never mutated
+        Assert.Empty(before);
+        Assert.Contains("com.test.a", seenDuringSave!);
     }
 
     // ---- helpers ---------------------------------------------------------------------------------

@@ -20,6 +20,9 @@ public enum PluginState
 
     /// <summary>It could not be loaded (bad manifest, incompatible, denied, <c>Initialize</c> threw, ...).</summary>
     Failed,
+
+    /// <summary>A load, reload or unload is in progress.</summary>
+    Loading,
 }
 
 /// <summary>
@@ -50,7 +53,11 @@ public sealed record PluginStatus(
     DateTimeOffset? LastErrorAt,
     long TotalFaults);
 
-/// <summary>Persists which plugins the commander has disabled.</summary>
+/// <summary>
+/// Persists which plugins the commander has disabled. <see cref="SetDisabled"/> may do disk I/O; the
+/// supervisor calls it outside its own locks, and re-reads <see cref="IsDisabled"/> (which must be
+/// cheap and in-memory) under them to settle concurrent changes.
+/// </summary>
 public interface IPluginEnablementStore
 {
     /// <summary>Whether the commander has disabled <paramref name="pluginId"/>.</summary>
@@ -80,22 +87,34 @@ public sealed class InMemoryPluginEnablementStore : IPluginEnablementStore
 /// Persists the choice in <see cref="AppSettings.Plugins"/> and asks <paramref name="save"/> (e.g.
 /// <c>SettingsStore.TrySave</c>) to write it, so it survives a restart.
 /// </summary>
+/// <remarks>
+/// The disabled set is copy-on-write: a change builds a new set and swaps it in, so a save running
+/// on another thread (the settings file is also written by other features) never serialises a set
+/// that is being mutated. <paramref name="save"/> runs outside this store's lock because it does
+/// disk I/O. A <c>null</c> plugins section or id set (a hand-edited settings.json) counts as empty
+/// and is normalised on first write.
+/// </remarks>
 public sealed class AppSettingsPluginEnablementStore(AppSettings settings, Action<AppSettings> save) : IPluginEnablementStore
 {
     private readonly object _gate = new();
 
     public bool IsDisabled(string pluginId)
-    {
-        lock (_gate) return settings.Plugins.DisabledIds.Contains(pluginId);
-    }
+        => settings.Plugins?.DisabledIds?.Contains(pluginId) ?? false;
 
     public void SetDisabled(string pluginId, bool disabled)
     {
+        bool changed;
         lock (_gate)
         {
-            var changed = disabled ? settings.Plugins.DisabledIds.Add(pluginId) : settings.Plugins.DisabledIds.Remove(pluginId);
+            var plugins = settings.Plugins;
+            if (plugins is null)
+                settings.Plugins = plugins = new PluginSettings();
+            var next = new HashSet<string>(plugins.DisabledIds ?? [], StringComparer.Ordinal);
+            changed = disabled ? next.Add(pluginId) : next.Remove(pluginId);
             if (changed)
-                save(settings);
+                plugins.DisabledIds = next;
         }
+        if (changed)
+            save(settings);
     }
 }
