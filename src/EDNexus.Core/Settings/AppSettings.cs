@@ -65,6 +65,21 @@ public sealed class AppSettings
     /// EBS. Empty until the commander completes login via <c>EDNexus.Core.Twitch.TwitchAuthService</c>.
     /// </summary>
     public TwitchSettings Twitch { get; set; } = new();
+
+    /// <summary>Which installed plugins the commander has switched off.</summary>
+    public PluginSettings Plugins { get; set; } = new();
+}
+
+/// <summary>
+/// Persisted plugin choices. Plugins are enabled by default; only the ones the commander has
+/// disabled are recorded (so a newly installed plugin needs no entry). A plugin the host
+/// auto-quarantined for faulting is deliberately <i>not</i> recorded: it gets a fresh chance on the
+/// next launch.
+/// </summary>
+public sealed class PluginSettings
+{
+    /// <summary>Ids of plugins the commander has disabled.</summary>
+    public HashSet<string> DisabledIds { get; set; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>

@@ -48,6 +48,7 @@ public sealed class PluginHost : IDisposable
     private bool _loading;
     private volatile PluginRecoveryResult? _recovery;
     private volatile PluginDiscoveryReport? _lastReport;
+    private volatile Func<string, bool>? _loadFilter;
 
     /// <param name="pluginsRoot">The plugins root (see <see cref="PluginPaths.Resolve()"/>). It need not exist.</param>
     /// <param name="appVersion">The running EDNexus version, for <see cref="PluginManifest.MinAppVersion"/>.</param>
@@ -115,6 +116,19 @@ public sealed class PluginHost : IDisposable
     /// What install recovery did on the first <see cref="LoadAll"/>, or <see langword="null"/>
     /// before it. Recovery runs once per host. Safe to read from any thread.
     /// </summary>
+    /// <summary>
+    /// Asks, for each valid plugin <see cref="LoadAll"/> and <see cref="LoadPlugin"/> are about to
+    /// load, whether it may run (receives the plugin id). A plugin it refuses is reported as
+    /// <see cref="PluginLoadStatus.Disabled"/> and none of its code is loaded; a filter that throws
+    /// refuses. <see langword="null"/> (the default) allows everything. <see cref="PluginSupervisor"/>
+    /// installs one that honours the persisted enable/disable choice.
+    /// </summary>
+    public Func<string, bool>? LoadFilter
+    {
+        get => _loadFilter;
+        set => _loadFilter = value;
+    }
+
     public PluginRecoveryResult? Recovery => _recovery;
 
     /// <summary>
@@ -211,7 +225,9 @@ public sealed class PluginHost : IDisposable
         {
             result = candidate.Reasons.Count > 0
                 ? new PluginLoadResult(candidate.Directory, candidate.Manifest, PluginLoadStatus.Rejected, candidate.Reasons, null)
-                : Load(candidate.Directory, candidate.Manifest!);
+                : !Allowed(candidate.Manifest!.Id)
+                    ? new PluginLoadResult(candidate.Directory, candidate.Manifest, PluginLoadStatus.Disabled, ["the plugin is disabled"], null)
+                    : Load(candidate.Directory, candidate.Manifest!);
         }
         catch (Exception ex)
         {
@@ -252,6 +268,53 @@ public sealed class PluginHost : IDisposable
     /// <c>Shutdown</c> runs.
     /// </para>
     /// </summary>
+    private bool Allowed(string id)
+    {
+        var filter = _loadFilter;
+        if (filter is null)
+            return true;
+        try { return filter(id); }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Loads (or reloads, after <see cref="Unload"/>) the single plugin installed in
+    /// <c>&lt;root&gt;/&lt;id&gt;/</c>, re-reading its manifest and assembly from disk, so a rebuilt
+    /// plugin is picked up without restarting. Same gates and containment as <see cref="LoadAll"/>:
+    /// the result says what happened and nothing plugin-related throws. It runs plugin code on the
+    /// calling thread. Throws <see cref="InvalidOperationException"/> if the plugin is already
+    /// loaded or a load pass is running.
+    /// </summary>
+    public PluginLoadResult LoadPlugin(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_loading)
+                throw new InvalidOperationException("A plugin load pass is already in progress.");
+            if (_loaded.ContainsKey(id))
+                throw new InvalidOperationException($"Plugin '{id}' is already loaded; unload it first.");
+            _loading = true;
+        }
+
+        try
+        {
+            var dir = Path.Combine(PluginsRoot, id);
+            // The id becomes a path segment: it must be a plain folder name, never a path.
+            if (id.Length == 0 || id.StartsWith('.') || id != Path.GetFileName(id) || !System.IO.Directory.Exists(dir))
+                return new PluginLoadResult(dir, null, PluginLoadStatus.Rejected, [$"no plugin folder named '{TextRules.ForDisplay(id, 150)}' is installed"], null);
+
+            var candidate = Inspect(dir, id);
+            return LoadCandidate(candidate);
+        }
+        finally
+        {
+            lock (_gate)
+                _loading = false;
+        }
+    }
+
     public PluginUnloadResult? Unload(string id)
     {
         ArgumentNullException.ThrowIfNull(id);
