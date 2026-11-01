@@ -17,7 +17,7 @@ namespace EliteDangerous.Spansh;
 /// isolated to <see cref="BuildRequest"/> and <see cref="Parse"/> so they are easy to reconcile
 /// against the live API — useful because the field names are covered by fixture tests, not a live call.
 /// </remarks>
-public sealed class SpanshClient : IDisposable
+public sealed partial class SpanshClient : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -124,11 +124,13 @@ public sealed class SpanshClient : IDisposable
     /// The shared submit-then-poll lifecycle every Spansh route endpoint uses: POST to start the job,
     /// then GET <c>results/{job}</c> until the supplied <paramref name="parsePoll"/> reports the job is
     /// done. Endpoint-specific bits — the submit request and the result shape — are the two delegates.
-    /// Never throws (cancellation excepted); failures come back as <see cref="SpanshRouteResult.Failure"/>.
+    /// Never throws (cancellation excepted); failures come back via the <c>fail</c> factory. Generic so
+    /// the non-route job endpoints (Road to Riches, exobiology, tourist) share one poll/retry budget.
     /// </summary>
-    private async Task<SpanshRouteResult> RunRouteJobAsync(
+    private async Task<TResult> RunJobAsync<TResult>(
         Func<CancellationToken, Task<HttpResponseMessage>> submit,
-        Func<string, (bool Done, SpanshRouteResult Result)> parsePoll,
+        Func<string, (bool Done, TResult Result)> parsePoll,
+        Func<string, TResult> fail,
         CancellationToken ct)
     {
         string jobId;
@@ -136,21 +138,21 @@ public sealed class SpanshClient : IDisposable
         {
             using var response = await SendWithRetryAsync(submit, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
-                return SpanshRouteResult.Failure($"HTTP {(int)response.StatusCode}");
+                return fail($"HTTP {(int)response.StatusCode}");
 
             var submitBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             using var submitDoc = JsonDocument.Parse(submitBody);
             if (ReadString(submitDoc.RootElement, "job") is not { Length: > 0 } id)
-                return SpanshRouteResult.Failure(ReadString(submitDoc.RootElement, "error") ?? "no job id returned");
+                return fail(ReadString(submitDoc.RootElement, "error") ?? "no job id returned");
             jobId = id;
         }
-        catch (JsonException ex) { return SpanshRouteResult.Failure("unparseable submit response: " + ex.Message); }
+        catch (JsonException ex) { return fail("unparseable submit response: " + ex.Message); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) { return SpanshRouteResult.Failure(ex.Message); }
+        catch (Exception ex) { return fail(ex.Message); }
 
         // The id goes into a URL path: "." / ".." survive escaping and would address another endpoint.
         if (jobId.Trim() is "." or "..")
-            return SpanshRouteResult.Failure("invalid job id returned");
+            return fail("invalid job id returned");
 
         // Poll the job to completion. "queued" / "running" means keep waiting; "ok" carries the route.
         var transientFailures = 0;
@@ -171,11 +173,11 @@ public sealed class SpanshClient : IDisposable
                     if (IsTransient(poll.StatusCode))
                     {
                         lastTransient = $"HTTP {(int)poll.StatusCode}";
-                        if (++transientFailures > _options.RoutePollRetries) return SpanshRouteResult.Failure(lastTransient);
+                        if (++transientFailures > _options.RoutePollRetries) return fail(lastTransient);
                         await BackOffAsync(poll, ct).ConfigureAwait(false);
                         continue;
                     }
-                    return SpanshRouteResult.Failure($"HTTP {(int)poll.StatusCode}");
+                    return fail($"HTTP {(int)poll.StatusCode}");
                 }
 
                 var pollBody = await poll.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -183,19 +185,25 @@ public sealed class SpanshClient : IDisposable
                 var (done, result) = parsePoll(pollBody);
                 if (done) return result;
             }
-            catch (JsonException ex) { return SpanshRouteResult.Failure("unparseable poll response: " + ex.Message); }
+            catch (JsonException ex) { return fail("unparseable poll response: " + ex.Message); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 // A network error or an HttpClient timeout: transient too, up to the same budget.
                 lastTransient = ex.Message;
-                if (++transientFailures > _options.RoutePollRetries) return SpanshRouteResult.Failure(lastTransient);
+                if (++transientFailures > _options.RoutePollRetries) return fail(lastTransient);
                 if (_options.TransientRetryDelay > TimeSpan.Zero) await Task.Delay(_options.TransientRetryDelay, ct).ConfigureAwait(false);
             }
         }
 
-        return SpanshRouteResult.Failure("route timed out");
+        return fail("route timed out");
     }
+
+    private Task<SpanshRouteResult> RunRouteJobAsync(
+        Func<CancellationToken, Task<HttpResponseMessage>> submit,
+        Func<string, (bool Done, SpanshRouteResult Result)> parsePoll,
+        CancellationToken ct)
+        => RunJobAsync(submit, parsePoll, SpanshRouteResult.Failure, ct);
 
     private static bool IsTransient(HttpStatusCode status)
         => status == HttpStatusCode.TooManyRequests || (int)status >= 500;
