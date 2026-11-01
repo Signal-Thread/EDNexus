@@ -52,14 +52,18 @@ public sealed class ColonisationSite
     /// against the current cargo hold so the caller can see what is already aboard.
     /// </summary>
     /// <param name="cargo">Cargo hold as commodity-name → tons, in any journal name form.</param>
-    public IReadOnlyList<ShoppingListItem> BuildShoppingList(IReadOnlyDictionary<string, int>? cargo = null)
+    /// <param name="carrier">Fleet-carrier stock, same shape; counted toward what is already sourced.</param>
+    public IReadOnlyList<ShoppingListItem> BuildShoppingList(
+        IReadOnlyDictionary<string, int>? cargo = null, IReadOnlyDictionary<string, int>? carrier = null)
     {
         var hold = BuildHoldLookup(cargo);
+        var stored = BuildHoldLookup(carrier);
         var list = new List<ShoppingListItem>();
         foreach (var r in Outstanding)
         {
             hold.TryGetValue(r.Symbol, out var inHold);
-            list.Add(new ShoppingListItem(r.Name, r.Required, r.Provided, r.Remaining, inHold));
+            stored.TryGetValue(r.Symbol, out var onCarrier);
+            list.Add(new ShoppingListItem(r.Name, r.Required, r.Provided, r.Remaining, inHold, onCarrier));
         }
         return list;
     }
@@ -83,16 +87,21 @@ public sealed class ColonisationSite
 /// caller can distinguish what still needs buying (<see cref="StillNeeded"/>) from what is being
 /// carried toward the requirement (<see cref="Carrying"/>).
 /// </summary>
-public sealed record ShoppingListItem(string Name, int Required, int Provided, int Remaining, int InHold)
+/// <param name="OnCarrier">Tons of this commodity stored in the fleet carrier.</param>
+public sealed record ShoppingListItem(
+    string Name, int Required, int Provided, int Remaining, int InHold, int OnCarrier = 0)
 {
-    /// <summary>Tons still to acquire after accounting for what is already aboard.</summary>
-    public int StillNeeded => Math.Max(0, Remaining - InHold);
+    /// <summary>Tons still to acquire after accounting for what is aboard and on the carrier.</summary>
+    public int StillNeeded => Math.Max(0, Remaining - InHold - OnCarrier);
 
     /// <summary>Tons in the hold that count toward this requirement (capped at the shortfall).</summary>
     public int Carrying => Math.Min(InHold, Remaining);
 
     /// <summary>True when the hold already covers the entire remaining requirement.</summary>
     public bool CoveredByHold => Remaining > 0 && InHold >= Remaining;
+
+    /// <summary>True when the hold and the carrier together already cover the remaining requirement.</summary>
+    public bool CoveredByStock => Remaining > 0 && InHold + OnCarrier >= Remaining;
 
     /// <summary>Delivery progress for this commodity, clamped to 0..1.</summary>
     public double Fraction => Required > 0 ? Math.Clamp((double)Provided / Required, 0, 1) : 1;

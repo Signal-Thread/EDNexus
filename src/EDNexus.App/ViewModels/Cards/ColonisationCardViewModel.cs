@@ -86,20 +86,23 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
         ColonisationSummary =
             $"{site.CompletedCount}/{site.Resources.Count} commodities · {site.TotalRemaining:N0} t remaining";
 
-        var list = site.BuildShoppingList(s.Cargo);
+        var list = site.BuildShoppingList(s.Cargo, Context.Host.CarrierCargo.Stock);
         var signature = site.MarketId + "|" + site.Progress.ToString("0.####") + "|"
-            + string.Join("|", list.Select(i => $"{i.Name}:{i.Remaining}:{i.InHold}"));
+            + string.Join("|", list.Select(i => $"{i.Name}:{i.Remaining}:{i.InHold}:{i.OnCarrier}"));
         if (signature == _signature) return;
         _signature = signature;
 
         ShoppingList.Clear();
         foreach (var i in list)
         {
-            var hold = i.InHold <= 0 ? ""
-                : i.CoveredByHold ? $"✓ {i.Carrying:N0} in hold"
-                : $"{i.Carrying:N0} in hold";
+            var parts = new List<string>(2);
+            if (i.InHold > 0) parts.Add($"{i.Carrying:N0} in hold");
+            if (i.OnCarrier > 0) parts.Add($"{i.OnCarrier:N0} on carrier");
+            var hold = parts.Count == 0 ? ""
+                : (i.CoveredByStock ? "✓ " : "") + string.Join(" · ", parts);
             ShoppingList.Add(new ShoppingLine(
-                i.Name, i.Remaining.ToString("N0"), i.StillNeeded.ToString("N0"), hold, i.InHold > 0, i.Fraction));
+                i.Name, i.Remaining.ToString("N0"), i.StillNeeded.ToString("N0"), hold,
+                i.InHold > 0 || i.OnCarrier > 0, i.Fraction));
         }
     }
 

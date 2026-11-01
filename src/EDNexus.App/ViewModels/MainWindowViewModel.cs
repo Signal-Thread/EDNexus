@@ -692,7 +692,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         {
             var content = OverlayContentBuilder.Build(
                 s, _host.Exobiology.CurrentBody, _host.Colonisation.ActiveSite, _boot.Settings.Route,
-                _host.Exobiology.ActiveScan);
+                _host.Exobiology.ActiveScan, _host.CarrierCargo.Stock);
             _boot.Overlay.Update(content);
         }
     }
