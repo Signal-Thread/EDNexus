@@ -82,7 +82,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             shopping => _boot.ApplyShoppingSettings(shopping),
             () => _boot.Settings.Goals,
             goals => _boot.ApplyGoals(goals));
-        Cards = new ObservableCollection<CardViewModel>
+        _allCards = new List<CardViewModel>
         {
             new LocationCardViewModel(_context),
             new ShipCardViewModel(_context),
@@ -105,10 +105,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             new RadioCardViewModel(_context),
         };
 
-        _context.FindToBuy = commodity => Cards.OfType<TradeCardViewModel>().FirstOrDefault()?.BeginBuySearch(commodity);
+        Cards = new ObservableCollection<CardViewModel>();
+        _context.FindToBuy = commodity => _allCards.OfType<TradeCardViewModel>().FirstOrDefault()?.BeginBuySearch(commodity);
 
         ApplySavedLayout();
-        foreach (var card in Cards) card.LayoutChanged += _ => SaveLayout();
+        foreach (var card in _allCards) card.LayoutChanged += _ => SaveLayout();
 
         DevMode = _boot.Dev.Enabled;
         UpdateJournalStatus();
@@ -127,8 +128,42 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         };
     }
 
-    /// <summary>The dashboard cards, in display order.</summary>
+    /// <summary>
+    /// The cards on the active workspace, in display order. This is what the dashboard binds to;
+    /// hidden cards stay in it (and in the settings list) so they can be shown again.
+    /// </summary>
     public ObservableCollection<CardViewModel> Cards { get; }
+
+    // Every card the app has, created once. Switching workspace only changes which of these are in
+    // Cards, so a card keeps its live state (and keeps updating) while off-screen.
+    private readonly List<CardViewModel> _allCards;
+    private List<Workspace> _workspaces = new();
+    private string _activeWorkspaceId = Workspace.DefaultId;
+
+    /// <summary>The workspaces (pages), in tab order. Never empty.</summary>
+    public IReadOnlyList<Workspace> Workspaces => _workspaces;
+
+    /// <summary>The workspace currently shown.</summary>
+    public Workspace ActiveWorkspace => WorkspaceLayout.Active(_workspaces, _activeWorkspaceId);
+
+    /// <summary>Raised after the workspace list or the active workspace changes.</summary>
+    public event Action? WorkspacesChanged;
+
+    /// <summary>
+    /// Show another workspace. Re-applies that page's arrangement to the existing card view models;
+    /// nothing is recreated, so card state survives the switch. Unknown ids are ignored.
+    /// </summary>
+    public void SelectWorkspace(string? id)
+    {
+        var target = _workspaces.FirstOrDefault(w => string.Equals(w.Id, id, StringComparison.OrdinalIgnoreCase));
+        if (target is null || string.Equals(target.Id, _activeWorkspaceId, StringComparison.OrdinalIgnoreCase)) return;
+
+        SyncActiveWorkspace();
+        _activeWorkspaceId = target.Id;
+        Rearrange(target.Cards);
+        SaveLayout();
+        WorkspacesChanged?.Invoke();
+    }
 
     /// <summary>
     /// The live Twitch stream-card publisher of the current host, for the settings dialog's preview
@@ -152,23 +187,37 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     // --- Dashboard layout: order, visibility, width and collapse, persisted per card. ---
 
+    // The cards on the active page: what reset and import operate on.
     private IEnumerable<CardDefaults> CardDefaults() => Cards.Select(c => new CardDefaults(c.Id, c.DefaultWidth));
 
+    private IEnumerable<CardDefaults> AllCardDefaults() => _allCards.Select(c => new CardDefaults(c.Id, c.DefaultWidth));
+
     /// <summary>
-    /// Reorder and configure the cards from the saved layout. Tolerant by design: a saved entry for
-    /// a card that no longer exists is dropped, and a card added since the layout was saved keeps
-    /// its defaults and lands at the end rather than vanishing.
+    /// Resolve the saved workspaces (migrating a pre-workspace layout into a single default one) and
+    /// show the active one. Tolerant by design: a saved entry for a card that no longer exists is
+    /// dropped, and a card added since the layout was saved keeps its defaults and lands at the end
+    /// of the first workspace rather than vanishing.
     /// </summary>
     private void ApplySavedLayout()
     {
-        var layout = DashboardLayout.Merge(CardDefaults(), _boot.Settings.Dashboard.Cards);
-        Rearrange(layout);
+        var dashboard = _boot.Settings.Dashboard;
+        _workspaces = WorkspaceLayout.Resolve(AllCardDefaults(), dashboard).ToList();
+        var active = WorkspaceLayout.Active(_workspaces, dashboard?.ActiveWorkspaceId);
+        _activeWorkspaceId = active.Id;
+        Rearrange(active.Cards);
+    }
+
+    /// <summary>Copy the on-screen arrangement back into the active workspace.</summary>
+    private void SyncActiveWorkspace()
+    {
+        if (_workspaces.Count == 0) return;
+        ActiveWorkspace.Cards = CurrentLayout().ToList();
     }
 
     /// <summary>Put <see cref="Cards"/> into the given order and push each card's settings onto it.</summary>
     private void Rearrange(IReadOnlyList<CardLayout> layout)
     {
-        var byId = Cards.ToDictionary(c => c.Id, StringComparer.OrdinalIgnoreCase);
+        var byId = _allCards.ToDictionary(c => c.Id, StringComparer.OrdinalIgnoreCase);
 
         var ordered = new List<CardViewModel>();
         foreach (var entry in layout.OrderBy(c => c.Order))
@@ -196,7 +245,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }).ToList();
 
     /// <summary>Snapshot the current arrangement and persist it.</summary>
-    private void SaveLayout() => _boot.ApplyDashboardLayout(CurrentLayout());
+    private void SaveLayout()
+    {
+        SyncActiveWorkspace();
+        _boot.ApplyWorkspaces(_workspaces, _activeWorkspaceId);
+    }
 
     /// <summary>Move a card one place earlier in the flow.</summary>
     [RelayCommand]
@@ -670,7 +723,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         _host = host;
         _hostFailed = false;
-        foreach (var card in Cards)
+        foreach (var card in _allCards)
         {
             card.Reset();
             card.ClearFault();
@@ -692,7 +745,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         LastUpdated = s.LastUpdated == default ? "—" : s.LastUpdated.LocalDateTime.ToString("HH:mm:ss");
 
         // One card throwing on an odd state must not take the dashboard down on every 250 ms tick.
-        foreach (var card in Cards) card.TryUpdate(s, OnCardUpdateFailed);
+        // Every card, not just the ones on the active workspace: this is what keeps their state live
+        // across a workspace switch (hidden cards were always updated too).
+        foreach (var card in _allCards) card.TryUpdate(s, OnCardUpdateFailed);
 
         if (_boot.Settings.Overlay.Enabled)
         {

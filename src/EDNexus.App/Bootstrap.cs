@@ -105,6 +105,16 @@ public sealed class Bootstrap
         Store.Save(Settings);
     }
 
+    /// <summary>Persist the workspaces and which one is active.</summary>
+    public void ApplyWorkspaces(IReadOnlyList<Workspace> workspaces, string activeId)
+    {
+        Settings.Dashboard.Workspaces = workspaces.ToList();
+        Settings.Dashboard.ActiveWorkspaceId = activeId;
+        // Mirror the first workspace into the legacy list so an older build still finds a layout.
+        Settings.Dashboard.Cards = workspaces.Count > 0 ? workspaces[0].Cards.ToList() : new();
+        Store.Save(Settings);
+    }
+
     /// <summary>Persist the pinned Odyssey suit/weapon upgrade (null id clears the pin).</summary>
     public void ApplyOnFootPin(string? kind, string? id, int grade)
     {
