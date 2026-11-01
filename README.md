@@ -146,6 +146,7 @@ that is not listed here.
 | Discord Rich Presence | Your own Discord client (local IPC, not an upload by EDNexus) | When enabled in Settings | System/ship/activity; options hide the system and the commander name |
 | Colonisation lookups (read) | Raven Colonial | When you dock at a construction depot, unless switched off in Settings → Data reporting | The depot's system name and market id, then the matched project's id |
 | Colonisation deliveries (write) | Raven Colonial | **Opt-in, default off**; each live delivery you make at a depot that has a shared project, and only while the lookup above is also on | **Your commander name**, the project id, and the commodities and tons you delivered (see below) |
+| Exobiology points of interest | EDAstro (Galactic Exploration Catalog, `edastro.com/gec/json/all`) | **Opt-in**, once per cache lifetime when a POI lookup is requested | A plain request for the public POI catalogue; no commander, system or journal data is sent. Content is CC BY-NC-SA 3.0 |
 | Route & market search | Spansh, EDSM | When you run a search | The search/route parameters (systems, ranges, commodities) |
 | News | Galnet | When the Galnet card refreshes | A plain request for the public RSS feed |
 | Update check | GitHub (api.github.com / github.com) | Only if **Automatically download updates on startup** is on, or you press **Check for updates now** | A request for the latest release; no identifying data and no token is sent |
