@@ -134,7 +134,9 @@ public sealed class PluginBridge : IDisposable
             events ?? (IPluginEvents)new DeniedPluginEvents(manifest.Id),
             view,
             view ?? (IReadOnlyCommanderState)new DeniedCommanderState(manifest.Id),
-            new DeniedPluginStorage(manifest.Id),
+            granted.Contains(PluginCapabilities.Storage) && !string.IsNullOrEmpty(_options.PluginsRoot)
+                ? new SandboxedPluginStorage(_options.PluginsRoot, manifest.Id)
+                : new DeniedPluginStorage(manifest.Id),
             new DeniedUiRegistry(manifest.Id));
     }
 
@@ -172,6 +174,12 @@ public sealed class PluginBridgeOptions
     /// <c>EngineHost</c> as <c>reportingSuppressed</c>.
     /// </summary>
     public Func<bool>? IsSimulated { get; init; }
+
+    /// <summary>
+    /// The plugins root under which each plugin's sandboxed <c>&lt;id&gt;/data</c> folder lives.
+    /// When unset, storage stays denied even for plugins granted <c>storage</c>.
+    /// </summary>
+    public string? PluginsRoot { get; init; }
 
     /// <summary>
     /// Receives every exception a plugin handler throws, tagged with the plugin's id, so the host
