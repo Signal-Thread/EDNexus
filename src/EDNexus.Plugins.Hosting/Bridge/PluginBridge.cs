@@ -134,7 +134,9 @@ public sealed class PluginBridge : IDisposable
             events ?? (IPluginEvents)new DeniedPluginEvents(manifest.Id),
             view,
             view ?? (IReadOnlyCommanderState)new DeniedCommanderState(manifest.Id),
-            new DeniedPluginStorage(manifest.Id),
+            granted.Contains(PluginCapabilities.Storage) && !string.IsNullOrEmpty(_options.PluginsRoot)
+                ? new RevocablePluginStorage(new SandboxedPluginStorage(_options.PluginsRoot, manifest.Id), manifest.Id)
+                : new DeniedPluginStorage(manifest.Id),
             new DeniedUiRegistry(manifest.Id));
     }
 
@@ -172,6 +174,12 @@ public sealed class PluginBridgeOptions
     /// <c>EngineHost</c> as <c>reportingSuppressed</c>.
     /// </summary>
     public Func<bool>? IsSimulated { get; init; }
+
+    /// <summary>
+    /// The plugins root under which each plugin's sandboxed <c>&lt;id&gt;/data</c> folder lives.
+    /// When unset, storage stays denied even for plugins granted <c>storage</c>.
+    /// </summary>
+    public string? PluginsRoot { get; init; }
 
     /// <summary>
     /// Receives every exception a plugin handler throws, tagged with the plugin's id, so the host
@@ -252,10 +260,11 @@ public sealed class PluginBridgeSession : IDisposable, IPluginSessionControl
     public IReadOnlyCommanderState State { get; }
 
     /// <summary>
-    /// The plugin's storage, for <see cref="IPluginContext.Storage"/>. The bridge has no storage
-    /// backend yet, so this always refuses (<see cref="UnauthorizedAccessException"/>) rather than
-    /// letting a context factory hand the plugin a stub that silently discards its data; a real
-    /// implementation replaces it for plugins granted <see cref="PluginCapabilities.Storage"/>.
+    /// The plugin's storage, for <see cref="IPluginContext.Storage"/>. A sandboxed folder under
+    /// <see cref="PluginBridgeOptions.PluginsRoot"/> for plugins granted
+    /// <see cref="PluginCapabilities.Storage"/>; otherwise (not granted, or no root configured) every
+    /// call refuses with <see cref="UnauthorizedAccessException"/> rather than silently discarding
+    /// data. Revoked (same refusal) when the session is disposed.
     /// </summary>
     public IPluginStorage Storage { get; }
 
@@ -295,5 +304,6 @@ public sealed class PluginBridgeSession : IDisposable, IPluginSessionControl
     {
         _dispatcher?.Dispose();
         _view?.Revoke();
+        (Storage as RevocablePluginStorage)?.Revoke();
     }
 }

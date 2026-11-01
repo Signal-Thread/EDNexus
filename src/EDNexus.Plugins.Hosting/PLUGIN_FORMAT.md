@@ -185,7 +185,18 @@ What the consent screen has to say, per capability:
 | `events` | Every journal event, as it happens or is replayed, **including the commander's name and credit balance** (`LoadGame`, `Commander`, `Statistics`) and everything else the game logs (location, ship, cargo, materials, missions). Data-equivalent to `state`. |
 | `state` | The commander's **in-game name and credit balance**, current system, body, station, ship, cargo and materials, as of the last completed event. There is no narrower grant for the name or the balance. |
 | `network` | Not enforceable in-process. It is a declaration that the plugin phones home; **with `events` or `state` it can send all of the above off the machine.** Say so when the two are requested together. |
-| `storage`, `ui.dashboard`, `ui.overlay` | Reserved: the bridge has no storage backend or UI contribution points yet, so they currently refuse every call (`PluginBridgeSession.Storage` / `.Ui`). |
+| `storage` | Lets the plugin save its own key/value data in `<plugins root>/<id>/data/` (see below). Implemented in the bridge, but the host does not yet configure a plugins root for it (`PluginBridgeOptions.PluginsRoot`), so until that is wired every storage call is refused. |
+| `ui.dashboard`, `ui.overlay` | Reserved: the bridge has no UI contribution points yet, so they currently refuse every call (`PluginBridgeSession.Ui`). |
+
+**Storage contract** (`IPluginStorage`). Keys are 1-100 characters from `A-Z a-z 0-9 . _ -` and are
+**case-insensitive** (`Foo` and `foo` are the same key). Values are strings of valid Unicode, at most
+1 MiB of UTF-8 each (a lone surrogate is rejected, not substituted). Per plugin: at most 256 keys and
+8 MiB in total. Failures: an invalid key or value throws `ArgumentException`; exceeding the quota or any
+IO error throws `IOException`; an unset key reads as `null`, but a value that exists and cannot be read
+throws (`IOException`/`UnauthorizedAccessException`) instead of reading as unset. `ReadJson` returns
+`default` for missing or malformed JSON but lets those IO errors through. Storage stops working once
+the plugin is unloaded, and a plugin update that replaces the plugin folder does not yet preserve
+`data/`.
 
 **Developer mode.** Developer mode feeds the engine fabricated events. A plugin that **declares**
 `network` (whether or not it is granted: it cannot be enforced) never sees them: its events are
