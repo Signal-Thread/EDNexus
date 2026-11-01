@@ -59,6 +59,27 @@
       <Setter Property="Padding" Value="8,2" />
       <Setter Property="MinWidth" Value="0" />
     </Style>
+    <!-- Selection is neutral: red and yellow are reserved for due status. A raised fill with an amber left
+         edge, kept the same on hover so it never turns into the accent colour. -->
+    <Style Selector="ListBoxItem">
+      <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Surface100}" />
+      <Setter Property="Foreground" Value="{StaticResource Ink}" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SurfaceRaised}" />
+      <Setter Property="Foreground" Value="{StaticResource Ink}" />
+      <Setter Property="BorderBrush" Value="{StaticResource AmberBrush}" />
+      <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SurfaceRaised}" />
+    </Style>
+    <Style Selector="ListBoxItem:selected:focus /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SurfaceRaised}" />
+    </Style>
     <Style Selector="TextBlock.sectionLabel">
       <Setter Property="Foreground" Value="{StaticResource InkDim}" />
       <Setter Property="FontSize" Value="11" />
@@ -100,10 +121,10 @@
             <DataTemplate x:DataType="vm:GoalRow">
               <Border Classes="goalEdge" Classes.soon="{Binding IsDueSoon}" Classes.overdue="{Binding IsOverdue}"
                       Padding="8,2" Margin="0,2">
-                <StackPanel Classes="dimmable" Classes.done="{Binding Goal.IsDone}">
+                <StackPanel Classes="dimmable" Classes.done="{Binding IsDone}">
                   <Grid ColumnDefinitions="*,Auto">
                     <TextBlock Grid.Column="0" Text="{Binding Title}" Foreground="{StaticResource Ink}" FontSize="13"
-                               TextWrapping="Wrap" Classes="stepText" Classes.done="{Binding Goal.IsDone}" />
+                               TextWrapping="Wrap" Classes="stepText" Classes.done="{Binding IsDone}" />
                     <TextBlock Grid.Column="1" Text="{Binding ProgressText}" Foreground="{StaticResource InkDim}"
                                FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
                   </Grid>
@@ -124,10 +145,10 @@
             <DataTemplate x:DataType="vm:GoalRow">
               <Border Classes="goalEdge" Classes.soon="{Binding IsDueSoon}" Classes.overdue="{Binding IsOverdue}"
                       Padding="8,2" Margin="0,2">
-                <StackPanel Classes="dimmable" Classes.done="{Binding Goal.IsDone}">
+                <StackPanel Classes="dimmable" Classes.done="{Binding IsDone}">
                   <Grid ColumnDefinitions="*,Auto">
                     <TextBlock Grid.Column="0" Text="{Binding Title}" Foreground="{StaticResource Ink}" FontSize="13"
-                               TextWrapping="Wrap" Classes="stepText" Classes.done="{Binding Goal.IsDone}" />
+                               TextWrapping="Wrap" Classes="stepText" Classes.done="{Binding IsDone}" />
                     <TextBlock Grid.Column="1" Text="{Binding ProgressText}" Foreground="{StaticResource InkDim}"
                                FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
                   </Grid>
@@ -222,11 +243,8 @@
               <Button Classes="action" Content="Focus on this goal"
                       IsEnabled="{Binding Selected.CanFocus}"
                       Command="{Binding FocusCommand}" CommandParameter="{Binding Selected}" />
-              <Button Classes="action" Content="Mark done"
-                      IsVisible="{Binding !Selected.Goal.IsDone}"
-                      Command="{Binding ToggleGoalCommand}" CommandParameter="{Binding Selected}" />
-              <Button Classes="action" Content="Reopen"
-                      IsVisible="{Binding Selected.Goal.IsDone}"
+              <!-- Label comes from the row (rebuilt after every toggle), not from the plain model object. -->
+              <Button Classes="action" Content="{Binding Selected.DoneActionText}"
                       Command="{Binding ToggleGoalCommand}" CommandParameter="{Binding Selected}" />
               <Button Classes="action" Content="Delete goal" Foreground="{StaticResource Bad}"
                       Command="{Binding DeleteGoalCommand}" CommandParameter="{Binding Selected}" />

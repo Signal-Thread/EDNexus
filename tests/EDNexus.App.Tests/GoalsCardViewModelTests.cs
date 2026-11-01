@@ -313,6 +313,26 @@ public sealed class GoalsCardViewModelTests
     }
 
     [Fact]
+    public void RowDoneState_AndButtonLabel_FollowToggleGoalAfterTheRebuild()
+    {
+        var card = Card();
+        var open = card.ActiveGoals.Single(r => r.Goal.Id == "g3");
+        Assert.False(open.IsDone);
+        Assert.Equal("Mark done", open.DoneActionText);
+
+        card.ToggleGoal(open);
+        var done = card.DoneGoals.Single(r => r.Goal.Id == "g3");
+        Assert.True(done.IsDone);
+        Assert.Equal("Reopen", done.DoneActionText);
+        Assert.False(done.CanFocus);
+
+        card.Selected = done;
+        card.ToggleGoal(card.Selected);
+        Assert.False(card.Selected!.IsDone);
+        Assert.Equal("Mark done", card.Selected.DoneActionText);
+    }
+
+    [Fact]
     public void SelectedSteps_FollowTheSelectedGoal_NotTheFocusedOne()
     {
         var card = Card();

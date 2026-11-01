@@ -396,7 +396,17 @@ public sealed class GoalRow
         State = DueStatus.Effective(goal, now);
         OwnState = DueStatus.For(goal.Due, goal.IsDone, now);
         IsActive = isActive;
+        IsDone = goal.IsDone;
     }
+
+    /// <summary>
+    /// Whether the goal was done when this row was built. Rows are rebuilt after every edit, so bind to this
+    /// (not <c>Goal.IsDone</c>: the model raises no change notifications).
+    /// </summary>
+    public bool IsDone { get; }
+
+    /// <summary>Label of the window's done/reopen button for this goal.</summary>
+    public string DoneActionText => IsDone ? "Reopen" : "Mark done";
 
     /// <summary>The goal this row shows.</summary>
     public Goal Goal { get; }
@@ -426,7 +436,7 @@ public sealed class GoalRow
     public bool IsActive { get; }
 
     /// <summary>Whether "Focus on this goal" applies: not already focused, and not done.</summary>
-    public bool CanFocus => !IsActive && !Goal.IsDone;
+    public bool CanFocus => !IsActive && !IsDone;
 
     /// <summary>Red marker from the effective <see cref="State"/>.</summary>
     public bool IsOverdue => State == DueState.Overdue;
