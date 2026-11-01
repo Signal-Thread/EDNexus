@@ -66,12 +66,25 @@ tables remain the better primary source if access can be arranged.
 
 ## POI data (EDAstro Galactic Exploration Catalog)
 
-`ExobiologyPoiService` / `EdsmClient.GetGecPoisAsync` read `https://edastro.com/gec/json/all` (the
-documented GEC API on [edastro.com/api-details.html](https://edastro.com/api-details.html); EDSM's own
-galactic-mapping endpoint is behind a Cloudflare challenge). Terms found: API is rate limited (100
-requests per 15 minutes); site content is **CC BY-NC-SA 3.0** (footer of edastro.com/gec/), so POI text and
-links must be attributed and used non-commercially; this is another reason to settle EDNexus's licence
-(open action 5). Nothing is bundled: the catalogue is fetched opt-in, trimmed, cached and never committed.
+`ExobiologyPoiService` / `EdAstroClient.GetPointsOfInterestAsync` read `https://edastro.com/gec/json/all`
+(the documented GEC API on [edastro.com/api-details.html](https://edastro.com/api-details.html)).
+EDSM serves the same data shape at `https://www.edsm.net/en/galactic-mapping/json`; a single `curl` with a
+plain User-Agent on 2026-11-01 got `HTTP 403` with `Cf-Mitigated: challenge` (Cloudflare) from that URL,
+whereas EDAstro answered `200 application/json` with `RateLimit-Limit: 100`. That is one probe from one
+network; it says nothing about the `api-v1/*` endpoints `EdsmClient` already uses, which were not re-tested.
+
+Terms found: the API is rate limited (documented 100 requests per 15 minutes); site content is
+**CC BY-NC-SA 3.0** (footer of edastro.com/gec/).
+
+**OPEN OWNER DECISION - licence.** BY-NC-SA requires attribution, non-commercial use, and ShareAlike on
+adaptations; EDNexus is packaged `LicenseRef-proprietary`. Fetching and caching a user's own copy on their
+disk is not redistribution, but displaying it in a shipped product, or bundling any of it, is the question.
+Not decided here. Until it is, the data is opt-in, never bundled or committed, stored trimmed (summaries
+capped at 300 characters, descriptions and images dropped), and the code exposes
+`ExobiologyPoiService.AttributionText` / `AttributionUrl` that any UI must show. Alternatives for the
+owner: obtain EDAstro's permission, show only a link to the POI page, or drop the feature.
+Related: the Radicoida 100 m value and the wiki revision / journal analysis above are not reproducible from
+the repo (no script committed); treat them as maintainer notes, not verifiable provenance.
 
 ## Candidate sources for future work
 
