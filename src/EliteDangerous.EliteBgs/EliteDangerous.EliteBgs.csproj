@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Standalone, application-agnostic client for the EliteBGS API (https://elitebgs.app/api/ebgs/v5).
+    Like EliteDangerous.Edsm and EliteDangerous.Spansh it has NO dependency on EDNexus: it GETs a
+    faction or system, parses the reply defensively into plain records, and caches the result briefly.
+    Deciding when to call it (and whether the commander has opted in) is the caller's job.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <PackageId>EliteDangerous.EliteBgs</PackageId>
+    <Description>A reusable .NET client for Elite Dangerous faction influence and background-simulation states from the EliteBGS (elitebgs.app) API.</Description>
+    <Authors>Signal &amp; Thread LLC</Authors>
+    <Version Condition="'$(Version)' == ''">0.0.1</Version>
+  </PropertyGroup>
+
+</Project>

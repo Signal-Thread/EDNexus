@@ -45,6 +45,9 @@ public sealed class AppSettings
     /// <summary>Colonisation card options (currently the shared-project lookup opt-out).</summary>
     public ColonisationSettings Colonisation { get; set; } = new();
 
+    /// <summary>EliteBGS (faction influence read-back) opt-in. Off by default.</summary>
+    public EliteBgsSettings EliteBgs { get; set; } = new();
+
     /// <summary>The unified shopping list: manual lines and which sources are linked in.</summary>
     public ShoppingListSettings Shopping { get; set; } = new();
 

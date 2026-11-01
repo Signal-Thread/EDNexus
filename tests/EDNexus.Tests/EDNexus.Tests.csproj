@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EDNexus.Core\EDNexus.Core.csproj" />
+    <ProjectReference Include="..\..\src\EliteDangerous.EliteBgs\EliteDangerous.EliteBgs.csproj" />
   </ItemGroup>
 
 </Project>
