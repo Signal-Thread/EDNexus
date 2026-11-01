@@ -106,7 +106,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         };
 
         Cards = new ObservableCollection<CardViewModel>();
-        _context.FindToBuy = commodity => _allCards.OfType<TradeCardViewModel>().FirstOrDefault()?.BeginBuySearch(commodity);
+        _context.FindToBuy = FindToBuy;
 
         ApplySavedLayout();
         foreach (var card in _allCards) card.LayoutChanged += _ => SaveLayout();
@@ -137,14 +137,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     // Every card the app has, created once. Switching workspace only changes which of these are in
     // Cards, so a card keeps its live state (and keeps updating) while off-screen.
     private readonly List<CardViewModel> _allCards;
-    private List<Workspace> _workspaces = new();
-    private string _activeWorkspaceId = Workspace.DefaultId;
+    private WorkspaceSession _session = null!; // set by ApplySavedLayout() in the constructor
 
-    /// <summary>The workspaces (pages), in tab order. Never empty.</summary>
-    public IReadOnlyList<Workspace> Workspaces => _workspaces;
+    /// <summary>The workspaces (pages), in tab order. Never empty. Read-only: change them through this view model.</summary>
+    public IReadOnlyList<Workspace> Workspaces => _session.Workspaces;
 
     /// <summary>The workspace currently shown.</summary>
-    public Workspace ActiveWorkspace => WorkspaceLayout.Active(_workspaces, _activeWorkspaceId);
+    public Workspace ActiveWorkspace => _session.Active;
 
     /// <summary>Raised after the workspace list or the active workspace changes.</summary>
     public event Action? WorkspacesChanged;
@@ -152,17 +151,37 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Show another workspace. Re-applies that page's arrangement to the existing card view models;
     /// nothing is recreated, so card state survives the switch. Unknown ids are ignored.
+    /// Must be called on the UI thread (it rebuilds <see cref="Cards"/>, which the view is bound to).
     /// </summary>
     public void SelectWorkspace(string? id)
     {
-        var target = _workspaces.FirstOrDefault(w => string.Equals(w.Id, id, StringComparison.OrdinalIgnoreCase));
-        if (target is null || string.Equals(target.Id, _activeWorkspaceId, StringComparison.OrdinalIgnoreCase)) return;
+        Dispatcher.UIThread.VerifyAccess();
+        if (_session.Select(id, CurrentLayout()) is not { } layout) return;
 
-        SyncActiveWorkspace();
-        _activeWorkspaceId = target.Id;
-        Rearrange(target.Cards);
+        Rearrange(layout);
         SaveLayout();
         WorkspacesChanged?.Invoke();
+    }
+
+    // "Find to buy" drives the Trade card, which may be on another page (or none). Bring it on screen
+    // first, otherwise the search would run on a card nobody can see.
+    private void FindToBuy(string commodity)
+    {
+        var trade = _allCards.OfType<TradeCardViewModel>().FirstOrDefault();
+        if (trade is null) return;
+
+        if (!Cards.Contains(trade))
+        {
+            if (_session.FindContaining(trade.Id) is { } home) SelectWorkspace(home.Id);
+            else
+            {
+                // On no page at all: put it on this one rather than lose the request.
+                WorkspaceLayout.SetMembership(_session.Active, new CardDefaults(trade.Id, trade.DefaultWidth), true);
+                Rearrange(_session.Active.Cards);
+            }
+        }
+
+        trade.BeginBuySearch(commodity);
     }
 
     /// <summary>
@@ -200,18 +219,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// </summary>
     private void ApplySavedLayout()
     {
-        var dashboard = _boot.Settings.Dashboard;
-        _workspaces = WorkspaceLayout.Resolve(AllCardDefaults(), dashboard).ToList();
-        var active = WorkspaceLayout.Active(_workspaces, dashboard?.ActiveWorkspaceId);
-        _activeWorkspaceId = active.Id;
-        Rearrange(active.Cards);
-    }
-
-    /// <summary>Copy the on-screen arrangement back into the active workspace.</summary>
-    private void SyncActiveWorkspace()
-    {
-        if (_workspaces.Count == 0) return;
-        ActiveWorkspace.Cards = CurrentLayout().ToList();
+        _session = new WorkspaceSession(AllCardDefaults(), _boot.Settings.Dashboard);
+        Rearrange(_session.Active.Cards);
     }
 
     /// <summary>Put <see cref="Cards"/> into the given order and push each card's settings onto it.</summary>
@@ -247,8 +256,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>Snapshot the current arrangement and persist it.</summary>
     private void SaveLayout()
     {
-        SyncActiveWorkspace();
-        _boot.ApplyWorkspaces(_workspaces, _activeWorkspaceId);
+        _session.WriteTo(_boot.Settings.Dashboard, CurrentLayout());
+        _boot.ApplyWorkspaces();
     }
 
     /// <summary>Move a card one place earlier in the flow.</summary>
@@ -271,7 +280,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// Drop a card into a column, above <paramref name="beforeId"/> or at the bottom of that column
     /// when it is null. <paramref name="renderedColumns"/> is where every visible card currently
     /// sits on screen: the cards still on automatic placement are fixed there first, so arranging
-    /// one card does not shuffle the ones the commander has already looked at.
+    /// one card does not shuffle the ones the commander has already looked at. UI thread only.
     /// </summary>
     public void PlaceCard(string id, int column, string? beforeId, IReadOnlyDictionary<string, int> renderedColumns)
     {

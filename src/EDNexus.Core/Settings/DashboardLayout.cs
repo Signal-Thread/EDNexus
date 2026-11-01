@@ -41,6 +41,13 @@ public sealed class DashboardSettings
     /// (see <see cref="WorkspaceLayout.Resolve"/>) and thereafter kept as a mirror of the first
     /// workspace, so the file stays readable by an older build.
     /// </summary>
+    /// <remarks>
+    /// Downgrade caveat: an older build does not know <see cref="Workspaces"/> and drops it when it
+    /// rewrites the file, keeping only <see cref="Cards"/>. Coming back to a newer build then re-seeds
+    /// one default workspace from <see cref="Cards"/>, so extra pages, their names and the active page
+    /// are lost. There is no way to detect this afterwards (the older build also drops any marker we
+    /// could add), so it is documented rather than repaired; the first page's layout survives.
+    /// </remarks>
     public List<CardLayout> Cards { get; set; } = new();
 
     /// <summary>

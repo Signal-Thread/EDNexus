@@ -11,6 +11,15 @@ namespace EDNexus.Core.Settings;
 /// </remarks>
 public static class WorkspaceLayout
 {
+    /// <summary>Longest workspace name kept; longer ones are cut (tabs have limited room).</summary>
+    public const int MaxNameLength = 40;
+
+    private static string CleanName(string? name)
+    {
+        var t = (name ?? "").Trim();
+        return t.Length > MaxNameLength ? t[..MaxNameLength].TrimEnd() : t;
+    }
+
     /// <summary>
     /// Produce the effective workspaces for <paramref name="known"/> from <paramref name="saved"/>.
     /// Always returns at least one workspace.
@@ -21,7 +30,9 @@ public static class WorkspaceLayout
     /// dropped and duplicate ids keep their first occurrence. Unknown cards are dropped from every
     /// workspace. A card that appears on no workspace (new in this release) is added to the first
     /// workspace with its shipped defaults; cards deliberately left off other pages are never
-    /// auto-added there.
+    /// auto-added there. A card on no page at all (removed from every one) is indistinguishable from
+    /// a new card and so comes back on the first page; the UI should not offer removing a card from
+    /// its last page. Names are trimmed and capped at <see cref="MaxNameLength"/>.
     /// </remarks>
     public static IReadOnlyList<Workspace> Resolve(IEnumerable<CardDefaults> known, DashboardSettings? saved)
     {
@@ -68,9 +79,9 @@ public static class WorkspaceLayout
             result.Add(new Workspace
             {
                 Id = w.Id,
-                Name = string.IsNullOrWhiteSpace(w.Name)
-                    ? (i == 0 ? Workspace.DefaultName : $"Workspace {i + 1}")
-                    : w.Name,
+                Name = CleanName(w.Name) is { Length: > 0 } clean
+                    ? clean
+                    : (i == 0 ? Workspace.DefaultName : $"Workspace {i + 1}"),
                 Cards = DashboardLayout.Merge(pageKnown, entries).ToList(),
             });
         }
@@ -78,10 +89,19 @@ public static class WorkspaceLayout
         return result;
     }
 
-    /// <summary>The workspace to show: the saved active one if it still exists, otherwise the first.</summary>
-    public static Workspace Active(IReadOnlyList<Workspace> workspaces, string? activeId)
+    /// <summary>
+    /// The workspace to show: the saved active one if it still exists, otherwise the first. Null only
+    /// for an empty list (<see cref="Resolve"/> never returns one).
+    /// </summary>
+    public static Workspace? Active(IReadOnlyList<Workspace> workspaces, string? activeId)
         => workspaces.FirstOrDefault(w => string.Equals(w.Id, activeId, StringComparison.OrdinalIgnoreCase))
-           ?? workspaces[0];
+           ?? workspaces.FirstOrDefault();
+
+    private static bool NameTaken(IEnumerable<Workspace> workspaces, string name, Workspace? except = null)
+        => workspaces.Any(w => !ReferenceEquals(w, except) && string.Equals(w.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The next free order value on a page: one past the highest, so removals can't cause a clash.</summary>
+    private static int NextOrder(Workspace w) => w.Cards.Count == 0 ? 0 : w.Cards.Max(c => c.Order) + 1;
 
     /// <summary>
     /// Add a new, empty workspace and return it. The id is generated, never derived from the name,
@@ -96,19 +116,39 @@ public static class WorkspaceLayout
         var workspace = new Workspace
         {
             Id = id,
-            Name = string.IsNullOrWhiteSpace(name) ? $"Workspace {workspaces.Count + 1}" : name.Trim(),
+            Name = UniqueName(workspaces, CleanName(name)),
         };
         workspaces.Add(workspace);
         return workspace;
     }
 
-    /// <summary>Rename a workspace. Blank names are refused (returns false).</summary>
+    /// <summary>A name not used by another page: blank becomes "Workspace n", a clash gets " 2", " 3"…</summary>
+    private static string UniqueName(List<Workspace> workspaces, string name)
+    {
+        if (name.Length == 0)
+        {
+            for (var n = workspaces.Count + 1; ; n++)
+                if (!NameTaken(workspaces, $"Workspace {n}")) return $"Workspace {n}";
+        }
+
+        if (!NameTaken(workspaces, name)) return name;
+        for (var n = 2; ; n++)
+        {
+            var suffix = $" {n}";
+            var candidate = (name.Length + suffix.Length > MaxNameLength ? name[..(MaxNameLength - suffix.Length)] : name) + suffix;
+            if (!NameTaken(workspaces, candidate)) return candidate;
+        }
+    }
+
+    /// <summary>Rename a workspace. Blank names and names another page already uses are refused (returns false); long names are cut.</summary>
     public static bool Rename(IEnumerable<Workspace> workspaces, string id, string? name)
     {
-        if (string.IsNullOrWhiteSpace(name)) return false;
-        var w = workspaces.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase));
-        if (w is null) return false;
-        w.Name = name.Trim();
+        var clean = CleanName(name);
+        if (clean.Length == 0) return false;
+        var list = workspaces.ToList();
+        var w = list.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase));
+        if (w is null || NameTaken(list, clean, w)) return false;
+        w.Name = clean;
         return true;
     }
 
@@ -132,7 +172,7 @@ public static class WorkspaceLayout
             target.Cards.Add(new CardLayout
             {
                 Id = card.Id,
-                Order = target.Cards.Count,
+                Order = NextOrder(target),
                 Visible = card.Visible,
                 Width = card.Width,
                 Collapsed = card.Collapsed,
@@ -156,7 +196,7 @@ public static class WorkspaceLayout
             workspace.Cards.Add(new CardLayout
             {
                 Id = card.Id,
-                Order = workspace.Cards.Count == 0 ? 0 : workspace.Cards.Max(c => c.Order) + 1,
+                Order = NextOrder(workspace),
                 Width = card.DefaultWidth,
             });
             return true;
