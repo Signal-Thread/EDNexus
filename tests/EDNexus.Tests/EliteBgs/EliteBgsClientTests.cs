@@ -67,10 +67,12 @@ public class EliteBgsClientTests
     {
         public DateTimeOffset Now { get; set; } = new(2026, 11, 1, 0, 0, 0, TimeSpan.Zero);
         public override DateTimeOffset GetUtcNow() => Now;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => Now.UtcTicks;
     }
 
     private static EliteBgsClient NewClient(Handler h, FakeClock? clock = null, Func<bool>? gate = null,
-        TimeSpan? maxRetryAfter = null) =>
+        TimeSpan? maxRetryAfter = null, int maxCache = 256, HttpClient? http = null, TimeSpan? maxCooldown = null) =>
         new(new EliteBgsClientOptions
         {
             SoftwareName = "EDNexus.Tests",
@@ -79,7 +81,314 @@ public class EliteBgsClientTests
             IsEnabled = gate,
             MaxRetryAfter = maxRetryAfter ?? TimeSpan.FromSeconds(5),
             TransientRetryDelay = TimeSpan.Zero,
+            MaxCacheEntries = maxCache,
+            MaxCooldown = maxCooldown ?? TimeSpan.FromMinutes(15),
+        }, http ?? new HttpClient(h));
+
+    [Fact]
+    public async Task A_throwing_gate_is_treated_as_disabled()
+    {
+        var h = new Handler(_ => Json(SystemJson));
+        using var client = NewClient(h, gate: () => throw new InvalidOperationException("settings disposed"));
+
+        var result = await client.GetSystemAsync("Sol");
+
+        Assert.False(result.IsOk);
+        Assert.Equal(0, h.Calls);
+    }
+
+    [Fact]
+    public async Task A_huge_retry_after_is_clamped_to_max_cooldown()
+    {
+        var clock = new FakeClock();
+        var h = new Handler(_ => Status(HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(2_000_000_000)));
+        using var client = NewClient(h, clock);
+
+        await client.GetSystemAsync("Sol");
+        clock.Now += TimeSpan.FromMinutes(16);
+        await client.GetSystemAsync("Sol");
+
+        Assert.Equal(2, h.Calls);   // cool-down capped at 15 minutes, not 63 years
+    }
+
+    [Fact]
+    public async Task A_503_with_a_long_retry_after_starts_a_cooldown()
+    {
+        var h = new Handler(_ => Status(HttpStatusCode.ServiceUnavailable, TimeSpan.FromMinutes(2)));
+        using var client = NewClient(h);
+
+        var first = await client.GetSystemAsync("Sol");
+        var second = await client.GetFactionAsync("X");
+
+        Assert.False(first.IsOk);
+        Assert.Equal("HTTP 503", first.Error);
+        Assert.True(second.IsRateLimited);
+        Assert.Equal(1, h.Calls);
+    }
+
+    [Fact]
+    public async Task A_503_is_retried_once_and_a_second_429_gives_up_with_a_cooldown()
+    {
+        var h = new Handler(n => n == 1 ? Status(HttpStatusCode.ServiceUnavailable, TimeSpan.Zero) : Status(HttpStatusCode.TooManyRequests, TimeSpan.Zero));
+        using var client = NewClient(h);
+
+        var result = await client.GetSystemAsync("Sol");
+
+        Assert.False(result.IsOk);
+        Assert.True(result.IsRateLimited);
+        Assert.Equal(2, h.Calls);
+        await client.GetSystemAsync("Sol");
+        Assert.Equal(2, h.Calls);   // cooling down
+    }
+
+    [Fact]
+    public async Task A_retry_after_date_is_measured_against_the_injected_clock()
+    {
+        var clock = new FakeClock();
+        var h = new Handler(n =>
+        {
+            if (n > 1) return Json(SystemJson);
+            var r = Status(HttpStatusCode.TooManyRequests);
+            r.Headers.RetryAfter = new RetryConditionHeaderValue(clock.Now);   // already due: no wait
+            return r;
+        });
+        using var client = NewClient(h, clock);
+
+        Assert.True((await client.GetSystemAsync("Sol")).IsOk);
+        Assert.Equal(2, h.Calls);
+
+        var far = new Handler(_ =>
+        {
+            var r = Status(HttpStatusCode.TooManyRequests);
+            r.Headers.RetryAfter = new RetryConditionHeaderValue(clock.Now + TimeSpan.FromMinutes(5));
+            return r;
+        });
+        using var client2 = NewClient(far, clock);
+        await client2.GetSystemAsync("Sol");
+        Assert.Equal(1, far.Calls);   // 5 minutes exceeds MaxRetryAfter, so no retry
+        clock.Now += TimeSpan.FromMinutes(4);
+        Assert.True((await client2.GetSystemAsync("Sol")).IsRateLimited);
+        Assert.Equal(1, far.Calls);
+        clock.Now += TimeSpan.FromMinutes(2);
+        await client2.GetSystemAsync("Sol");
+        Assert.Equal(2, far.Calls);
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_propagates_but_an_http_timeout_is_a_failure()
+    {
+        var gate = new TaskCompletionSource();
+        var slow = new GateHandler(gate.Task);
+        using var client = NewClient(null!, http: new HttpClient(slow));
+        using var cts = new CancellationTokenSource();
+
+        var pending = client.GetSystemAsync("Sol", cts.Token);
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        gate.SetResult();
+
+        using var timingOut = NewClient(null!, http: new HttpClient(new Handler(_ => throw new TaskCanceledException("timeout"))));
+        var result = await timingOut.GetSystemAsync("Sol");
+        Assert.False(result.IsOk);
+    }
+
+    private sealed class GateHandler(Task gate) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            await gate;
+            return Json(SystemJson);
+        }
+    }
+
+    [Fact]
+    public async Task Concurrent_lookups_of_one_name_share_a_single_request()
+    {
+        var gate = new TaskCompletionSource();
+        var calls = 0;
+        var handler = new CountingGateHandler(gate.Task, () => Interlocked.Increment(ref calls));
+        using var client = NewClient(null!, http: new HttpClient(handler));
+
+        var tasks = Enumerable.Range(0, 8).Select(_ => client.GetSystemAsync("Sol")).ToArray();
+        await Task.Delay(100);
+        gate.SetResult();
+        var results = await Task.WhenAll(tasks);
+
+        Assert.All(results, r => Assert.NotNull(r.Value));
+        Assert.Equal(1, calls);
+    }
+
+    private sealed class CountingGateHandler(Task gate, Action onCall) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            onCall();
+            await gate;
+            return Json(SystemJson);
+        }
+    }
+
+    [Fact]
+    public async Task Cache_evicts_the_oldest_entry_at_capacity_and_clear_cache_empties_it()
+    {
+        var clock = new FakeClock();
+        // Eviction: capacity 2, three distinct names -> the first is evicted.
+        var seq = new Handler(_ => Json("""{ "docs": [ { "name": "A" }, { "name": "B" }, { "name": "C" } ] }"""));
+        using var c3 = NewClient(seq, clock, maxCache: 2);
+        await c3.GetSystemAsync("A"); clock.Now += TimeSpan.FromSeconds(1);
+        await c3.GetSystemAsync("B"); clock.Now += TimeSpan.FromSeconds(1);
+        await c3.GetSystemAsync("C"); clock.Now += TimeSpan.FromSeconds(1);
+        Assert.False((await c3.GetSystemAsync("A")).FromCache);   // evicted
+        Assert.Equal(4, seq.Calls);
+        Assert.True((await c3.GetSystemAsync("C")).FromCache);
+
+        c3.ClearCache();
+        Assert.False((await c3.GetSystemAsync("C")).FromCache);
+    }
+
+    [Fact]
+    public async Task A_faction_and_a_system_with_the_same_name_do_not_share_a_cache_entry()
+    {
+        var h = new Handler(_ => Json("""{ "docs": [ { "name": "Sol" } ] }"""));
+        using var client = NewClient(h);
+
+        await client.GetSystemAsync("Sol");
+        var faction = await client.GetFactionAsync("Sol");
+
+        Assert.False(faction.FromCache);
+        Assert.Equal(2, h.Calls);
+        Assert.IsType<BgsFaction>(faction.Value);
+    }
+
+    [Fact]
+    public async Task Non_empty_docs_without_any_name_is_an_uncached_unrecognised_shape_failure()
+    {
+        var h = new Handler(_ => Json("""{ "docs": [ { "title": "Sol" }, { "title": "Other" } ] }"""));
+        using var client = NewClient(h);
+
+        var first = await client.GetSystemAsync("Sol");
+        await client.GetSystemAsync("Sol");
+
+        Assert.False(first.IsOk);
+        Assert.Equal("unrecognised response shape", first.Error);
+        Assert.Equal(2, h.Calls);   // not cached
+    }
+
+    [Fact]
+    public async Task A_near_match_only_reply_is_not_cached_as_a_definitive_miss()
+    {
+        var h = new Handler(_ => Json("""{ "docs": [ { "name": "Sol Workers" } ], "hasNextPage": true }"""));
+        using var client = NewClient(h);
+
+        Assert.Null((await client.GetFactionAsync("Sol")).Value);
+        Assert.Null((await client.GetFactionAsync("Sol")).Value);
+
+        Assert.Equal(2, h.Calls);
+    }
+
+    [Fact]
+    public async Task An_empty_reply_is_cached_as_a_definitive_miss()
+    {
+        var h = new Handler(_ => Json("""{ "docs": [] }"""));
+        using var client = NewClient(h);
+
+        await client.GetFactionAsync("Nobody");
+        Assert.True((await client.GetFactionAsync("Nobody")).FromCache);
+        Assert.Equal(1, h.Calls);
+    }
+
+    [Fact]
+    public async Task An_oversized_response_fails_without_parsing()
+    {
+        var h = new Handler(_ => Json(new string('x', 5000)));
+        using var client = new EliteBgsClient(new EliteBgsClientOptions
+        {
+            SoftwareName = "t", SoftwareVersion = "1", MaxResponseBytes = 2048,
         }, new HttpClient(h));
+
+        var result = await client.GetSystemAsync("Sol");
+
+        Assert.False(result.IsOk);
+        Assert.Equal("response too large", result.Error);
+    }
+
+    [Theory]
+    [InlineData("a+b#c/d?e%f", "a%2Bb%23c%2Fd%3Fe%25f")]
+    [InlineData("Zeta Reticuli é", "Zeta%20Reticuli%20%C3%A9")]
+    public async Task Special_and_unicode_names_are_escaped(string name, string expected)
+    {
+        var h = new Handler(_ => Json("""{ "docs": [] }"""));
+        using var client = NewClient(h);
+
+        await client.GetFactionAsync(name);
+
+        Assert.EndsWith("?name=" + expected, h.Uris[0]!.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task Nfc_and_nfd_spellings_share_a_cache_entry()
+    {
+        var h = new Handler(_ => Json("""{ "docs": [ { "name": "Café" } ] }"""));
+        using var client = NewClient(h);
+
+        await client.GetSystemAsync("Café");
+        var nfd = await client.GetSystemAsync("Café");
+
+        Assert.True(nfd.FromCache);
+        Assert.Equal(1, h.Calls);
+    }
+
+    [Fact]
+    public async Task An_overlong_name_fails_without_a_request()
+    {
+        var h = new Handler(_ => Json("{}"));
+        using var client = NewClient(h);
+
+        var result = await client.GetSystemAsync(new string('a', 5000));
+
+        Assert.False(result.IsOk);
+        Assert.Equal(0, h.Calls);
+    }
+
+    [Fact]
+    public async Task Influence_is_a_clamped_fraction_and_ties_sort_by_name()
+    {
+        var h = new Handler(_ => Json("""
+            { "docs": [ { "name": "Sol", "factions": [
+              { "name": "Zed", "influence": 0.2 }, { "name": "Alpha", "influence": 0.2 },
+              { "name": "None" }, { "name": "Big", "influence": 150 } ] } ] }
+            """));
+        using var client = NewClient(h);
+
+        var s = (await client.GetSystemAsync("Sol")).Value!;
+
+        Assert.Equal(new[] { "Big", "Alpha", "Zed", "None" }, s.Factions.Select(f => f.Name).ToArray());
+        Assert.Equal(1.0, s.Factions[0].Influence);
+        Assert.False(s.Factions is List<BgsSystemFaction>);
+    }
+
+    [Fact]
+    public async Task User_agent_is_set_per_request_not_on_a_shared_client()
+    {
+        var h = new Handler(_ => Json("""{ "docs": [] }"""));
+        var http = new HttpClient(h);
+        using var client = NewClient(h, http: http);
+
+        await client.GetSystemAsync("Sol");
+
+        Assert.Empty(http.DefaultRequestHeaders.UserAgent);
+    }
+
+    [Theory]
+    [InlineData("http://elitebgs.app")]
+    [InlineData("ftp://x")]
+    [InlineData("not a url")]
+    public void Non_https_base_urls_are_rejected_except_loopback(string url)
+    {
+        Assert.Throws<ArgumentException>(() => new EliteBgsClient(
+            new EliteBgsClientOptions { SoftwareName = "t", SoftwareVersion = "1", BaseUrl = url }));
+        new EliteBgsClient(new EliteBgsClientOptions { SoftwareName = "t", SoftwareVersion = "1", BaseUrl = "http://localhost:5000" }).Dispose();
+    }
 
     [Fact]
     public async Task Parses_the_exact_faction_match_with_presence_and_states()
@@ -106,9 +415,9 @@ public class EliteBgsClientTests
         Assert.Equal(2, conflict.DaysWon);
         Assert.NotNull(sol.UpdatedAt);
 
-        // A percentage-style influence is normalised to a fraction; missing state/lists are empty, not errors.
+        // Influence is a 0..1 fraction; out-of-range values clamp. Missing state/lists are empty, not errors.
         var alpha = f.Presence[1];
-        Assert.Equal(0.125, alpha.Influence);
+        Assert.Equal(1.0, alpha.Influence);
         Assert.Null(alpha.State);
         Assert.Empty(alpha.ActiveStates);
     }

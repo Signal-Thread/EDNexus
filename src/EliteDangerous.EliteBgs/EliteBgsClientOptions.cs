@@ -13,6 +13,7 @@ public sealed class EliteBgsClientOptions
     public required string SoftwareVersion { get; init; }
 
     /// <summary>The EliteBGS base address (no trailing slash needed). Overridable for tests.</summary>
+    /// <remarks>Must be https unless it points at a loopback host; the client constructor throws otherwise.</remarks>
     public string BaseUrl { get; init; } = "https://elitebgs.app";
 
     /// <summary>
@@ -42,6 +43,15 @@ public sealed class EliteBgsClientOptions
     /// </summary>
     public TimeSpan RateLimitCooldown { get; init; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>Clock used for cache expiry and cool-down; overridable for tests.</summary>
+    /// <summary>Upper bound on any cool-down, however large a (third-party controlled) <c>Retry-After</c> is.</summary>
+    public TimeSpan MaxCooldown { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>The largest response body the client will read; bigger replies fail with "response too large".</summary>
+    public int MaxResponseBytes { get; init; } = 4 * 1024 * 1024;
+
+    /// <summary>The longest (trimmed) faction/system name that will be sent; longer names fail without a request.</summary>
+    public int MaxNameLength { get; init; } = 100;
+
+    /// <summary>Clock used for cache expiry and cool-down (monotonic timestamps), Retry-After dates and retry delays; overridable for tests.</summary>
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 }

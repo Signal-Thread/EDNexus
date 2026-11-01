@@ -148,7 +148,7 @@ that is not listed here.
 | Colonisation lookups (read) | Raven Colonial | When you dock at a construction depot, unless switched off in Settings → Data reporting | The depot's system name and market id, then the matched project's id |
 | Colonisation deliveries (write) | Raven Colonial | **Opt-in, default off**; each live delivery you make at a depot that has a shared project, and only while the lookup above is also on | **Your commander name**, the project id, and the commodities and tons you delivered (see below) |
 | Route & market search | Spansh, EDSM | When you run a search | The search/route parameters (systems, ranges, commodities) |
-| Faction influence & BGS states (read) | EliteBGS (elitebgs.app) | **Opt-in, default off** (Settings → `EliteBgs.Enabled`); only when a faction or system is looked up | The faction or system name being looked up. Replies are cached in memory for 15 minutes |
+| Faction influence & BGS states (read) | EliteBGS (elitebgs.app) | Not yet wired into the app. Will be **opt-in, default off** once the Settings toggle lands (#95); only when a faction or system is looked up | The faction or system name being looked up, plus a `User-Agent` with the software name and version. Replies are cached briefly in memory |
 | News | Galnet | When the Galnet card refreshes | A plain request for the public RSS feed |
 | Update check | GitHub (api.github.com / github.com) | Only if **Automatically download updates on startup** is on, or you press **Check for updates now** | A request for the latest release; no identifying data and no token is sent |
 

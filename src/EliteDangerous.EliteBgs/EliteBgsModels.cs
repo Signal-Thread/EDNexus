@@ -8,12 +8,16 @@ public sealed record BgsState(string State, int? Trend = null);
 /// <summary>An open or recent conflict between two factions in a system.</summary>
 public sealed record BgsConflict(
     string Type,
-    string Status,
+    string? Status,
     string? OpponentName,
     string? Stake,
     int? DaysWon);
 
-/// <summary>A faction's standing in one system: influence (0..1), happiness and simulation states.</summary>
+/// <summary>
+/// A faction's standing in one system: influence (a 0..1 fraction, clamped), happiness and simulation
+/// states. Like every model in this file, the EliteBGS v5 field names behind it are unverified
+/// against the live API (see <see cref="EliteBgsClient"/>).
+/// </summary>
 public sealed record BgsFactionPresence(
     string SystemName,
     string? State,

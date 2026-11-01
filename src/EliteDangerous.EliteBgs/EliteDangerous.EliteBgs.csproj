@@ -4,6 +4,7 @@
     Standalone, application-agnostic client for the EliteBGS API (https://elitebgs.app/api/ebgs/v5).
     Like EliteDangerous.Edsm and EliteDangerous.Spansh it has NO dependency on EDNexus: it GETs a
     faction or system, parses the reply defensively into plain records, and caches the result briefly.
+    NOTE: the v5 response field names are unverified against the live API (see EliteBgsClient remarks).
     Deciding when to call it (and whether the commander has opted in) is the caller's job.
   -->
   <PropertyGroup>
