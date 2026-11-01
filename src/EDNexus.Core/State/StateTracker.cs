@@ -112,6 +112,7 @@ public sealed class StateTracker
 
         // Derive the FSD profile so the no-boost route plot can model this ship's jumps.
         if (Ship.ShipFsdProfile.FromLoadout(e) is { } fsd) _state.Fsd = fsd;
+        if (Ship.ShipPowerProfile.FromLoadout(e) is { } power) _state.Power = power;
 
         // Keep the raw event verbatim for the Coriolis/EDSY share link, which needs every module's
         // engineering detail, not just the fields we extract above.
@@ -221,6 +222,7 @@ public sealed class StateTracker
         if (e.GetInt64("Flags") is long flags
             && ShipStatusFlags.Derive(flags, e.GetInt64("Flags2") ?? 0) is FlightMode mode)
             _state.Flight = mode;
+        if (e.GetInt64("Flags") is long hpFlags) _state.HardpointsDeployed = ShipStatusFlags.HardpointsDeployed(hpFlags);
 
         if (e.Raw.TryGetProperty("Fuel", out var fuel)
             && fuel.TryGetProperty("FuelMain", out var fm) && fm.TryGetDouble(out var main))

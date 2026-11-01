@@ -245,11 +245,23 @@ public sealed class ShipSampleSource : JournalSampleSource
                 o["Ship_Localised"] = loc;
                 o["ShipName"] = name;
                 o["ShipIdent"] = ident;
-                o["FuelCapacity"] = new JsonObject { ["Main"] = capacity };
+                o["FuelCapacity"] = new JsonObject { ["Main"] = capacity, ["Reserve"] = 0.5 };
+                o["UnladenMass"] = Math.Round(200 + rng.NextDouble() * 600, 1);
+                o["CargoCapacity"] = Pick(rng, new[] { 0, 16, 64, 128, 256 });
+                o["Modules"] = new JsonArray
+                {
+                    new JsonObject { ["Slot"] = "PowerPlant", ["Item"] = "int_powerplant_size5_class5", ["On"] = true },
+                    new JsonObject { ["Slot"] = "FrameShiftDrive", ["Item"] = "int_hyperdrive_size5_class5", ["On"] = true },
+                    new JsonObject { ["Slot"] = "MediumHardpoint1", ["Item"] = "hpt_pulselaser_gimbal_medium", ["On"] = true },
+                    new JsonObject { ["Slot"] = "MediumHardpoint2", ["Item"] = "hpt_pulselaser_gimbal_medium", ["On"] = true },
+                    new JsonObject { ["Slot"] = "TinyHardpoint1", ["Item"] = "hpt_shieldbooster_size0_class5", ["On"] = true },
+                };
             }),
             Event("Status", o =>
             {
+                o["Flags"] = rng.Next(2) == 0 ? 0L : 1L << 6;   // hardpoints retracted / deployed
                 o["Fuel"] = new JsonObject { ["FuelMain"] = main };
+                o["Cargo"] = Math.Round(rng.NextDouble() * 64, 0);
                 o["Balance"] = credits;
             }),
         };

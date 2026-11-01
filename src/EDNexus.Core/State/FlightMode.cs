@@ -50,6 +50,7 @@ public static class ShipStatusFlags
     // Flags
     private const long Docked = 1L << 0;
     private const long Landed = 1L << 1;
+    private const long HardpointsOut = 1L << 6;
     private const long Supercruise = 1L << 4;
     private const long HasLatLong = 1L << 21;
     private const long InMainShip = 1L << 24;
@@ -59,6 +60,9 @@ public static class ShipStatusFlags
 
     // Flags2
     private const long OnFoot = 1L << 0;
+
+    /// <summary>Whether the flags say hardpoints are deployed.</summary>
+    public static bool HardpointsDeployed(long flags) => (flags & HardpointsOut) != 0;
 
     /// <summary>
     /// The flight mode the flags describe, or <c>null</c> when they describe none (no ship, fighter,

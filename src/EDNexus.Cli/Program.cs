@@ -161,6 +161,13 @@ static void PrintState(CommanderState s)
     Console.WriteLine($"  Body      : {s.Body}");
     Console.WriteLine($"  Location  : {(s.Docked ? $"docked at {s.StationDisplayName}" : "in flight")}");
     Console.WriteLine($"  Fuel      : {s.FuelMain:0.0}{(s.FuelCapacity > 0 ? $" / {s.FuelCapacity:0.0}" : "")} t");
+    if (s.Fsd is { BaseMass: > 0 } fsd)
+        Console.WriteLine($"  Jump range: {fsd.JumpRangeWith(s.FuelMain, s.CargoTons):0.0} ly now"
+                          + $" (journal best {fsd.MaxJumpRange:0.0}, mass {fsd.MassWith(s.FuelMain, s.CargoTons):0.0} t, {fsd.FullRangeJumps(s.FuelMain):0.#} full-range jumps)");
+    if (s.Power is { } pw)
+        Console.WriteLine($"  Power     : {pw.RetractedDraw:0.0} retracted / {pw.DeployedDraw:0.0} deployed of {pw.Capacity:0.0} MW"
+                          + (pw.UnknownModules > 0 ? $"  ({pw.UnknownModules} unknown modules)" : "")
+                          + (s.HardpointsDeployed ? "  [hardpoints out]" : ""));
     Console.WriteLine($"  Cargo     : {s.CargoTons:0} t ({s.Cargo.Count} commodities)");
 
     var m = s.Materials;
