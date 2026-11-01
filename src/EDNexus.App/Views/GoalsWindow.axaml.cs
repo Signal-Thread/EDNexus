@@ -4,6 +4,8 @@ using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using EDNexus.App.ViewModels;
 
 namespace EDNexus.App.Views;
@@ -153,7 +155,17 @@ public partial class GoalsWindow : Window
         e.Handled = true;
     }
 
-    private void OnTitleCommit(object? sender, RoutedEventArgs e) => CommitTitle(_shownRow);
+    // Focus-loss commits are deferred: the click that moved focus is still being processed, and a commit
+    // rebuilds every row (recreating the very button or list item being pressed). Posted, the click
+    // completes first. Enter-key commits and the close/selection flushes stay synchronous.
+    private void OnTitleCommit(object? sender, RoutedEventArgs e)
+    {
+        var id = _shownRow?.Goal.Id;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_vm is not null && id is not null && _shownRow?.Goal.Id == id) CommitTitle(_shownRow);
+        });
+    }
 
     private void CommitTitle(GoalRow? row)
     {
@@ -164,7 +176,14 @@ public partial class GoalsWindow : Window
         else if (text != row.Goal.Title) vm.RenameGoal(row, text);
     }
 
-    private void OnNotesCommit(object? sender, RoutedEventArgs e) => CommitNotes(_shownRow);
+    private void OnNotesCommit(object? sender, RoutedEventArgs e)
+    {
+        var id = _shownRow?.Goal.Id;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_vm is not null && id is not null && _shownRow?.Goal.Id == id) CommitNotes(_shownRow);
+        });
+    }
 
     private void CommitNotes(GoalRow? row)
     {
@@ -220,15 +239,26 @@ public partial class GoalsWindow : Window
     private void OnStepTextKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter) return;
-        CommitStepText(sender);
+        if (sender is TextBox box && StepOf(box) is { } step) CommitStepText(box, step);
         e.Handled = true;
     }
 
-    private void OnStepTextCommit(object? sender, RoutedEventArgs e) => CommitStepText(sender);
-
-    private void CommitStepText(object? sender)
+    private void OnStepTextCommit(object? sender, RoutedEventArgs e)
     {
-        if (sender is not TextBox box || StepOf(box) is not { } step || Vm is not { } vm) return;
+        if (sender is not TextBox box || StepOf(box) is not { } step) return;
+        var id = step.Step.Id;
+        Dispatcher.UIThread.Post(() =>
+        {
+            // A box that has left the tree was removed by a rebuild: its text stays parked in
+            // _pendingSteps for the new row, and the next flush saves it.
+            if (_vm is null || !box.IsAttachedToVisualTree()) return;
+            if (Vm!.SelectedSteps.FirstOrDefault(r => r.Step.Id == id) is { } current) CommitStepText(box, current);
+        });
+    }
+
+    private void CommitStepText(TextBox box, StepRow step)
+    {
+        if (Vm is not { } vm) return;
         _pendingSteps.Remove(step.Step.Id);
         var text = box.Text?.Trim() ?? "";
         if (text.Length == 0) Fill(() => box.Text = step.Step.Text);

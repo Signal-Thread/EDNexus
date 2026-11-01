@@ -82,7 +82,7 @@ public sealed class GoalList
         }
     }
 
-    /// <summary>Flips a goal's done flag. Completing the active goal moves focus; un-completing does not.</summary>
+    /// <summary>Flips a goal's done flag. Completing the active goal moves focus; reopening only takes focus when nothing is focused.</summary>
     public void ToggleGoal(string id)
     {
         if (Find(id) is not { } goal)
@@ -94,6 +94,11 @@ public sealed class GoalList
         if (goal.IsDone && Data.ActiveGoalId == id)
         {
             Data.ActiveGoalId = FirstNotDoneId();
+        }
+        else if (!goal.IsDone && Active is null)
+        {
+            // Reopened with nothing in focus (e.g. the only goal): it becomes the focused goal.
+            Data.ActiveGoalId = id;
         }
     }
 

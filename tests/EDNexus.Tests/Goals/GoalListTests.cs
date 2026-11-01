@@ -55,6 +55,23 @@ public class GoalListTests
     }
 
     [Fact]
+    public void ToggleGoalDone_Reopen_TakesFocusOnlyWhenNothingIsFocused()
+    {
+        var list = NewList();
+        var only = list.AddGoal("only")!;
+        list.ToggleGoal(only.Id);
+        Assert.Null(list.Active);
+
+        list.ToggleGoal(only.Id);   // reopened with nothing in focus
+        Assert.Same(only, list.Active);
+
+        var other = list.AddGoal("other")!;
+        list.ToggleGoal(other.Id);
+        list.ToggleGoal(other.Id);  // reopened while `only` is focused: focus stays
+        Assert.Same(only, list.Active);
+    }
+
+    [Fact]
     public void ToggleGoalDone_OnActive_MovesFocus()
     {
         var list = NewList();

@@ -106,7 +106,8 @@ public sealed partial class GoalsCardViewModel : CardViewModel
     [RelayCommand]
     public void AddGoal(string? title)
     {
-        EnsureSource();
+        // A swap means the title was typed against stale (sample or previous) rows: drop it.
+        if (!EnsureSource()) return;
         if (_list!.AddGoal(title ?? "") is not { } goal) return;
         Commit();
         Selected = AllByUrgency.FirstOrDefault(r => r.Goal.Id == goal.Id) ?? Selected;
@@ -148,7 +149,7 @@ public sealed partial class GoalsCardViewModel : CardViewModel
     [RelayCommand]
     public void Focus(GoalRow? row)
     {
-        if (!EnsureSource() || row is null) return;
+        if (!EnsureSource() || row is null || row.Goal.IsDone) return;
         _list!.SetActive(row.Goal.Id);
         Commit();
     }
@@ -280,7 +281,10 @@ public sealed partial class GoalsCardViewModel : CardViewModel
         var dev = Context.DevEnabled;
         if (_list is not null && dev == _listIsSample) return true;
 
-        var hadList = _list is not null;
+        // Reset() drops the list but the rows built from the old one stay on screen until the next
+        // rebuild, so rows still showing count as a list that had been there: this is a swap, and the
+        // caller's edit (made against those rows) must be dropped.
+        var hadList = _list is not null || AllByUrgency.Count > 0 || Focused is not null;
         _listIsSample = dev;
         _list = new GoalList(dev ? SampleGoals.Create(Context.Rng, Now) : Context.GetGoals());
         Rebuild(force: true);
@@ -420,6 +424,9 @@ public sealed class GoalRow
 
     /// <summary>True for the goal the card is focused on.</summary>
     public bool IsActive { get; }
+
+    /// <summary>Whether "Focus on this goal" applies: not already focused, and not done.</summary>
+    public bool CanFocus => !IsActive && !Goal.IsDone;
 
     /// <summary>Red marker from the effective <see cref="State"/>.</summary>
     public bool IsOverdue => State == DueState.Overdue;

@@ -272,6 +272,46 @@ public sealed class GoalsCardViewModelTests
         Assert.StartsWith("sample-", card.Focused!.Goal.Id);
     }
 
+    [Theory]
+    [MemberData(nameof(LiveEditNames))]
+    public void DevMode_LeftViaReset_EditMadeAgainstSampleRows_NeverReachesTheRealList(string edit)
+    {
+        var before = SavedJson();
+        _dev = true;
+        var card = Card();
+        var sampleGoal = card.Focused!;
+        var sampleOther = card.Others.First();
+        var sampleStep = card.Steps.First();
+
+        // Leaving developer mode resets the card; the sample rows are still on screen until the replay ends.
+        card.Reset();
+        _dev = false;
+        LiveEdits[edit](card, sampleGoal, sampleOther, sampleStep);
+
+        Assert.Empty(_saves);
+        Assert.Equal(before, SavedJson());
+    }
+
+    [Fact]
+    public void Focus_IgnoresDoneGoals_AndCanFocusIsFalseForThem()
+    {
+        var card = Card();
+        card.ToggleGoal(card.ActiveGoals.Single(r => r.Goal.Id == "g3"));
+        var done = card.DoneGoals.Single();
+        var other = card.Others.Single(r => r.Goal.Id == "g2");
+        _saves.Clear();
+
+        Assert.False(done.CanFocus);
+        Assert.True(other.CanFocus);
+        Assert.False(card.Focused!.CanFocus);
+
+        card.Focus(done);
+
+        Assert.Empty(_saves);
+        Assert.Equal("g1", card.Focused!.Goal.Id);
+        Assert.Equal("g1", _saved.ActiveGoalId);
+    }
+
     [Fact]
     public void SelectedSteps_FollowTheSelectedGoal_NotTheFocusedOne()
     {
