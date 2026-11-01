@@ -77,7 +77,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             (when, credits) => _boot.RecordMiningRefined(when, credits),
             (unit, price) => _boot.RecordMiningSpot(unit, price),
             _radio,
-            () => _boot.Settings.Colonisation.SharedProjectLookup);
+            () => _boot.Settings.Colonisation.SharedProjectLookup,
+            () => _boot.Settings.Shopping,
+            shopping => _boot.ApplyShoppingSettings(shopping));
         Cards = new ObservableCollection<CardViewModel>
         {
             new LocationCardViewModel(_context),
@@ -89,6 +91,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             new RouteCardViewModel(_context),
             new TradeCardViewModel(_context),
             new ColonisationCardViewModel(_context),
+            new ShoppingListCardViewModel(_context),
             new MarketCardViewModel(_context),
             new MiningCardViewModel(_context),
             new ExobiologyCardViewModel(_context),
@@ -98,6 +101,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             new GalnetCardViewModel(_context),
             new RadioCardViewModel(_context),
         };
+
+        _context.FindToBuy = commodity => Cards.OfType<TradeCardViewModel>().FirstOrDefault()?.BeginBuySearch(commodity);
 
         ApplySavedLayout();
         foreach (var card in Cards) card.LayoutChanged += _ => SaveLayout();

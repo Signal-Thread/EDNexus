@@ -121,6 +121,13 @@ public sealed class Bootstrap
         Store.Save(Settings);
     }
 
+    /// <summary>Persist the shopping list's manual lines and link toggles.</summary>
+    public void ApplyShoppingSettings(ShoppingListSettings shopping)
+    {
+        Settings.Shopping = shopping;
+        Store.Save(Settings);
+    }
+
     /// <summary>Persist the mining card's "worth mining" credit threshold.</summary>
     public void ApplyMiningThreshold(int credits)
     {

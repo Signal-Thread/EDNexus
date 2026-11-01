@@ -42,7 +42,8 @@ public sealed partial class TradeCardViewModel : CardViewModel
     /// </summary>
     public override void Update(CommanderState s)
     {
-        if (TradeReferenceSystem.Length == 0 && s.StarSystem is { Length: > 0 } sys) TradeReferenceSystem = sys;
+        if (s.StarSystem is { Length: > 0 } known) _lastSystem = known;
+        if (TradeReferenceSystem.Length == 0 && s.StarSystem is { Length: > 0 } sys) SetAutoReference(sys);
         if (TradeCommodity.Length == 0 && !s.Cargo.IsEmpty)
             TradeCommodity = s.Cargo
                 .Where(k => !CommodityName.IsLimpet(k.Key))
@@ -51,9 +52,67 @@ public sealed partial class TradeCardViewModel : CardViewModel
                 .FirstOrDefault() ?? "";
     }
 
+    // Latest known system, so a search started from another card can fill the reference system.
+    private string _lastSystem = "";
+
+    // True while TradeReferenceSystem holds a value we filled in ourselves (not one the commander typed),
+    // so a later Find can refresh it to wherever they are now without overwriting a deliberate choice.
+    private bool _referenceIsAuto;
+    private bool _settingAutoReference;
+
+    private void SetAutoReference(string system)
+    {
+        _settingAutoReference = true;
+        try { TradeReferenceSystem = system; }
+        finally { _settingAutoReference = false; }
+        _referenceIsAuto = true;
+    }
+
+    partial void OnTradeReferenceSystemChanged(string value)
+    {
+        if (!_settingAutoReference) _referenceIsAuto = false;
+    }
+
+    /// <summary>
+    /// Start a "where can I buy this" search (used by the shopping list's Find). Shows the card,
+    /// switches to source mode, fills the reference system from the current one when empty, and runs
+    /// the search. <paramref name="commodity"/> must be a display name, not a stemmed key.
+    /// </summary>
+    public void BeginBuySearch(string commodity)
+    {
+        if (string.IsNullOrWhiteSpace(commodity)) return;
+        TradeCommodity = commodity.Trim();
+        TradeSelling = false;
+        IsCollapsed = false;
+        IsVisible = true;
+        if (TradeReferenceSystem.Length == 0 || _referenceIsAuto)
+        {
+            var sys = _lastSystem.Length > 0 ? _lastSystem : Context.Host.State.StarSystem;
+            if (sys is { Length: > 0 }) SetAutoReference(sys);
+        }
+        // An async command cannot run twice at once: let the running search finish, then search again
+        // with the new field values.
+        if (SearchTradeCommand.IsRunning) _rerunPending = true;
+        else if (SearchTradeCommand.CanExecute(null)) SearchTradeCommand.Execute(null);
+    }
+
+    private bool _rerunPending;
+
     [RelayCommand]
     private async Task SearchTrade()
     {
+        do
+        {
+            _rerunPending = false;
+            await RunSearchAsync();
+        }
+        while (_rerunPending);
+    }
+
+    private async Task RunSearchAsync()
+    {
+        // Snapshot the inputs: the fields can change (a Find from another card) while the request is in flight.
+        var selling = TradeSelling;
         var commodity = TradeCommodity.Trim();
         var reference = TradeReferenceSystem.Trim();
         if (commodity.Length == 0)
@@ -67,18 +126,18 @@ public sealed partial class TradeCardViewModel : CardViewModel
             return;
         }
 
-        var mode = TradeSelling ? TradeMode.Sell : TradeMode.Buy;
+        var mode = selling ? TradeMode.Sell : TradeMode.Buy;
         TradeBusy = true;
         TradeHasResults = false;
         TradeResults.Clear();
-        TradeStatus = TradeSelling ? $"Best places to sell {commodity} near {reference} …"
+        TradeStatus = selling ? $"Best places to sell {commodity} near {reference} …"
                                    : $"Best places to buy {commodity} near {reference} …";
         try
         {
             var quotes = await Trader.SearchAsync(new TradeQuery(commodity, reference, mode), CancellationToken.None);
             if (quotes.Count == 0)
             {
-                TradeStatus = $"No station found {(TradeSelling ? "buying" : "selling")} {commodity} nearby.";
+                TradeStatus = $"No station found {(selling ? "buying" : "selling")} {commodity} nearby.";
                 return;
             }
 
@@ -88,7 +147,7 @@ public sealed partial class TradeCardViewModel : CardViewModel
                     q.System, q.Station,
                     $"{q.DistanceLy:0.0} ly",
                     $"{q.Price:N0} cr",
-                    q.Quantity > 0 ? $"{q.Quantity:N0} {(TradeSelling ? "dmd" : "sup")}" : "",
+                    q.Quantity > 0 ? $"{q.Quantity:N0} {(selling ? "dmd" : "sup")}" : "",
                     HumanizeAge(q.Age(now))));
 
             TradeHasResults = true;
