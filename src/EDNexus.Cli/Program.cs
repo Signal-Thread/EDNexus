@@ -1,3 +1,4 @@
+using EDNexus.Cli;
 using EDNexus.Core.Colonisation;
 using EDNexus.Core.Discord;
 using EDNexus.Core.Engineering;
@@ -26,14 +27,23 @@ using EDNexus.Core.Voice;
 //               print the StreamCardSnapshot the Twitch extension would show viewers, exactly as
 //               it goes on the wire. Credits are withheld unless --show-credits is passed, matching
 //               the app's own default. Implies --once.
+//   --plugins   load installed plugins (EDNEXUS_PLUGINS_DIR or the default plugins folder) before the
+//               replay, then print a per-plugin summary. Every declared capability is granted (no
+//               consent UI); UI registrations are counted, not rendered.
+//   --plugin <folder>
+//               as --plugins, but load only that one plugin folder (for dev iteration).
 
 string? dir = null;
 string? planId = null;
+var loadPlugins = false;
+string? pluginPath = null;
 var planGrade = 5;
 var planRolls = 1;
 for (var i = 0; i < args.Length; i++)
 {
     if (args[i] == "--dir" && i + 1 < args.Length) dir = args[++i];
+    else if (args[i] == "--plugins") loadPlugins = true;
+    else if (args[i] == "--plugin" && i + 1 < args.Length) pluginPath = args[++i];
     else if (args[i] == "--plan")
     {
         planId = i + 1 < args.Length && !args[i + 1].StartsWith("--") ? args[++i] : "";
@@ -81,9 +91,26 @@ bus.SubscribeAny(e =>
 voiceCallouts.CalloutRaised += callout => voiceLog.Add($"[{callout.Kind}] {callout.Text}");
 bus.HandlerError += (e, ex) => Console.Error.WriteLine($"  [handler error on {e.Event}] {ex.Message}");
 
+// --plugins: load plugins before the replay so their handlers see the historical events.
+// A plugin that fails to load or throws is reported in the summary and never stops the run.
+PluginHarness? plugins = null;
+if (!twitchCardOnly && (loadPlugins || pluginPath is not null))
+{
+    try
+    {
+        plugins = new PluginHarness(bus, state, pluginsRoot: null, singlePluginFolder: pluginPath);
+        plugins.Load();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"  [plugins] could not start the plugin harness: {ex.Message}");
+    }
+}
+
 var watcher = new JournalWatcher(dir, bus);
 status.WriteLine("Replaying latest journal to warm up state...\n");
 watcher.Replay();
+plugins?.Drain(TimeSpan.FromSeconds(10));
 
 // --twitch-card is a payload dump, not a state dump: print just the JSON the extension would
 // receive, so it can be piped straight into a file or a POST body, then stop.
@@ -112,8 +139,13 @@ PrintOverlay(state, exobio, colonisation, carrierCargo);
 PrintDiscordPresence(state);
 if (planId is not null) PrintEngineeringPlan(planId, planGrade, planRolls, state);
 
+if (plugins is not null) { plugins.PrintSummary(Console.Out); }
+
 if (args.Contains("--once"))
+{
+    plugins?.Dispose();
     return 0;
+}
 
 Console.WriteLine("\nWatching live. Press Ctrl+C to stop.\n");
 bus.SubscribeAny(e =>
@@ -147,6 +179,12 @@ if (voiceLog.Count > 0)
     Console.WriteLine("\nVoice callouts this session:");
     foreach (var line in voiceLog)
         Console.WriteLine($"  {line}");
+}
+if (plugins is not null)
+{
+    plugins.Drain(TimeSpan.FromSeconds(2));
+    plugins.PrintSummary(Console.Out);
+    plugins.Dispose();
 }
 return 0;
 

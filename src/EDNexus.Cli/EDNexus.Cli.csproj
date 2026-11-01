@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\EDNexus.Core\EDNexus.Core.csproj" />
+    <ProjectReference Include="..\EDNexus.Plugins.Hosting\EDNexus.Plugins.Hosting.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
