@@ -52,6 +52,20 @@ public class CarrierCargoTrackerTests
     }
 
     [Fact]
+    public void Malformed_transfer_entries_are_skipped_without_losing_later_ones()
+    {
+        var bus = new JournalEventBus();
+        var carrier = new CarrierCargoTracker(bus);
+
+        Publish(bus, """
+        { "timestamp":"2026-06-03T01:00:00Z", "event":"CargoTransfer",
+          "Transfers":[ null, 7, { "Type":"steel", "Count":10, "Direction":"tocarrier" } ] }
+        """);
+
+        Assert.Equal(10, carrier.Stock["steel"]);
+    }
+
+    [Fact]
     public void Shopping_list_counts_carrier_stock_toward_what_is_still_needed()
     {
         var bus = new JournalEventBus();

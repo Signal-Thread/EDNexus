@@ -39,6 +39,8 @@ public sealed class CarrierCargoTracker
         {
             foreach (var item in arr.EnumerateArray())
             {
+                if (item.ValueKind != JsonValueKind.Object) continue;
+
                 var symbol = CommodityName.Canonicalize(ReadString(item, "Type"));
                 if (symbol.Length == 0) continue;
                 if (!item.TryGetProperty("Count", out var c) || c.ValueKind != JsonValueKind.Number
