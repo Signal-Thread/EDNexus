@@ -34,23 +34,6 @@ public sealed record EdsmSystemBodies(
     IReadOnlyList<EdsmBody> Bodies);
 
 /// <summary>
-/// A Galactic Exploration Catalog point of interest (EDAstro, EDSM galactic-mapping shape). The
-/// <see cref="Type"/> is the catalogue category (e.g. "Organic", "Nebulae"). Content is community
-/// authored under CC BY-NC-SA 3.0 — attribute it where shown.
-/// </summary>
-public sealed record GecPoi(
-    long Id,
-    string Name,
-    string Type,
-    string? Region,
-    string? SystemName,
-    long? SystemId64,
-    EdsmCoords? Coords,
-    string? Summary,
-    double? Rating,
-    string? Url);
-
-/// <summary>
 /// The result of an EDSM lookup. Mirrors the Spansh client's convention: transport, HTTP and parse
 /// failures never throw — they surface as <see cref="IsOk"/> false with an <see cref="Error"/>, and a
 /// successful-but-unknown system comes back as <see cref="IsOk"/> true with a null <see cref="Value"/>.

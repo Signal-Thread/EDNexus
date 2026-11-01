@@ -5,8 +5,10 @@ using Xunit;
 namespace EDNexus.Tests.Exobio;
 
 /// <summary>
-/// Pins the genus colony ranges that were checked against a cited source (see Exobio/Data/SOURCES.md).
-/// Radicoida is intentionally absent: no source confirms its range yet.
+/// Regression pins for the genus colony ranges. The numbers below were compared by hand on 2026-11-01
+/// with the cited wiki page (see Exobio/Data/SOURCES.md); this test cannot re-check the source, it only
+/// stops the catalog drifting from what was checked. Radicoida (100 m in the catalog) is intentionally
+/// absent: the wiki says "?" for it, so that value has no source at all.
 /// </summary>
 public class ExobiologySampleDistanceTests
 {
@@ -32,7 +34,7 @@ public class ExobiologySampleDistanceTests
     [InlineData("Stratum", 500)]
     [InlineData("Tubus", 800)]
     [InlineData("Tussock", 200)]
-    public void Verified_genus_colony_ranges_match_the_cited_source(string genus, int metres)
+    public void Catalog_colony_ranges_still_equal_the_values_checked_against_the_wiki(string genus, int metres)
     {
         var g = ExobiologyCatalog.Default.Genera.Single(x => x.Name == genus);
         Assert.Equal(metres, g.SampleDistanceMeters);
