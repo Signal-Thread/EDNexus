@@ -15,7 +15,7 @@ namespace EDNexus.Core.Reporting;
 public sealed class InaraBridge : IAsyncDisposable
 {
     private static readonly TimeSpan SessionStartDebounce = TimeSpan.FromSeconds(8);
-    private static readonly TimeSpan MinInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan MinInterval = EliteDangerous.Inara.InaraRateLimits.MinRequestInterval;
     private static readonly TimeSpan RetryBackoff = TimeSpan.FromMinutes(1);
 
     // A batch that hits transport/5xx errors is re-queued with exponential backoff up to this many times,

@@ -91,11 +91,6 @@ public sealed class InaraClient : IDisposable
         }, Json);
     }
 
-    // Inara's exact wording for a rate-limit refusal in a JSON body isn't documented; match the usual phrasings.
-    private static readonly System.Text.RegularExpressions.Regex RateLimitWording =
-        new(@"too many|rate[\s-]?limit|limit.{0,20}exceed|exceed.{0,20}limit",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-
     private static InaraResponse Parse(string text)
     {
         try
@@ -126,7 +121,7 @@ public sealed class InaraClient : IDisposable
 
             // A rate-limit refusal can arrive as a normal JSON reply; it must be retried later, not treated
             // as a hard error (which would stop reporting until the commander re-enables it).
-            if (status is not (>= 200 and < 300) && statusText is not null && RateLimitWording.IsMatch(statusText))
+            if (status is not (>= 200 and < 300) && InaraRateLimits.IsRateLimitWording(statusText))
                 return InaraResponse.RateLimited(statusText);
 
             return new InaraResponse { Status = status, StatusText = statusText, Events = events };
