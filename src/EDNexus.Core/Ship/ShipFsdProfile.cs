@@ -86,6 +86,25 @@ public sealed record ShipFsdProfile(
         return OptimalMass / mass * Math.Pow(fuel / FuelMultiplier, 1 / FuelPower);
     }
 
+    /// <summary>Ship mass (t) with the given fuel and cargo aboard: the unladen hull plus both.</summary>
+    public double MassWith(double fuelOnBoard, double cargo) => BaseMass + fuelOnBoard + cargo;
+
+    /// <summary>
+    /// The jump range with <paramref name="fuelOnBoard"/> tonnes of fuel and <paramref name="cargo"/>
+    /// tonnes of cargo — what the drive can do right now. Fuel counts twice: it adds mass, and a jump
+    /// can't burn more than is in the tank. Zero without a known hull mass.
+    /// </summary>
+    public double JumpRangeWith(double fuelOnBoard, double cargo)
+    {
+        if (BaseMass <= 0 || FuelMultiplier <= 0 || FuelPower <= 0) return 0;
+        var fuel = Math.Min(MaxFuelPerJump, Math.Max(fuelOnBoard, 0));
+        return OptimalMass / MassWith(fuelOnBoard, cargo) * Math.Pow(fuel / FuelMultiplier, 1 / FuelPower);
+    }
+
+    /// <summary>How many full-range jumps the given fuel covers (each burns <see cref="MaxFuelPerJump"/>).</summary>
+    public double FullRangeJumps(double fuelOnBoard)
+        => MaxFuelPerJump > 0 ? Math.Max(fuelOnBoard, 0) / MaxFuelPerJump : 0;
+
     /// <summary>Read the engineered FSDOptimalMass / MaxFuelPerJump overrides the journal records on the module.</summary>
     private static (double? OptimalMass, double? MaxFuel) ReadFsdEngineering(JsonElement module)
     {

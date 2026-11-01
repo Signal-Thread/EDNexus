@@ -368,6 +368,28 @@
                     <TextBlock Grid.Column="1" Classes="value" FontSize="13" Margin="12,0,0,0"
                                Text="{Binding Fuel}" />
                   </Grid>
+                  <TextBlock Classes="label" Text="Jump range" Margin="0,14,0,0" />
+                  <TextBlock Classes="big" Text="{Binding JumpRangeNow}" />
+                  <TextBlock Classes="label" Text="{Binding JumpRangeDetail}" TextWrapping="Wrap" />
+                  <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" Margin="0,10,0,0">
+                    <TextBlock Grid.Row="0" Classes="label" Text="Fuel range" Margin="0,0,12,2" />
+                    <TextBlock Grid.Row="0" Grid.Column="1" Classes="value" FontSize="13" Text="{Binding JumpsPerTank}" />
+                    <TextBlock Grid.Row="1" Classes="label" Text="Mass" Margin="0,0,12,2" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Classes="value" FontSize="13" Text="{Binding Mass}" />
+                    <TextBlock Grid.Row="2" Classes="label" Text="Cargo" Margin="0,0,12,2" />
+                    <TextBlock Grid.Row="2" Grid.Column="1" Classes="value" FontSize="13" Text="{Binding Cargo}" />
+                  </Grid>
+                  <TextBlock Classes="label" Margin="0,14,0,4" Text="{Binding PowerHeading}" />
+                  <ProgressBar Minimum="0" Maximum="1" Value="{Binding PowerFraction}" Height="8"
+                               Foreground="{StaticResource AmberBrush}" Background="{StaticResource SurfaceRaised}" />
+                  <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" Margin="0,6,0,0">
+                    <TextBlock Grid.Row="0" Classes="label" Text="Retracted" Margin="0,0,12,2" />
+                    <TextBlock Grid.Row="0" Grid.Column="1" Classes="value" FontSize="13" Text="{Binding PowerRetracted}" />
+                    <TextBlock Grid.Row="1" Classes="label" Text="Deployed" Margin="0,0,12,2" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Classes="value" FontSize="13" Text="{Binding PowerDeployed}" />
+                  </Grid>
+                  <TextBlock Classes="label" Text="{Binding PowerNote}" TextWrapping="Wrap" Margin="0,4,0,0"
+                             Foreground="{StaticResource Warning}" IsVisible="{Binding HasPowerNote}" />
                   <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                     <Button Content="Open in Coriolis" Command="{Binding OpenCoriolisBuildCommand}" />
                     <Button Content="Copy link" Margin="8,0,0,0" Command="{Binding CopyCoriolisLinkCommand}" />

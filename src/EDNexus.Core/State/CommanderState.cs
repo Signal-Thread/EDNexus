@@ -93,6 +93,14 @@ public sealed class CommanderState : ObservableObject
     private double _cargoTons;
     public double CargoTons { get => _cargoTons; set => Set(ref _cargoTons, value); }
 
+    private bool _hardpointsDeployed;
+    /// <summary>Whether hardpoints are deployed, from the <c>Status.json</c> flags. Weapons only draw power while this is set.</summary>
+    public bool HardpointsDeployed { get => _hardpointsDeployed; set => Set(ref _hardpointsDeployed, value); }
+
+    private Ship.ShipPowerProfile? _power;
+    /// <summary>The current ship's power plant output and module draw, derived from the last <c>Loadout</c>. Null until one is seen.</summary>
+    public Ship.ShipPowerProfile? Power { get => _power; set => Set(ref _power, value); }
+
     private double _carrierFuel;
     /// <summary>Tritium in the current fleet carrier's fuel reserve (t), from <c>CarrierStats</c>. 0 when unknown.</summary>
     public double CarrierFuel { get => _carrierFuel; set => Set(ref _carrierFuel, value); }
