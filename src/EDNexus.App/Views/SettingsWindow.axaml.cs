@@ -381,6 +381,8 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void OnOpenSource(object? sender, RoutedEventArgs e) => new OpenSourceWindow().ShowDialog(this);
+
     private async void OnCheckNow(object? sender, RoutedEventArgs e)
     {
         try
