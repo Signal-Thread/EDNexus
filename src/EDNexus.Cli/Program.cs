@@ -1,3 +1,5 @@
+using EDNexus.Cli;
+using EDNexus.Plugins.Hosting;
 using EDNexus.Core.Colonisation;
 using EDNexus.Core.Discord;
 using EDNexus.Core.Engineering;
@@ -26,14 +28,38 @@ using EDNexus.Core.Voice;
 //               print the StreamCardSnapshot the Twitch extension would show viewers, exactly as
 //               it goes on the wire. Credits are withheld unless --show-credits is passed, matching
 //               the app's own default. Implies --once.
+//   --plugins   load installed plugins (EDNEXUS_PLUGINS_DIR or the default plugins folder) before the
+//               replay, then print a per-plugin summary. Every declared capability is granted (no
+//               consent UI); UI registrations are counted, not rendered. Runs plugin code in-process
+//               against the real journal; only use plugins you trust.
+//   --plugin <folder>
+//               as --plugins, but load only that one plugin folder (copied to a temp folder first,
+//               so siblings are never scanned). Not combinable with --plugins.
+//   --plugins-strict
+//               as --plugins, and exit 1 if any plugin is not Loaded, any handler/log error occurred,
+//               the event drain timed out, or a plugin failed to unload cleanly (for CI). May also be
+//               combined with --plugin <folder>.
+// Exit status: 0 ok; 1 journal not found or (strict) plugin problems; 2 usage error or the plugin
+// harness could not start.
 
 string? dir = null;
 string? planId = null;
+var loadPlugins = false;
+var pluginsStrict = false;
+string? pluginPath = null;
+var usageErrors = new List<string>();
 var planGrade = 5;
 var planRolls = 1;
 for (var i = 0; i < args.Length; i++)
 {
     if (args[i] == "--dir" && i + 1 < args.Length) dir = args[++i];
+    else if (args[i] == "--plugins") loadPlugins = true;
+    else if (args[i] == "--plugins-strict") { loadPlugins = true; pluginsStrict = true; }
+    else if (args[i] == "--plugin")
+    {
+        if (i + 1 >= args.Length || args[i + 1].StartsWith("--")) usageErrors.Add("--plugin needs a plugin folder path.");
+        else pluginPath = args[++i];
+    }
     else if (args[i] == "--plan")
     {
         planId = i + 1 < args.Length && !args[i + 1].StartsWith("--") ? args[++i] : "";
@@ -46,6 +72,15 @@ for (var i = 0; i < args.Length; i++)
 // lines go to stderr — on stdout they would sit in front of the JSON and every parser would reject it.
 var twitchCardOnly = args.Contains("--twitch-card");
 var status = twitchCardOnly ? Console.Error : Console.Out;
+
+var pluginsRequested = loadPlugins || pluginPath is not null;
+if (pluginPath is not null && args.Contains("--plugins")) usageErrors.Add("--plugin <folder> and --plugins are mutually exclusive.");
+if (twitchCardOnly && pluginsRequested) usageErrors.Add("--twitch-card does not load plugins; drop the --plugin* flag.");
+if (usageErrors.Count > 0)
+{
+    foreach (var e in usageErrors) Console.Error.WriteLine("Usage error: " + e);
+    return 2;
+}
 
 dir ??= JournalPaths.Resolve();
 if (dir is null)
@@ -81,9 +116,36 @@ bus.SubscribeAny(e =>
 voiceCallouts.CalloutRaised += callout => voiceLog.Add($"[{callout.Kind}] {callout.Text}");
 bus.HandlerError += (e, ex) => Console.Error.WriteLine($"  [handler error on {e.Event}] {ex.Message}");
 
+// --plugins: load plugins before the replay so their handlers see the historical events.
+// A plugin that fails to load or throws is reported in the summary and never stops the run.
+PluginHarness? plugins = null;
+// Unloads plugins and removes the scratch copy on every exit path (return, exception, Ctrl+C below).
+using var pluginsScope = new DisposeAction(() => plugins?.Dispose());
+var liveMode = false;
+Console.CancelKeyPress += (_, _) => { if (!liveMode) plugins?.Dispose(); };
+if (pluginsRequested)
+{
+    try
+    {
+        plugins = new PluginHarness(bus, state, pluginsRoot: null, singlePluginFolder: pluginPath);
+        plugins.Load();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"  [plugins] could not start the plugin harness: {ex.Message}");
+        return 2;
+    }
+    if (!plugins.HasPluginsFolder)
+    {
+        Console.Error.WriteLine($"  [plugins] no plugins folder could be determined (set {PluginPaths.OverrideEnvVar} to an absolute path); nothing was loaded.");
+        if (pluginsStrict) return 2;
+    }
+}
+
 var watcher = new JournalWatcher(dir, bus);
 status.WriteLine("Replaying latest journal to warm up state...\n");
 watcher.Replay();
+plugins?.Drain(PluginHarness.ReplayDrainTimeout);
 
 // --twitch-card is a payload dump, not a state dump: print just the JSON the extension would
 // receive, so it can be piped straight into a file or a POST body, then stop.
@@ -112,9 +174,12 @@ PrintOverlay(state, exobio, colonisation, carrierCargo);
 PrintDiscordPresence(state);
 if (planId is not null) PrintEngineeringPlan(planId, planGrade, planRolls, state);
 
-if (args.Contains("--once"))
-    return 0;
+plugins?.PrintSummary(Console.Out);
 
+if (args.Contains("--once"))
+    return PluginExitCode();
+
+liveMode = true;
 Console.WriteLine("\nWatching live. Press Ctrl+C to stop.\n");
 bus.SubscribeAny(e =>
 {
@@ -148,7 +213,24 @@ if (voiceLog.Count > 0)
     foreach (var line in voiceLog)
         Console.WriteLine($"  {line}");
 }
-return 0;
+if (plugins is not null)
+{
+    plugins.Drain(PluginHarness.LiveDrainTimeout);
+    plugins.PrintSummary(Console.Out);
+}
+return PluginExitCode();
+
+// Unloads plugins (so unload problems are known), then maps strict-mode problems to exit status 1.
+int PluginExitCode()
+{
+    if (plugins is null) return 0;
+    plugins.Unload();
+    var problems = plugins.Problems;
+    if (!pluginsStrict || problems.Count == 0) return 0;
+    Console.Error.WriteLine($"  [plugins] strict: {problems.Count} problem(s):");
+    foreach (var p in problems) Console.Error.WriteLine($"    - {p}");
+    return 1;
+}
 
 static void PrintState(CommanderState s)
 {
