@@ -461,7 +461,12 @@ public sealed class PluginHost : IDisposable
             Assembly assembly;
             try
             {
-                assembly = loadContext.LoadFromAssemblyPath(entryPath!);
+                // From memory, not from the path: LoadFromAssemblyPath keeps the file open (and, on
+                // Windows, locked) until the context is collected, which would stop a rebuilt
+                // plugin from being copied over a running one and picked up by a reload.
+                // (The plugin's own dependency DLLs are still loaded by path and stay locked.)
+                using var image = new MemoryStream(File.ReadAllBytes(entryPath!), writable: false);
+                assembly = loadContext.LoadFromStream(image);
             }
             catch (BadImageFormatException)
             {
