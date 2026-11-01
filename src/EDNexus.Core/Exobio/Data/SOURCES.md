@@ -83,6 +83,16 @@ Not decided here. Until it is, the data is opt-in, never bundled or committed, s
 capped at 300 characters, descriptions and images dropped), and the code exposes
 `ExobiologyPoiService.AttributionText` / `AttributionUrl` that any UI must show. Alternatives for the
 owner: obtain EDAstro's permission, show only a link to the POI page, or drop the feature.
+
+**Attribution and licence handling (2026-11-01).** The owner intends to release EDNexus under MIT and has
+no plan to charge yet. MIT covers EDNexus's own code only; EDAstro content stays CC BY-NC-SA 3.0. To keep
+those separate: the data is only ever fetched at runtime and cached on the user's disk (never bundled,
+committed, or shipped in the installer); any UI that shows it must display `AttributionText` with a link
+to `AttributionUrl`; EDAstro is listed as a CC-BY-NC-SA data source in Settings > Open source
+contributions (`src/EDNexus.App/Assets/third-party-licenses.json`); and no derived POI files may be
+committed. ShareAlike is not triggered by fetching, but would be by redistributing or publishing a database
+derived from it. If a paid tier is ever added, get EDAstro's written permission first. Still not legal
+advice.
 Related: the Radicoida 100 m value and the wiki revision / journal analysis above are not reproducible from
 the repo (no script committed); treat them as maintainer notes, not verifiable provenance.
 
