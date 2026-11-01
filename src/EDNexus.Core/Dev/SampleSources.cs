@@ -215,11 +215,12 @@ public sealed class LocationSampleSource : JournalSampleSource
 /// <summary>
 /// A short walk across a planet's surface: a <c>Scan</c> (so the radius fallback is exercised), then
 /// a run of <c>Status</c> snapshots with <c>HasLatLong</c> set whose position moves along a heading.
-/// The last snapshot leaves the commander near the surface.
+/// A final snapshot without <c>HasLatLong</c> follows, so the sample does not leave a stale fix behind.
 /// </summary>
 public sealed class SurfacePositionSampleSource : JournalSampleSource
 {
     private const long NearSurfaceFlags = (1L << 24) | (1L << 21);   // InMainShip | HasLatLong
+    private const long InMainShipFlag = 1L << 24;
     private const double RadiusMetres = 3_200_000;
 
     public override string CardKey => "surface";
@@ -252,6 +253,7 @@ public sealed class SurfacePositionSampleSource : JournalSampleSource
             lon = Core.Surface.GreatCircle.NormalizeLongitude(lon);
             lat = Math.Clamp(lat, -90, 90);
         }
+        lines.Add(Event("Status", o => { o["Flags"] = InMainShipFlag; o["Flags2"] = 0; }));   // flag down: Position clears
         return lines;
     }
 }

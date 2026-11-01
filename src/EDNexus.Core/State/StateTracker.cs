@@ -17,8 +17,12 @@ public sealed class StateTracker
     private readonly CommanderState _state;
 
     // Body radii (m) from Scan events, keyed by body name: the fallback when Status.json omits PlanetRadius.
+    // Keyed by system + body so a same-named body elsewhere cannot overwrite it. Guarded by _surfaceGate,
+    // which also serialises every Position rewrite (the bus may publish from several threads).
     private const int MaxScanRadii = 4096;
     private readonly Dictionary<string, double> _scanRadii = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Queue<string> _scanOrder = new();   // insertion order, for evicting the oldest radius
+    private readonly object _surfaceGate = new();
 
     public StateTracker(JournalEventBus bus, CommanderState state)
     {
@@ -35,8 +39,6 @@ public sealed class StateTracker
         bus.Subscribe("SupercruiseExit", OnSupercruiseExit);
         bus.Subscribe("Status", OnStatus);
         bus.Subscribe("Scan", OnScan);
-        bus.Subscribe("ApproachBody", OnApproachBody);
-        bus.Subscribe("SupercruiseEntry", _ => ClearSurface());
         bus.Subscribe("StartJump", OnStartJump);
         bus.Subscribe("Cargo", OnCargo);
         bus.Subscribe("Materials", OnMaterials);
@@ -174,7 +176,7 @@ public sealed class StateTracker
         _state.JumpDestination = null;
         _state.StarSystem = e.GetString("StarSystem") ?? _state.StarSystem;
         _state.Body = e.GetString("Body") ?? _state.Body;
-        if (e.GetInt64("BodyID") is long locBodyId) _state.BodyId = locBodyId;
+        _state.BodyId = e.GetInt64("BodyID");
         _state.Docked = e.GetBool("Docked") ?? _state.Docked;
         _state.StationName = e.GetString("StationName");
         _state.StationType = e.GetString("StationType");
@@ -227,27 +229,38 @@ public sealed class StateTracker
     private void OnSupercruiseExit(JournalEntry e)
     {
         _state.Body = e.GetString("Body") ?? _state.Body;
-        if (e.GetInt64("BodyID") is long id) _state.BodyId = id;
+        _state.BodyId = e.GetInt64("BodyID");
     }
 
-    private void OnApproachBody(JournalEntry e)
+    private void ClearSurface()
     {
-        if (e.GetString("Body") is { Length: > 0 } body) _state.Body = body;
-        if (e.GetInt64("BodyID") is long id) _state.BodyId = id;
+        lock (_surfaceGate) _state.Position = null;
     }
 
-    private void ClearSurface() => _state.Position = null;
+    private static string RadiusKey(string? system, string body) => (system ?? "") + "|" + body;
 
     /// <summary>Remember a scanned body's radius, and back-fill the live position if it lacked one.</summary>
     private void OnScan(JournalEntry e)
     {
         if (e.GetString("BodyName") is not { Length: > 0 } name) return;
         if (e.GetDouble("Radius") is not double r || !double.IsFinite(r) || r <= 0) return;
-        if (_scanRadii.Count >= MaxScanRadii && !_scanRadii.ContainsKey(name)) _scanRadii.Clear();
-        _scanRadii[name] = r;
+        var system = e.GetString("StarSystem") ?? _state.StarSystem;
+        var key = RadiusKey(system, name);
 
-        if (_state.Position is { PlanetRadius: null } pos && string.Equals(pos.BodyName, name, StringComparison.OrdinalIgnoreCase))
-            _state.Position = pos with { PlanetRadius = r };
+        lock (_surfaceGate)
+        {
+            if (!_scanRadii.ContainsKey(key))
+            {
+                if (_scanRadii.Count >= MaxScanRadii) _scanRadii.Remove(_scanOrder.Dequeue());   // evict the oldest one, never everything
+                _scanOrder.Enqueue(key);
+            }
+            _scanRadii[key] = r;
+
+            if (_state.Position is { PlanetRadius: null } pos
+                && string.Equals(pos.BodyName, name, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(system ?? "", _state.StarSystem ?? "", StringComparison.OrdinalIgnoreCase))
+                _state.Position = pos with { PlanetRadius = r };
+        }
     }
 
     /// <summary>Position follows the <c>HasLatLong</c> flag exactly: set while it is up, cleared the moment it drops.</summary>
@@ -255,11 +268,14 @@ public sealed class StateTracker
     {
         if (!ShipStatusFlags.HasLatLongFlag(flags)) { ClearSurface(); return; }
 
-        var bodyName = e.GetString("BodyName") ?? _state.Position?.BodyName ?? _state.Body;
-        double? fallback = bodyName is not null && _scanRadii.TryGetValue(bodyName, out var r) ? r : null;
-        var pos = SurfacePosition.FromStatus(e, fallback);
-        if (pos is not null && pos.BodyName is null && bodyName is not null) pos = pos with { BodyName = bodyName };
-        _state.Position = pos;
+        lock (_surfaceGate)
+        {
+            var bodyName = e.GetString("BodyName") ?? _state.Position?.BodyName ?? _state.Body;
+            double? fallback = bodyName is not null && _scanRadii.TryGetValue(RadiusKey(_state.StarSystem, bodyName), out var r) ? r : null;
+            var pos = SurfacePosition.FromStatus(e, fallback);
+            if (pos is not null && pos.BodyName is null && bodyName is not null) pos = pos with { BodyName = bodyName };
+            _state.Position = pos;
+        }
     }
 
     private void OnStatus(JournalEntry e)

@@ -89,8 +89,24 @@ public class SurfaceCoordinatesTests
     [InlineData("100, 40")]
     [InlineData("12, 200")]
     [InlineData("12 E, 40 N")]   // swapped axes
+    [InlineData("12,5")]         // ambiguous decimal comma, not a pair
     public void Pair_rejects_bad_input(string? text)
         => Assert.False(SurfaceCoordinates.TryParsePair(text, out _, out _));
+
+    [Fact]
+    public void Overlong_input_is_rejected_without_matching()
+    {
+        var text = new string('1', 200) + " S";
+        Assert.False(SurfaceCoordinates.TryParseLatitude(text, out _));
+        Assert.False(SurfaceCoordinates.TryParsePair(new string('1', 100) + " S 5 W", out _, out _));
+    }
+
+    [Fact]
+    public void Format_of_non_finite_input_is_not_NaN_text()
+    {
+        Assert.Equal("n/a", SurfaceCoordinates.FormatLatitude(double.NaN));
+        Assert.Equal("n/a", SurfaceCoordinates.FormatLongitude(double.PositiveInfinity));
+    }
 
     [Fact]
     public void Parsing_is_culture_invariant()

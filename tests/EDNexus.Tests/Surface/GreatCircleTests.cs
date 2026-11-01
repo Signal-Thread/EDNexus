@@ -12,7 +12,7 @@ public class GreatCircleTests
     {
         // Published haversine result for these coordinates on R=6371 km is ~343.5 km.
         var d = GreatCircle.Distance(51.5074, -0.1278, 48.8566, 2.3522, EarthKm);
-        Assert.InRange(d, 343.0, 344.5);
+        Assert.Equal(343.5, d, 0.5);
     }
 
     [Fact]
@@ -149,6 +149,17 @@ public class GreatCircleTests
         Assert.Equal(2_500_000, GreatCircle.Distance(10, 170, la, lo, r), 3);
         Assert.Equal(75, GreatCircle.InitialBearing(10, 170, la, lo), 6);
         Assert.InRange(lo, -180, 180);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NaN)]
+    public void Destination_with_an_unusable_radius_returns_NaN(double radius)
+    {
+        var (la, lo) = GreatCircle.Destination(10, 20, 30, 1000, radius);
+        Assert.True(double.IsNaN(la) && double.IsNaN(lo));
     }
 
     [Fact]

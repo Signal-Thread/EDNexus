@@ -83,7 +83,7 @@ public sealed class DeveloperModePersistenceTests : IDisposable
         _boot.Dev.Enabled = true;
         var unit = new RefinedUnit(
             DateTimeOffset.Now, "gold", "Gold",
-            new SurfacePosition(1, "Sol", "Earth", 10.0, 20.0, 6371000));
+            new MiningFix(1, "Sol", "Earth", 10.0, 20.0, 6371000));
 
         _boot.RecordMiningSpot(unit, 9000);
 

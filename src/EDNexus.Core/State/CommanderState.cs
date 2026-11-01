@@ -37,8 +37,10 @@ public sealed class CommanderState : ObservableObject
     private Surface.SurfacePosition? _position;
     /// <summary>
     /// Latitude/longitude/heading/altitude on a planet, from <c>Status.json</c>. Non-null only while the
-    /// game reports a position (the <c>HasLatLong</c> flag: on or near a body); cleared on takeoff,
-    /// launch and supercruise. The record is immutable and replaced wholesale on each update.
+    /// game reports a position (the <c>HasLatLong</c> flag: on or near a body). It follows that flag
+    /// and nothing else: it drops with the first <c>Status.json</c> that no longer sets it (takeoff, launch,
+    /// supercruise) and is also cleared on a jump. Status.json is replayed at startup, so it can be
+    /// non-null at launch from the previous session's last file. The record is immutable and replaced wholesale on each update.
     /// </summary>
     public Surface.SurfacePosition? Position { get => _position; set => Set(ref _position, value); }
 

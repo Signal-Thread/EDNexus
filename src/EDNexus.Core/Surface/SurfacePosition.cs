@@ -5,7 +5,7 @@ namespace EDNexus.Core.Surface;
 /// <summary>
 /// Where the commander is on (or close to) a planet, from the game's <c>Status.json</c>. Only exists
 /// while the game reports a latitude and longitude (the <c>HasLatLong</c> flag); the state tracker
-/// clears it on takeoff, launch and supercruise.
+/// follows that flag exactly, so it disappears with the first Status that no longer sets it.
 /// </summary>
 /// <param name="Latitude">Degrees, -90 (south) to +90 (north).</param>
 /// <param name="Longitude">Degrees, -180 (west) to +180 (east).</param>

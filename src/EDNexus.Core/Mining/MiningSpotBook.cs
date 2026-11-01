@@ -83,14 +83,7 @@ public static class MiningSpotBook
     /// radius.
     /// </summary>
     public static double SurfaceDistanceMetres(double lat1, double lon1, double lat2, double lon2, double radius)
-    {
-        static double Rad(double deg) => deg * Math.PI / 180.0;
-        var dLat = Rad(lat2 - lat1);
-        var dLon = Rad(lon2 - lon1);
-        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
-              + Math.Cos(Rad(lat1)) * Math.Cos(Rad(lat2)) * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
-        return 2 * radius * Math.Asin(Math.Min(1, Math.Sqrt(a)));
-    }
+        => Surface.GreatCircle.Distance(lat1, lon1, lat2, lon2, radius);
 
     /// <summary>"Swoiphs AW-C d109 5 a" → "5 a" inside Swoiphs AW-C d109; unchanged otherwise.</summary>
     private static string ShortBodyName(string systemName, string body)
@@ -105,10 +98,10 @@ public static class MiningSpotBook
         return starSystem is { Length: > 0 } && string.Equals(s.StarSystem, starSystem, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool SameBody(KnownMiningSpot s, SurfacePosition at)
+    private static bool SameBody(KnownMiningSpot s, MiningFix at)
         => string.Equals(s.Body, at.Body, StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsNear(KnownMiningSpot s, SurfacePosition at)
+    private static bool IsNear(KnownMiningSpot s, MiningFix at)
     {
         if (at.PlanetRadius is double radius && radius > 0)
             return SurfaceDistanceMetres(s.Latitude, s.Longitude, at.Latitude, at.Longitude, radius) <= MergeRadiusMetres;

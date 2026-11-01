@@ -11,6 +11,8 @@ public class SurfacePositionTrackerTests
     private const long InShip = 1L << 24;
     private const long LatLong = 1L << 21;
     private const long Supercruise = 1L << 4;
+    private const long Docked = 1L << 0;
+    private const long InSrv = 1L << 26;
 
     private static (JournalEventBus bus, CommanderState state) NewTracker()
     {
@@ -154,20 +156,138 @@ public class SurfacePositionTrackerTests
     }
 
     [Fact]
-    public void Jump_and_supercruise_entry_clear_position_and_body_id_follows_events()
+    public void Jump_clears_position_and_body_id_follows_events()
     {
         var (bus, state) = NewTracker();
         Publish(bus, """{ "timestamp":"2026-07-01T00:00:00Z", "event":"Location", "StarSystem":"Alpha", "Body":"Alpha 1 a", "BodyID":7 }""");
         Assert.Equal(7, state.BodyId);
 
         Publish(bus, Status(InShip | LatLong, Full));
-        Publish(bus, """{ "timestamp":"2026-07-01T00:00:01Z", "event":"SupercruiseEntry", "StarSystem":"Alpha" }""");
-        Assert.Null(state.Position);
-
-        Publish(bus, Status(InShip | LatLong, Full));
         Publish(bus, """{ "timestamp":"2026-07-01T00:00:02Z", "event":"FSDJump", "StarSystem":"Beta" }""");
         Assert.Null(state.Position);
         Assert.Null(state.BodyId);   // no BodyID in the event: do not keep the old system's
+    }
+
+    [Fact]
+    public void Position_follows_the_flag_only_so_Supercruise_with_HasLatLong_keeps_it()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, Status(InShip | LatLong, Full));
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:01Z", "event":"SupercruiseEntry", "StarSystem":"Alpha" }""");
+        Assert.NotNull(state.Position);   // no event clears it: the flag is the single rule
+
+        Publish(bus, Status(InShip | Supercruise | LatLong, Full));
+        Assert.NotNull(state.Position);
+
+        Publish(bus, Status(InShip | Supercruise));
+        Assert.Null(state.Position);
+    }
+
+    [Theory]
+    [InlineData(Docked)]
+    [InlineData(InSrv)]
+    [InlineData(0L)]
+    public void Position_is_set_for_other_flag_combinations_with_HasLatLong(long extra)
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, Status(extra | LatLong, Full));
+        Assert.NotNull(state.Position);
+    }
+
+    [Fact]
+    public void OnFoot_with_HasLatLong_sets_position()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, $$"""{ "timestamp":"2026-07-01T00:00:00Z", "event":"Status", "Flags":{{LatLong}}, "Flags2":1, {{Full}} }""");
+        Assert.NotNull(state.Position);
+    }
+
+    [Fact]
+    public void ApproachBody_does_not_change_Body_or_BodyId()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:00Z", "event":"Location", "StarSystem":"Alpha", "Body":"Alpha A", "BodyID":1 }""");
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:01Z", "event":"ApproachBody", "StarSystem":"Alpha", "Body":"Alpha 1 a", "BodyID":7 }""");
+        Assert.Equal("Alpha A", state.Body);
+        Assert.Equal(1, state.BodyId);
+    }
+
+    [Fact]
+    public void Location_and_SupercruiseExit_set_BodyId_together_with_Body()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:00Z", "event":"Location", "StarSystem":"Alpha", "Body":"Alpha 1 a", "BodyID":7 }""");
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:01Z", "event":"SupercruiseExit", "StarSystem":"Alpha", "Body":"Alpha 2" }""");
+        Assert.Equal("Alpha 2", state.Body);
+        Assert.Null(state.BodyId);   // the event has no BodyID: do not keep the previous body's
+
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:02Z", "event":"Location", "StarSystem":"Alpha", "Body":"Alpha 3", "BodyID":9 }""");
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:03Z", "event":"Location", "StarSystem":"Alpha", "Body":"Alpha 4" }""");
+        Assert.Null(state.BodyId);
+    }
+
+    [Fact]
+    public void Stale_position_after_Location_is_cleared_by_the_next_flag_down_Status()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, Status(InShip | LatLong, Full));
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:01Z", "event":"Died" }""");
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:02Z", "event":"Location", "StarSystem":"Home", "Body":"Home Port", "BodyID":2, "Docked":true }""");
+        Publish(bus, Status(Docked));
+        Assert.Null(state.Position);
+    }
+
+    [Fact]
+    public void Scan_radius_lookup_is_case_insensitive_through_Status()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:00Z", "event":"Location", "StarSystem":"Alpha", "Body":"Alpha 1 a", "BodyID":7 }""");
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:00Z", "event":"Scan", "StarSystem":"Alpha", "BodyName":"ALPHA 1 A", "Radius":2500000.0 }""");
+        Publish(bus, Status(InShip | LatLong, "\"BodyName\":\"alpha 1 a\", \"Latitude\":1, \"Longitude\":2"));
+        Assert.Equal(2_500_000, state.Position!.PlanetRadius);
+    }
+
+    [Fact]
+    public void Scan_radius_in_another_system_with_the_same_body_name_is_not_used()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:00Z", "event":"Scan", "StarSystem":"Beta", "BodyName":"A 1", "Radius":1000.0 }""");
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:00Z", "event":"Location", "StarSystem":"Alpha", "Body":"A 1" }""");
+        Publish(bus, Status(InShip | LatLong, "\"BodyName\":\"A 1\", \"Latitude\":1, \"Longitude\":2"));
+        Assert.Null(state.Position!.PlanetRadius);
+    }
+
+    [Fact]
+    public void Scan_cache_cap_evicts_one_entry_and_keeps_the_current_body()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:00Z", "event":"Location", "StarSystem":"Alpha", "Body":"Alpha 1 a" }""");
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:00Z", "event":"Scan", "StarSystem":"Alpha", "BodyName":"Alpha 1 a", "Radius":2500000.0 }""");
+        for (var i = 0; i < 5000; i++)
+            Publish(bus, $$"""{ "timestamp":"2026-07-01T00:00:00Z", "event":"Scan", "StarSystem":"Alpha", "BodyName":"Filler {{i}}", "Radius":1000.0 }""");
+
+        // The cap is hit long before 5000; the current body's radius must survive via a Status that omits it.
+        Publish(bus, Status(InShip | LatLong, "\"BodyName\":\"Filler 4999\", \"Latitude\":1, \"Longitude\":2"));
+        Assert.Equal(1000.0, state.Position!.PlanetRadius);   // the most recent entries are retained
+    }
+
+    [Fact]
+    public void Concurrent_publishes_do_not_corrupt_state()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """{ "timestamp":"2026-07-01T00:00:00Z", "event":"Location", "StarSystem":"Alpha", "Body":"Alpha 1 a" }""");
+
+        Parallel.For(0, 8, t =>
+        {
+            for (var i = 0; i < 500; i++)
+            {
+                Publish(bus, $$"""{ "timestamp":"2026-07-01T00:00:00Z", "event":"Scan", "StarSystem":"Alpha", "BodyName":"B{{t}}-{{i}}", "Radius":1000.0 }""");
+                Publish(bus, Status(InShip | (i % 2 == 0 ? LatLong : 0), $"\"BodyName\":\"B{t}-{i}\", \"Latitude\":1, \"Longitude\":2"));
+            }
+        });
+
+        Publish(bus, Status(InShip | LatLong, Full));
+        Assert.Equal(3_200_000, state.Position!.PlanetRadius);
     }
 
     [Fact]
@@ -208,18 +328,22 @@ public class SurfacePositionTrackerTests
     {
         var (bus, state) = NewTracker();
         var source = Assert.Single(new DeveloperMode().Sources, s => s.CardKey == "surface");
-        var rng = new Random(1);
-
         var seen = new HashSet<(double, double)>();
-        foreach (var line in source.Sample(rng))
+        for (var seed = 1; seed <= 25; seed++)
         {
-            Assert.True(JournalEntry.TryParse(line, historical: false, out var entry));
-            bus.Publish(entry);
-            if (state.Position is { } p) seen.Add((p.Latitude, p.Longitude));
+            var radiusSeen = true;
+            foreach (var line in source.Sample(new Random(seed)))
+            {
+                Assert.True(JournalEntry.TryParse(line, historical: false, out var entry));
+                bus.Publish(entry);
+                if (state.Position is { } p) { seen.Add((p.Latitude, p.Longitude)); radiusSeen &= p.PlanetRadius is not null; }
+            }
+            Assert.True(radiusSeen, "radius should come from the Scan fallback");
         }
 
-        Assert.NotNull(state.Position);
+        Assert.Null(state.Position);   // the sample ends with a flag-down Status
         Assert.True(seen.Count > 1, "position should move between snapshots");
-        Assert.NotNull(state.Position!.PlanetRadius);   // supplied by the Scan fallback
+        Assert.All(seen, p => Assert.InRange(p.Item1, -90, 90));
+        Assert.All(seen, p => Assert.InRange(p.Item2, -180, 180));
     }
 }

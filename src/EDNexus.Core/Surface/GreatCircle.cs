@@ -9,6 +9,12 @@ public static class GreatCircle
     private const double DegToRad = Math.PI / 180.0;
     private const double RadToDeg = 180.0 / Math.PI;
 
+    /// <summary>Within this many degrees of +/-90 a point counts as being at a pole.</summary>
+    private const double PoleToleranceDegrees = 1e-12;
+
+    /// <summary>Bearing components smaller than this mean the two points coincide (or are antipodal).</summary>
+    private const double CoincidentEpsilon = 1e-15;
+
     /// <summary>Wrap an angle into [0, 360).</summary>
     public static double NormalizeDegrees(double degrees)
     {
@@ -45,18 +51,15 @@ public static class GreatCircle
         // At a pole "north" is undefined and the longitude is arbitrary, so the formula would return a
         // direction that depends on the meaningless longitude. Every way out of a pole is south
         // (north pole) or north (south pole).
-        if (Math.Abs(lat1) >= 90 - 1e-12)
-            return Math.Abs(lat1 - lat2) < 1e-12 ? 0 : (lat1 > 0 ? 180 : 0);
+        if (Math.Abs(lat1) >= 90 - PoleToleranceDegrees)
+            return Math.Abs(lat1 - lat2) < PoleToleranceDegrees ? 0 : (lat1 > 0 ? 180 : 0);
 
         var p1 = lat1 * DegToRad;
         var p2 = lat2 * DegToRad;
         var dl = (lon2 - lon1) * DegToRad;
-        var y =Math.Sin(dl) * Math.Cos(p2);
+        var y = Math.Sin(dl) * Math.Cos(p2);
         var x = Math.Cos(p1) * Math.Sin(p2) - Math.Sin(p1) * Math.Cos(p2) * Math.Cos(dl);
-        if (Math.Abs(x) < 1e-15 && Math.Abs(y) < 1e-15)
-        {
-            return 0;   // coincident points
-        }
+        if (Math.Abs(x) < CoincidentEpsilon && Math.Abs(y) < CoincidentEpsilon) return 0;   // coincident points
         return NormalizeDegrees(Math.Atan2(y, x) * RadToDeg);
     }
 
@@ -70,9 +73,15 @@ public static class GreatCircle
         return d > 180.0 ? d - 360.0 : d;
     }
 
-    /// <summary>The point reached by travelling <paramref name="distance"/> from a start along a bearing.</summary>
+    /// <summary>
+    /// The point reached by travelling <paramref name="distance"/> from a start along a bearing.
+    /// Returns (NaN, NaN) when the radius is not a positive finite number or any input is non-finite.
+    /// </summary>
     public static (double Latitude, double Longitude) Destination(double lat, double lon, double bearing, double distance, double radius)
     {
+        if (!(radius > 0) || !double.IsFinite(radius)
+            || !double.IsFinite(lat) || !double.IsFinite(lon) || !double.IsFinite(bearing) || !double.IsFinite(distance))
+            return (double.NaN, double.NaN);
         var d = distance / radius;
         var p1 = lat * DegToRad;
         var b = bearing * DegToRad;
