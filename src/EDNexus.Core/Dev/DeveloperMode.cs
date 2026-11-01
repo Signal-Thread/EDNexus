@@ -12,6 +12,7 @@ public sealed class DeveloperMode
     public IReadOnlyList<JournalSampleSource> Sources { get; } = new JournalSampleSource[]
     {
         new LocationSampleSource(),
+        new SurfacePositionSampleSource(),
         new ShipSampleSource(),
         new MaterialsSampleSource(),
         new CargoSampleSource(),
