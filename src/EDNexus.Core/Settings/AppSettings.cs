@@ -42,6 +42,9 @@ public sealed class AppSettings
     /// <summary>Colonisation card options (currently the shared-project lookup opt-out).</summary>
     public ColonisationSettings Colonisation { get; set; } = new();
 
+    /// <summary>The unified shopping list: manual lines and which sources are linked in.</summary>
+    public ShoppingListSettings Shopping { get; set; } = new();
+
     /// <summary>The in-game HUD overlay's on/off state.</summary>
     public OverlaySettings Overlay { get; set; } = new();
 

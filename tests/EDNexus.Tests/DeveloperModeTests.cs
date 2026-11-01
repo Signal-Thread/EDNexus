@@ -105,6 +105,30 @@ public class DeveloperModeTests
     }
 
     [Fact]
+    public void Shopping_sample_exists_and_moves_held_counts_for_tracked_items()
+    {
+        var dev = new DeveloperMode();
+        var source = Assert.Single(dev.Sources, s => s.CardKey == "shopping");
+        Assert.Equal("Shopping list", source.DisplayName);
+
+        var rng = Seeded();
+        foreach (var line in source.Sample(rng))
+            Assert.True(JournalEntry.TryParse(line, historical: false, out _), $"unparseable: {line}");
+
+        var bus = new JournalEventBus();
+        var state = new CommanderState();
+        _ = new StateTracker(bus, state);
+        dev.Randomize(bus, rng, cardKey: "shopping");
+
+        Assert.False(state.Cargo.IsEmpty);
+        Assert.True(state.Materials.TotalCount > 0);
+        // The Odyssey catalog has no Consumables, so only the three categories it does hold are checked.
+        Assert.NotEmpty(state.OnFoot.Components);
+        Assert.NotEmpty(state.OnFoot.Data);
+        Assert.NotEmpty(state.OnFoot.Items);
+    }
+
+    [Fact]
     public void Mining_sample_produces_a_prospect_with_at_least_one_material()
     {
         var bus = new JournalEventBus();

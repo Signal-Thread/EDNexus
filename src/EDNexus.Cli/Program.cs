@@ -6,6 +6,8 @@ using EDNexus.Core.Journal;
 using EDNexus.Core.Market;
 using EDNexus.Core.Materials;
 using EDNexus.Core.Overlay;
+using EDNexus.Core.Settings;
+using EDNexus.Core.ShoppingList;
 using EDNexus.Core.Ranks;
 using EDNexus.Core.Mining;
 using EDNexus.Core.Missions;
@@ -100,6 +102,7 @@ if (twitchCardOnly)
 
 PrintState(state);
 PrintColonisation(colonisation, carrierCargo, state);
+PrintShoppingList(colonisation, engineering, state);
 PrintMarket(market, state);
 PrintMaterials(state);
 PrintExobiology(exobio);
@@ -125,6 +128,7 @@ await watcher.RunAsync(cts.Token);
 Console.WriteLine();
 PrintState(state);
 PrintColonisation(colonisation, carrierCargo, state);
+PrintShoppingList(colonisation, engineering, state);
 PrintMarket(market, state);
 PrintMaterials(state);
 PrintExobiology(exobio);
@@ -169,6 +173,32 @@ static void PrintState(CommanderState s)
         foreach (var kv in s.Cargo.OrderByDescending(k => k.Value))
             Console.WriteLine($"      {kv.Value,4}  {kv.Key}");
     }
+}
+
+static void PrintShoppingList(ColonisationTracker colonisation, EngineeringTracker engineering, CommanderState s)
+{
+    // Side-effect-free read of the persisted settings; linked sources follow the card's toggles.
+    AppSettings settings;
+    try { settings = new SettingsStore().Peek(); }
+    catch { settings = new AppSettings(); }
+
+    var entries = new List<ShoppingEntry>(settings.Shopping.Manual);
+    if (settings.Shopping.LinkColonisation)
+        entries.AddRange(ShoppingListService.FromColonisation(colonisation.ActiveSite));
+    if (settings.Shopping.LinkEngineering)
+        entries.AddRange(ShoppingListService.FromEngineering(settings.Engineering, engineering, s));
+    var rows = ShoppingListService.Build(entries, s);
+
+    Console.WriteLine("\n======== Shopping list ========");
+    if (rows.Count == 0)
+    {
+        Console.WriteLine("  Nothing on the list (no manual lines, depot or pinned engineering goal).");
+        return;
+    }
+
+    Console.WriteLine($"      {"held",7}  {"needed",7}  {"name",-34}  source");
+    foreach (var r in rows)
+        Console.WriteLine($"      {r.Held,7:N0}  {r.Needed,7:N0}  {r.Name,-34}  {string.Join(", ", r.Sources)}{(r.Satisfied ? "  ✓" : "")}");
 }
 
 static void PrintColonisation(ColonisationTracker tracker, CarrierCargoTracker carrierCargo, CommanderState s)

@@ -16,6 +16,7 @@ public sealed class DeveloperMode
         new MaterialsSampleSource(),
         new CargoSampleSource(),
         new ColonisationSampleSource(),
+        new ShoppingListSampleSource(),
         new MarketSampleSource(),
         new ExobiologySampleSource(),
         new MissionsSampleSource(),
