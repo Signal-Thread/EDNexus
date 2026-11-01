@@ -30,6 +30,11 @@ dotnet run --project src/EDNexus.Cli -- --once --plan fsd_increased_range 5 3
 # Add --show-credits to include the balance (withheld by default, as in the app).
 dotnet run --project src/EDNexus.Cli -- --twitch-card
 
+# Load plugins (EDNEXUS_PLUGINS_DIR or the default folder) before the replay and print a
+# per-plugin summary; `--plugin <folder>` loads just one plugin folder. All declared
+# capabilities are granted headlessly; UI registrations are counted, not rendered.
+dotnet run --project src/EDNexus.Cli -- --once --plugins
+
 # Unit tests (xUnit).
 dotnet test EDNexus.slnx
 ```

@@ -15,6 +15,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/EDNexus.App.Tests/EDNexus.App.Tests.csproj" />
+    <Project Path="tests/EDNexus.Cli.Tests/EDNexus.Cli.Tests.csproj" />
     <Project Path="tests/EDNexus.Plugins.Abstractions.Tests/EDNexus.Plugins.Abstractions.Tests.csproj" />
     <Project Path="tests/EDNexus.Plugins.Hosting.Tests/EDNexus.Plugins.Hosting.Tests.csproj" />
     <Project Path="tests/EDNexus.Tests/EDNexus.Tests.csproj" />
