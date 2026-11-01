@@ -59,6 +59,7 @@ var bus = new JournalEventBus();
 var state = new CommanderState();
 _ = new StateTracker(bus, state);
 var colonisation = new ColonisationTracker(bus, state);
+var carrierCargo = new CarrierCargoTracker(bus);
 var market = new MarketTracker(bus, state);
 var exobio = new ExobiologyTracker(bus, state);
 var engineering = new EngineeringTracker(bus);
@@ -98,13 +99,13 @@ if (twitchCardOnly)
 }
 
 PrintState(state);
-PrintColonisation(colonisation, state);
+PrintColonisation(colonisation, carrierCargo, state);
 PrintMarket(market, state);
 PrintMaterials(state);
 PrintExobiology(exobio);
 PrintEngineers(engineering);
 PrintRanks(ranks);
-PrintOverlay(state, exobio, colonisation);
+PrintOverlay(state, exobio, colonisation, carrierCargo);
 PrintDiscordPresence(state);
 if (planId is not null) PrintEngineeringPlan(planId, planGrade, planRolls, state);
 
@@ -123,13 +124,13 @@ await watcher.RunAsync(cts.Token);
 
 Console.WriteLine();
 PrintState(state);
-PrintColonisation(colonisation, state);
+PrintColonisation(colonisation, carrierCargo, state);
 PrintMarket(market, state);
 PrintMaterials(state);
 PrintExobiology(exobio);
 PrintEngineers(engineering);
 PrintRanks(ranks);
-PrintOverlay(state, exobio, colonisation);
+PrintOverlay(state, exobio, colonisation, carrierCargo);
 PrintDiscordPresence(state);
 if (liveCounts.Count > 0)
 {
@@ -170,7 +171,7 @@ static void PrintState(CommanderState s)
     }
 }
 
-static void PrintColonisation(ColonisationTracker tracker, CommanderState s)
+static void PrintColonisation(ColonisationTracker tracker, CarrierCargoTracker carrierCargo, CommanderState s)
 {
     var site = tracker.ActiveSite;
     if (site is null) return;
@@ -181,7 +182,7 @@ static void PrintColonisation(ColonisationTracker tracker, CommanderState s)
     Console.WriteLine($"  Site      : {where}");
     Console.WriteLine($"  Progress  : {status}  ({site.CompletedCount}/{site.Resources.Count} commodities, {site.TotalRemaining:N0} t remaining)");
 
-    var list = site.BuildShoppingList(s.Cargo);
+    var list = site.BuildShoppingList(s.Cargo, carrierCargo.Stock);
     if (list.Count == 0)
     {
         Console.WriteLine("  Nothing outstanding — depot fully supplied.");
@@ -189,12 +190,13 @@ static void PrintColonisation(ColonisationTracker tracker, CommanderState s)
     }
 
     Console.WriteLine("  --- shopping list (worst shortfall first) ---");
-    Console.WriteLine($"      {"remaining",9}  {"in hold",8}  {"to buy",8}  commodity");
+    Console.WriteLine($"      {"remaining",9}  {"in hold",8}  {"carrier",8}  {"to buy",8}  commodity");
     foreach (var item in list)
     {
         var hold = item.InHold > 0 ? item.Carrying.ToString("N0") : "-";
-        var flag = item.CoveredByHold ? " ✓ carrying enough" : "";
-        Console.WriteLine($"      {item.Remaining,9:N0}  {hold,8}  {item.StillNeeded,8:N0}  {item.Name}{flag}");
+        var stored = item.OnCarrier > 0 ? item.OnCarrier.ToString("N0") : "-";
+        var flag = item.CoveredByStock ? " ✓ enough on hand" : "";
+        Console.WriteLine($"      {item.Remaining,9:N0}  {hold,8}  {stored,8}  {item.StillNeeded,8:N0}  {item.Name}{flag}");
     }
 }
 
@@ -385,9 +387,9 @@ static void PrintEngineers(EngineeringTracker tracker)
 /// app does (<see cref="OverlayContentBuilder"/>) — the fastest way to check the overlay's content
 /// against real journal data without launching the desktop app.
 /// </summary>
-static void PrintOverlay(CommanderState s, ExobiologyTracker exobio, ColonisationTracker colonisation)
+static void PrintOverlay(CommanderState s, ExobiologyTracker exobio, ColonisationTracker colonisation, CarrierCargoTracker carrierCargo)
 {
-    var content = OverlayContentBuilder.Build(s, exobio.CurrentBody, colonisation.ActiveSite, route: null, exobio.ActiveScan);
+    var content = OverlayContentBuilder.Build(s, exobio.CurrentBody, colonisation.ActiveSite, route: null, exobio.ActiveScan, carrierCargo.Stock);
 
     Console.WriteLine("\n======== Overlay preview ========");
     Console.WriteLine($"  System    : {content.StarSystem ?? "(unknown)"}");

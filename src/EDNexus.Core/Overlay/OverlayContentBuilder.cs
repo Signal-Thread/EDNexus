@@ -20,16 +20,18 @@ public static class OverlayContentBuilder
     /// <param name="activeSite">The most recently touched colonisation site, from <see cref="ColonisationTracker.ActiveSite"/>, or null.</param>
     /// <param name="route">The last saved/plotted route, or null when nothing has been plotted.</param>
     /// <param name="activeScan">The sample run in progress, from <see cref="ExobiologyTracker.ActiveScan"/>, or null.</param>
+    /// <param name="carrierStock">Fleet-carrier stock from <see cref="CarrierCargoTracker.Stock"/>, so stored cargo isn't listed as still to buy.</param>
     public static OverlayContent Build(
         CommanderState state,
         BodyBioSignals? currentBodySignals,
         ColonisationSite? activeSite,
         RouteSettings? route,
-        OrganicScan? activeScan = null)
+        OrganicScan? activeScan = null,
+        IReadOnlyDictionary<string, int>? carrierStock = null)
     {
         IReadOnlyList<OverlayShortfallLine> shortfalls = activeSite is null
             ? Array.Empty<OverlayShortfallLine>()
-            : activeSite.BuildShoppingList(state.Cargo)
+            : activeSite.BuildShoppingList(state.Cargo, carrierStock)
                 .Where(i => i.StillNeeded > 0)
                 .OrderByDescending(i => i.StillNeeded)
                 .Take(MaxShortfallLines)

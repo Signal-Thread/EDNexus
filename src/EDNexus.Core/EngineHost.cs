@@ -48,6 +48,7 @@ public sealed class EngineHost : IDisposable
     public JournalEventBus Bus { get; } = new();
     public CommanderState State { get; } = new();
     public ColonisationTracker Colonisation { get; }
+    public CarrierCargoTracker CarrierCargo { get; }
     public MarketTracker Market { get; }
 
     /// <summary>Engineering planner: pinned-blueprint material/engineer guidance. Reads static reference data.</summary>
@@ -140,6 +141,7 @@ public sealed class EngineHost : IDisposable
         JournalDirectory = journalDir ?? JournalPaths.Resolve();
         _tracker = new StateTracker(Bus, State);
         Colonisation = new ColonisationTracker(Bus, State);
+        CarrierCargo = new CarrierCargoTracker(Bus);
         Market = new MarketTracker(Bus, State);
         Engineering = new EngineeringTracker(Bus);
         Exobiology = new ExobiologyTracker(Bus, State);
