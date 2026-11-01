@@ -45,7 +45,30 @@ public partial class SettingsWindow : Window
         FitToScreen();
     }
 
-    public SettingsWindow(Bootstrap boot, ViewModels.MainWindowViewModel? dashboard = null) : this()
+    /// <summary>
+    /// Shows a warning under the Inara key while Inara is refusing our updates for exceeding its limit,
+    /// and keeps it current while the dialog is open.
+    /// </summary>
+    private void WatchInaraRateLimit(EDNexus.Core.Reporting.InaraBridge? inara)
+    {
+        if (inara is null) return;
+
+        void Refresh()
+        {
+            var limited = inara.RateLimitedAt is not null;
+            InaraRateLimitNote.IsVisible = limited;
+            if (limited)
+                InaraRateLimitNote.Text = "⚠ Inara recently rejected an update for exceeding its request limit. "
+                                          + EDNexus.Core.Reporting.InaraBridge.RateLimitAdvice;
+        }
+
+        void OnChanged() => Avalonia.Threading.Dispatcher.UIThread.Post(Refresh);
+        inara.RateLimitChanged += OnChanged;
+        Closed += (_, _) => inara.RateLimitChanged -= OnChanged;
+        Refresh();
+    }
+
+    public SettingsWindow(Bootstrap boot,ViewModels.MainWindowViewModel? dashboard = null) : this()
     {
         _boot = boot;
         _dashboard = dashboard;
@@ -56,6 +79,7 @@ public partial class SettingsWindow : Window
         EddnToggle.IsChecked = boot.Settings.Reporting.Eddn.Enabled;
         InaraToggle.IsChecked = boot.Settings.Reporting.Inara.Enabled;
         InaraApiKey.Text = boot.Settings.Reporting.Inara.ApiKey;
+        WatchInaraRateLimit(dashboard?.Inara);
         AutoDownloadToggle.IsChecked = boot.Settings.AutoDownloadUpdates;
         MiningThresholdBox.Text = boot.Settings.Mining.MinValueThreshold > 0
             ? boot.Settings.Mining.MinValueThreshold.ToString(System.Globalization.CultureInfo.InvariantCulture)

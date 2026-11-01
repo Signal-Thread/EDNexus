@@ -38,6 +38,9 @@ public sealed class ReporterHost : IAsyncDisposable
         _inara = new InaraBridge(bus, settings, new InaraClient(inaraOptions, _http), isSuppressed, log);
     }
 
+    /// <summary>The Inara bridge, for surfacing its rate-limit warning in the UI.</summary>
+    public InaraBridge Inara => _inara;
+
     // A User-Agent product version must be a single token; fall back rather than throw on an odd build string.
     private static string SafeProductVersion(string version)
     {

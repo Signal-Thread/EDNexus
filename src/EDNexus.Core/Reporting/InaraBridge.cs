@@ -54,6 +54,7 @@ public sealed class InaraBridge : IAsyncDisposable
 
     private Task _tail = Task.CompletedTask;
     private CancellationTokenSource? _debounce;
+    private DateTimeOffset? _rateLimitedAt;   // when Inara last refused us for rate limiting; null once a send is accepted
     private readonly Queue<DateTimeOffset> _sendTimes = new();   // start time of recent requests (rolling window)
     private readonly CancellationTokenSource _disposeCts = new();
     private bool _stopped;   // set on a hard error (e.g. bad API key); cleared when disabled again
@@ -88,6 +89,17 @@ public sealed class InaraBridge : IAsyncDisposable
         // was closed) must not push the last session snapshot to Inara.
         bus.Subscribe("Shutdown", e => { if (!e.IsHistorical) FlushImmediate(); });
     }
+
+    /// <summary>Shown in the reporting log and the Settings window when Inara refuses us for exceeding its limit.</summary>
+    public const string RateLimitAdvice =
+        "Inara's request limit is per API key and EDNexus stays within two requests a minute, so another " +
+        "application may be updating the same Inara profile. Check whether other tools are using this API key.";
+
+    /// <summary>When Inara last rejected an update for exceeding the rate limit; null if the latest send was accepted.</summary>
+    public DateTimeOffset? RateLimitedAt { get { lock (_gate) return _rateLimitedAt; } }
+
+    /// <summary>Raised (on a worker thread) when <see cref="RateLimitedAt"/> flips between set and cleared.</summary>
+    public event Action? RateLimitChanged;
 
     private bool Enabled => _settings.Reporting.Inara.Enabled
                             && !string.IsNullOrWhiteSpace(_settings.Reporting.Inara.ApiKey);
@@ -263,6 +275,7 @@ public sealed class InaraBridge : IAsyncDisposable
         var response = await _client.SendAsync(identity, batch).ConfigureAwait(false);
 
         LogUpload(batch, response);
+        TrackRateLimit(response);
 
         if (response.IsHardError)
         {
@@ -274,6 +287,27 @@ public sealed class InaraBridge : IAsyncDisposable
             RequeueOrDrop(batch, response);
         else
             lock (_gate) _failures = 0;
+    }
+
+    /// <summary>
+    /// Remembers that Inara refused us for exceeding the limit, and clears that once a send is accepted.
+    /// The limit is per API key, so being refused while we stay under our own cap means another program
+    /// is updating the same profile.
+    /// </summary>
+    private void TrackRateLimit(InaraResponse response)
+    {
+        DateTimeOffset? next;
+        if (response.IsRateLimited) next = DateTimeOffset.UtcNow;
+        else if (response.IsOk) next = null;
+        else return;   // some other failure says nothing about the limit either way
+
+        bool changed;
+        lock (_gate)
+        {
+            changed = _rateLimitedAt.HasValue != next.HasValue;
+            _rateLimitedAt = next;
+        }
+        if (changed) RateLimitChanged?.Invoke();
     }
 
     /// <summary>How long until another request fits in the rolling window; zero or less means send now.</summary>
@@ -333,9 +367,11 @@ public sealed class InaraBridge : IAsyncDisposable
         if (_log is null) return;
 
         var summary = $"{batch.Count} event(s): {string.Join(", ", batch.Select(e => e.EventName))}";
-        var status = response.Status == 0
-            ? $"transport error: {response.StatusText}"
-            : $"{response.Status} {response.StatusText}".TrimEnd();
+        var status = response.IsRateLimited
+            ? $"rate limited: {response.StatusText}"
+            : response.Status == 0
+                ? $"transport error: {response.StatusText}"
+                : $"{response.Status} {response.StatusText}".TrimEnd();
 
         // Payload logging serialises only the events (eventName/eventData) — never the request header,
         // which carries the commander's Inara API key.
@@ -343,7 +379,9 @@ public sealed class InaraBridge : IAsyncDisposable
 
         _log.Record(new ReportingUpload(
             DateTimeOffset.UtcNow, ReportingTarget.Inara, summary, response.IsOk, status,
-            Error: response.IsOk ? null : (response.StatusText ?? "error"),
+            Error: response.IsOk ? null
+                 : response.IsRateLimited ? $"{response.StatusText}. {RateLimitAdvice}"
+                 : (response.StatusText ?? "error"),
             Payload: payload));
     }
 

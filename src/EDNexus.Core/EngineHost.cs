@@ -289,6 +289,9 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public void RefreshDiscordPresence() => _discordPresence?.Refresh();
 
+    /// <summary>The Inara reporter, or null when this host has no reporting (the CLI's replay).</summary>
+    public EDNexus.Core.Reporting.InaraBridge? Inara => _reporters?.Inara;
+
     /// <summary>Guards the hand-off from replay to watching against <see cref="Dispose"/> (see <see cref="BeginWatching"/>).</summary>
     private readonly object _lifecycle = new();
     private bool _disposedFlag;

@@ -229,6 +229,63 @@ public class InaraBridgeResilienceTests
         Assert.Equal(TimeSpan.FromSeconds(7), response.RetryAfter);
     }
 
+    [Fact]
+    public async Task Http_429_is_flagged_as_rate_limited_and_stays_transient()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.TooManyRequests, "");
+        using var client = new InaraClient(ClientOptions, new HttpClient(handler));
+
+        var response = await client.SendAsync(new InaraIdentity { ApiKey = "k", CommanderName = "J" },
+            new[] { InaraEvent.SetCommanderCredits(DateTimeOffset.UtcNow, 1) });
+
+        Assert.True(response.IsRateLimited);
+        Assert.True(response.IsTransient);
+        Assert.False(response.IsHardError);
+    }
+
+    [Fact]
+    public async Task A_rate_limit_reply_in_the_json_body_is_not_a_hard_error()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK, """{ "header": { "eventStatus": 400, "eventStatusText": "Too many requests" } }""");
+        using var client = new InaraClient(ClientOptions, new HttpClient(handler));
+
+        var response = await client.SendAsync(new InaraIdentity { ApiKey = "k", CommanderName = "J" },
+            new[] { InaraEvent.SetCommanderCredits(DateTimeOffset.UtcNow, 1) });
+
+        Assert.True(response.IsRateLimited);
+        Assert.False(response.IsHardError);   // reporting must keep retrying, not stop like it does for a bad key
+    }
+
+    [Fact]
+    public async Task A_rate_limit_refusal_is_logged_with_advice_and_flags_the_bridge_until_a_send_succeeds()
+    {
+        var bus = new JournalEventBus();
+        var handler = new RecordingHandler(n => n == 1 ? (HttpStatusCode.TooManyRequests, "") : (HttpStatusCode.OK, Ok));
+        var log = new ListLog();
+        var settings = EnabledSettings();
+        await using var bridge = new InaraBridge(bus, settings, new InaraClient(ClientOptions, new HttpClient(handler)),
+            TimeSpan.Zero, TimeSpan.Zero, isSuppressed: null, log: log, retryBackoff: TimeSpan.FromMilliseconds(300));
+
+        bus.Publish(Entry(Commander));
+        bus.Publish(Entry(Dock));
+        await WaitForAsync(() => handler.CallCount >= 1);
+        await WaitForAsync(() => bridge.RateLimitedAt is not null);
+
+        Assert.NotNull(bridge.RateLimitedAt);
+        var refusal = Assert.Single(log.Records);
+        Assert.False(refusal.Success);
+        Assert.Contains("another application", refusal.Error);
+
+        await WaitForAsync(() => bridge.RateLimitedAt is null);   // the retry is accepted
+        Assert.Null(bridge.RateLimitedAt);
+    }
+
+    private sealed class ListLog : IReportingLog
+    {
+        public List<ReportingUpload> Records { get; } = new();
+        public void Record(ReportingUpload upload) { lock (Records) Records.Add(upload); }
+    }
+
     private sealed class RetryAfterHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
