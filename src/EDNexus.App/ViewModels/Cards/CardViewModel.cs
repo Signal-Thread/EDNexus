@@ -36,6 +36,8 @@ public sealed class DashboardContext
     private readonly Action<DateTimeOffset, long> _recordMiningRefined;
     private readonly Action<RefinedUnit, int> _recordMiningSpot;
     private readonly Func<bool> _sharedProjectLookupEnabled;
+    private readonly Func<ShoppingListSettings> _getShopping;
+    private readonly Action<ShoppingListSettings> _saveShopping;
     private readonly Func<GoalsSettings>? _getGoals;
     private readonly Action<GoalsSettings>? _saveGoals;
 
@@ -56,6 +58,8 @@ public sealed class DashboardContext
         Action<RefinedUnit, int> recordMiningSpot,
         RadioPlayerSelector radio,
         Func<bool>? sharedProjectLookupEnabled = null,
+        Func<ShoppingListSettings>? getShopping = null,
+        Action<ShoppingListSettings>? saveShopping = null,
         Func<GoalsSettings>? getGoals = null,
         Action<GoalsSettings>? saveGoals = null)
     {
@@ -75,6 +79,8 @@ public sealed class DashboardContext
         _recordMiningRefined = recordMiningRefined;
         _recordMiningSpot = recordMiningSpot;
         _sharedProjectLookupEnabled = sharedProjectLookupEnabled ?? (() => true);
+        _getShopping = getShopping ?? (() => new ShoppingListSettings());
+        _saveShopping = saveShopping ?? (_ => { });
         _getGoals = getGoals;
         _saveGoals = saveGoals;
     }
@@ -131,6 +137,18 @@ public sealed class DashboardContext
     /// (Raven Colonial). Doing so sends the system name and market id to that third-party service.
     /// </summary>
     public bool SharedProjectLookupEnabled => _sharedProjectLookupEnabled();
+
+    /// <summary>
+    /// Set by the shell: runs a "buy this commodity" search on the Trade card for the given display
+    /// name. Null until the shell has created its cards.
+    /// </summary>
+    public Action<string>? FindToBuy { get; set; }
+
+    /// <summary>Read the shopping list's persisted manual lines and link toggles.</summary>
+    public ShoppingListSettings GetShoppingSettings() => _getShopping();
+
+    /// <summary>Persist the shopping list's manual lines and link toggles.</summary>
+    public void SaveShoppingSettings(ShoppingListSettings shopping) => _saveShopping(shopping);
 
     /// <summary>Read the Goals card's persisted goals (an empty instance when none are wired).</summary>
     public GoalsSettings GetGoals() => _getGoals?.Invoke() ?? new GoalsSettings();

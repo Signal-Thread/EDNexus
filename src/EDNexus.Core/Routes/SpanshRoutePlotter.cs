@@ -35,6 +35,9 @@ public sealed class SpanshRoutePlotter : IRoutePlotter
         if (request.Mode == RouteMode.NoBoost && request.Ship is null) return null;
         if (request.Mode == RouteMode.NeutronHighway && request.JumpRangeLy <= 0) return null;
 
+        if (request.FirstJumpMultiplier > 1 && request.Mode != RouteMode.FleetCarrier)
+            return await PlotWithInjectionAsync(request, ct).ConfigureAwait(false);
+
         var key = CacheKey(request);
         if (_cache.GetTyped<List<RouteHop>>(key, Json) is { Count: > 0 } cachedHops)
             return new RoutePlan(request.From, request.To, cachedHops, request.Mode);
@@ -47,6 +50,41 @@ public sealed class SpanshRoutePlotter : IRoutePlotter
 
         var hops = result.Waypoints.Select(ToHop).ToList();
         _cache?.Put(key, JsonSerializer.Serialize(hops, Json));
+        return new RoutePlan(request.From, request.To, hops, request.Mode);
+    }
+
+    /// <summary>
+    /// An FSD Injection boosts one jump only, and Spansh can't model that, so: plot the whole route at the
+    /// boosted range and keep just its first jump, then plot the rest from there at normal range. Falls
+    /// back to the plain route when the boosted plot fails or its first waypoint isn't a single jump.
+    /// </summary>
+    private async Task<RoutePlan?> PlotWithInjectionAsync(RoutePlotRequest request, CancellationToken ct)
+    {
+        var m = request.FirstJumpMultiplier;
+        var plain = request with { FirstJumpMultiplier = 1 };
+        var boosted = plain with
+        {
+            JumpRangeLy = request.JumpRangeLy * m,
+            Ship = request.Ship is { } s ? s with { OptimalMass = s.OptimalMass * m } : null,
+        };
+
+        var first = await PlotAsync(boosted, ct).ConfigureAwait(false);
+        if (first is null || first.Hops.Count < 2 || first.Hops[1].Jumps != 1)
+            return await PlotAsync(plain, ct).ConfigureAwait(false);
+        if (first.Hops.Count == 2) return first;   // the boosted jump reaches the destination
+
+        var step = first.Hops[1];
+        var rest = await PlotAsync(plain with { From = step.System }, ct).ConfigureAwait(false);
+        if (rest is null || rest.Hops.Count < 2)
+            return await PlotAsync(plain, ct).ConfigureAwait(false);
+
+        var left = rest.Hops[0].DistanceRemainingLy;
+        var hops = new List<RouteHop>(rest.Hops.Count + 1)
+        {
+            first.Hops[0] with { DistanceRemainingLy = left + step.DistanceJumpedLy },
+            step with { DistanceRemainingLy = left },
+        };
+        hops.AddRange(rest.Hops.Skip(1));
         return new RoutePlan(request.From, request.To, hops, request.Mode);
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using EDNexus.Core.Routes;
@@ -104,6 +105,37 @@ public class SpanshRoutePlotterTests
         Assert.False(plan.Hops[1].IsNeutron);
         Assert.Equal(4.1, plan.Hops[1].FuelUsed);
         Assert.Equal(4.1, plan.TotalFuelUsed);
+    }
+
+    [Fact]
+    public async Task Injector_boosts_only_the_first_jump_then_replots_at_normal_range()
+    {
+        const string boostedPlot = """
+        { "status": "ok", "result": { "jumps": [
+            { "name": "Sol",    "distance": 0,  "distance_to_destination": 300, "fuel_used": 0, "fuel_in_tank": 32 },
+            { "name": "Far",    "distance": 70, "distance_to_destination": 230, "fuel_used": 5, "fuel_in_tank": 27 },
+            { "name": "Colonia","distance": 70, "distance_to_destination": 0,   "fuel_used": 5, "fuel_in_tank": 22 } ] } }
+        """;
+        const string restPlot = """
+        { "status": "ok", "result": { "jumps": [
+            { "name": "Far",    "distance": 0,  "distance_to_destination": 230, "fuel_used": 0, "fuel_in_tank": 32 },
+            { "name": "Mid",    "distance": 45, "distance_to_destination": 185, "fuel_used": 4, "fuel_in_tank": 28 },
+            { "name": "Colonia","distance": 45, "distance_to_destination": 0,   "fuel_used": 4, "fuel_in_tank": 24 } ] } }
+        """;
+        // Calls: submit, boosted result, submit, rest result.
+        var handler = new RecordingHandler(n => (HttpStatusCode.OK, n switch { 1 => Submit, 2 => boostedPlot, 3 => Submit, _ => restPlot }));
+        var plotter = NewPlotter(handler);
+        var ship = new EDNexus.Core.Ship.ShipFsdProfile(1050, 280, 32, 0.63, 0.012, 2.45, 5, 0, 0);
+
+        var plan = await plotter.PlotAsync(new RoutePlotRequest("Sol", "Colonia", 0, Mode: RouteMode.NoBoost, Ship: ship, FirstJumpMultiplier: 1.5));
+
+        Assert.NotNull(plan);
+        Assert.Equal(new[] { "Sol", "Far", "Mid", "Colonia" }, plan!.Hops.Select(h => h.System));
+        Assert.Equal(70, plan.Hops[1].DistanceJumpedLy);     // the boosted jump
+        Assert.Equal(300, plan.Hops[0].DistanceRemainingLy);
+        Assert.Equal(230, plan.Hops[1].DistanceRemainingLy);
+        Assert.Contains("optimal_mass=1575", handler.Bodies[0]);   // 1050 × 1.5 for the boosted plot
+        Assert.Contains("optimal_mass=1050", handler.Bodies[2]);   // the remainder at normal range
     }
 
     [Fact]

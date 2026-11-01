@@ -121,6 +121,13 @@ public sealed class Bootstrap
         Store.Save(Settings);
     }
 
+    /// <summary>Persist the shopping list's manual lines and link toggles.</summary>
+    public void ApplyShoppingSettings(ShoppingListSettings shopping)
+    {
+        Settings.Shopping = shopping;
+        Store.Save(Settings);
+    }
+
     /// <summary>
     /// Persist the Goals card's goals. Developer mode drives the card with fabricated goals and is
     /// documented as never persisted, so nothing is stored (or kept) while it is on.
