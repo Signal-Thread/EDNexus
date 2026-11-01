@@ -19,6 +19,8 @@
     <AvaloniaResource Include="..\..\assets\icons\ednexus-256.png" Link="Assets\ednexus.png" />
     <!-- The mining card's "worth mining" chime, addressable as avares://EDNexus.App/Assets/mining-alert.wav -->
     <AvaloniaResource Include="..\..\assets\sounds\mining-alert.wav" Link="Assets\mining-alert.wav" />
+    <!-- The Open Source Contributions list. Regenerate the package half with tools/Update-ThirdPartyLicenses.ps1. -->
+    <AvaloniaResource Include="Assets\third-party-licenses.json" />
   </ItemGroup>
 
   <ItemGroup>

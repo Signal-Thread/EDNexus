@@ -102,8 +102,10 @@
                 <TextBlock x:Name="UpdateLine" Foreground="{StaticResource InkDim}" VerticalAlignment="Center" />
               </WrapPanel>
 
-              <Button x:Name="CheckNowButton" Content="Check for updates now" Click="OnCheckNow"
-                      Padding="10" HorizontalAlignment="Left" />
+              <WrapPanel ItemSpacing="10" LineSpacing="6">
+                <Button x:Name="CheckNowButton" Content="Check for updates now" Click="OnCheckNow" Padding="10" />
+                <Button x:Name="OpenSourceButton" Content="Open source contributions" Click="OnOpenSource" Padding="10" />
+              </WrapPanel>
             </StackPanel>
           </Border>
         </StackPanel>
