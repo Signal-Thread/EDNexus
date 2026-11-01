@@ -68,6 +68,8 @@
                 <CheckBox x:Name="RevealApiKey" Grid.Column="1" Content="Show" Margin="10,0,0,0"
                           Foreground="{StaticResource InkDim}" IsCheckedChanged="OnRevealApiKeyChanged" />
               </Grid>
+              <TextBlock x:Name="InaraRateLimitNote" IsVisible="False" Foreground="{StaticResource Warning}"
+                         FontSize="12" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
 

@@ -137,6 +137,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// </summary>
     public EDNexus.Core.Twitch.TwitchStreamCardService? TwitchCard => _host.TwitchCard;
 
+    /// <summary>The live Inara reporter, for the settings dialog's rate-limit warning (read through the field, as for <see cref="TwitchCard"/>).</summary>
+    public EDNexus.Core.Reporting.InaraBridge? Inara => _host.Inara;
+
     /// <summary>
     /// <see cref="EDNexus.Core.Twitch.TwitchStreamCardService.PublishCompleted"/> from whichever
     /// engine is current. Subscribe here rather than on <see cref="TwitchCard"/>: leaving developer

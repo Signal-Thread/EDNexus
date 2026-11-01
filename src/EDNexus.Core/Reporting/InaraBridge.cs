@@ -9,7 +9,7 @@ namespace EDNexus.Core.Reporting;
 /// Connects the journal event bus to the reusable <see cref="EliteDangerous.Inara"/> client, honouring
 /// Inara's "don't spam us" guidance: events are accumulated into a batch and the batch is only sent on
 /// the moments that matter — <b>session start</b> (LoadGame), <b>docking</b>, <b>FSD jump</b>, and
-/// <b>session end</b> (Shutdown / dispose) — and never more often than a cooldown. It captures commander
+/// <b>session end</b> (Shutdown / dispose) — and never more than two requests in any rolling minute. It captures commander
 /// identity from historical replay too, but only ever transmits live events, and only while enabled.
 /// </summary>
 public sealed class InaraBridge : IAsyncDisposable
@@ -22,6 +22,10 @@ public sealed class InaraBridge : IAsyncDisposable
     // then dropped; the pending list is also capped so a long outage cannot grow it without bound.
     private const int MaxRetries = 3;
     private const int MaxPending = 200;
+
+    // Inara allows two requests per minute at most: MaxSendsPerWindow sends per (MinInterval * MaxSendsPerWindow).
+    private const int MaxSendsPerWindow = 2;
+    private static readonly TimeSpan DisposeMaxWait = TimeSpan.FromSeconds(5);
 
     private readonly AppSettings _settings;
     private readonly InaraClient _client;
@@ -50,7 +54,9 @@ public sealed class InaraBridge : IAsyncDisposable
 
     private Task _tail = Task.CompletedTask;
     private CancellationTokenSource? _debounce;
-    private DateTimeOffset _lastFlush = DateTimeOffset.MinValue;
+    private DateTimeOffset? _rateLimitedAt;   // when Inara last refused us for rate limiting; null once a send is accepted
+    private readonly Queue<DateTimeOffset> _sendTimes = new();   // start time of recent requests (rolling window)
+    private readonly CancellationTokenSource _disposeCts = new();
     private bool _stopped;   // set on a hard error (e.g. bad API key); cleared when disabled again
     private bool _disposing; // final flush in progress: no throttle wait, no re-queue
     private int _failures;   // consecutive transient send failures of the current batch
@@ -81,8 +87,19 @@ public sealed class InaraBridge : IAsyncDisposable
         bus.Subscribe("FSDJump", OnFsdJump);
         // Only a live Shutdown ends a session worth reporting. A replayed one (EDNexus opened after the game
         // was closed) must not push the last session snapshot to Inara.
-        bus.Subscribe("Shutdown", e => { if (!e.IsHistorical) FlushImmediate(urgent: true); });
+        bus.Subscribe("Shutdown", e => { if (!e.IsHistorical) FlushImmediate(); });
     }
+
+    /// <summary>Shown in the reporting log and the Settings window when Inara refuses us for exceeding its limit.</summary>
+    public const string RateLimitAdvice =
+        "Inara's request limit is per API key and EDNexus stays within two requests a minute, so another " +
+        "application may be updating the same Inara profile. Check whether other tools are using this API key.";
+
+    /// <summary>When Inara last rejected an update for exceeding the rate limit; null if the latest send was accepted.</summary>
+    public DateTimeOffset? RateLimitedAt { get { lock (_gate) return _rateLimitedAt; } }
+
+    /// <summary>Raised (on a worker thread) when <see cref="RateLimitedAt"/> flips between set and cleared.</summary>
+    public event Action? RateLimitChanged;
 
     private bool Enabled => _settings.Reporting.Inara.Enabled
                             && !string.IsNullOrWhiteSpace(_settings.Reporting.Inara.ApiKey);
@@ -200,14 +217,14 @@ public sealed class InaraBridge : IAsyncDisposable
         });
     }
 
-    private void FlushImmediate(bool urgent = false)
+    private void FlushImmediate()
     {
         _debounce?.Cancel();
-        FlushNow(urgent);
+        FlushNow();
     }
 
     /// <summary>Snapshots the batch and chains an async send. Runs whatever thread triggered it.</summary>
-    private void FlushNow(bool urgent = false)
+    private void FlushNow()
     {
         if (_isSuppressed()) return;   // dev mode active — the Shutdown/debounce paths must not send either
 
@@ -228,27 +245,37 @@ public sealed class InaraBridge : IAsyncDisposable
             _pending.Clear();
 
             var prev = _tail;
-            _tail = SendAsync(prev, identity, batch, urgent);
+            _tail = SendAsync(prev, identity, batch);
         }
     }
 
-    private async Task SendAsync(Task previous, InaraIdentity identity, List<InaraEvent> batch, bool urgent)
+    private async Task SendAsync(Task previous, InaraIdentity identity, List<InaraEvent> batch)
     {
         try { await previous.ConfigureAwait(false); } catch { }
 
-        // "As requested by the site": never exceed the minimum interval between sends. A session-end
-        // flush skips the wait: there may be no later chance to send, and shutdown must not stall on it.
-        var since = DateTimeOffset.UtcNow - _lastFlush;
-        if (since < _minInterval && !urgent && !_disposing)
+        // "As requested by the site": never more than MaxSendsPerWindow requests in any rolling window,
+        // session-end flushes included. Only app exit (dispose) refuses to stall: it waits a few seconds
+        // at most, then gives up on the batch rather than breaking the limit or hanging shutdown.
+        while (true)
         {
-            try { await Task.Delay(_minInterval - since).ConfigureAwait(false); }
-            catch { }
+            var wait = TimeUntilSendAllowed();
+            if (wait <= TimeSpan.Zero) break;
+
+            if (_disposing && wait > DisposeMaxWait)
+            {
+                LogUpload(batch, InaraResponse.TransportError("not sent: Inara rate limit reached at shutdown"));
+                return;
+            }
+
+            try { await Task.Delay(wait, _disposing ? CancellationToken.None : _disposeCts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { }   // dispose began: re-evaluate against the shutdown cap
         }
 
+        lock (_gate) _sendTimes.Enqueue(DateTimeOffset.UtcNow);
         var response = await _client.SendAsync(identity, batch).ConfigureAwait(false);
-        _lastFlush = DateTimeOffset.UtcNow;
 
         LogUpload(batch, response);
+        TrackRateLimit(response);
 
         if (response.IsHardError)
         {
@@ -260,6 +287,39 @@ public sealed class InaraBridge : IAsyncDisposable
             RequeueOrDrop(batch, response);
         else
             lock (_gate) _failures = 0;
+    }
+
+    /// <summary>
+    /// Remembers that Inara refused us for exceeding the limit, and clears that once a send is accepted.
+    /// The limit is per API key, so being refused while we stay under our own cap means another program
+    /// is updating the same profile.
+    /// </summary>
+    private void TrackRateLimit(InaraResponse response)
+    {
+        DateTimeOffset? next;
+        if (response.IsRateLimited) next = DateTimeOffset.UtcNow;
+        else if (response.IsOk) next = null;
+        else return;   // some other failure says nothing about the limit either way
+
+        bool changed;
+        lock (_gate)
+        {
+            changed = _rateLimitedAt.HasValue != next.HasValue;
+            _rateLimitedAt = next;
+        }
+        if (changed) RateLimitChanged?.Invoke();
+    }
+
+    /// <summary>How long until another request fits in the rolling window; zero or less means send now.</summary>
+    private TimeSpan TimeUntilSendAllowed()
+    {
+        var window = _minInterval * MaxSendsPerWindow;
+        var now = DateTimeOffset.UtcNow;
+        lock (_gate)
+        {
+            while (_sendTimes.Count > 0 && now - _sendTimes.Peek() >= window) _sendTimes.Dequeue();
+            return _sendTimes.Count < MaxSendsPerWindow ? TimeSpan.Zero : _sendTimes.Peek() + window - now;
+        }
     }
 
     /// <summary>
@@ -307,9 +367,11 @@ public sealed class InaraBridge : IAsyncDisposable
         if (_log is null) return;
 
         var summary = $"{batch.Count} event(s): {string.Join(", ", batch.Select(e => e.EventName))}";
-        var status = response.Status == 0
-            ? $"transport error: {response.StatusText}"
-            : $"{response.Status} {response.StatusText}".TrimEnd();
+        var status = response.IsRateLimited
+            ? $"rate limited: {response.StatusText}"
+            : response.Status == 0
+                ? $"transport error: {response.StatusText}"
+                : $"{response.Status} {response.StatusText}".TrimEnd();
 
         // Payload logging serialises only the events (eventName/eventData) — never the request header,
         // which carries the commander's Inara API key.
@@ -317,7 +379,9 @@ public sealed class InaraBridge : IAsyncDisposable
 
         _log.Record(new ReportingUpload(
             DateTimeOffset.UtcNow, ReportingTarget.Inara, summary, response.IsOk, status,
-            Error: response.IsOk ? null : (response.StatusText ?? "error"),
+            Error: response.IsOk ? null
+                 : response.IsRateLimited ? $"{response.StatusText}. {RateLimitAdvice}"
+                 : (response.StatusText ?? "error"),
             Payload: payload));
     }
 
@@ -341,11 +405,12 @@ public sealed class InaraBridge : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _disposing = true;
-        FlushImmediate(urgent: true);
+        _disposeCts.Cancel();
+        FlushImmediate();
         Task tail;
         lock (_gate) tail = _tail;
         try { await tail.ConfigureAwait(false); } catch { }
-        _client.Dispose();
+        _client.Dispose();   // _disposeCts is left undisposed: DisposeAsync may legitimately run twice
     }
 
     private static readonly string[] RankNames =

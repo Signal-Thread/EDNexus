@@ -31,12 +31,22 @@ public sealed class InaraResponse
     /// </summary>
     public bool IsTransient => Status == 0;
 
+    /// <summary>
+    /// True when Inara refused the request for exceeding its per-API-key rate limit (HTTP 429, or a reply
+    /// whose status text says so). Always transient: the batch was not recorded and should be retried later.
+    /// </summary>
+    public bool IsRateLimited { get; init; }
+
     /// <summary>How long the server asked us to wait before retrying (<c>Retry-After</c> on 429/503), if it said.</summary>
     public TimeSpan? RetryAfter { get; init; }
 
     /// <summary>Convenience for a purely transport-level failure (never reached Inara).</summary>
     public static InaraResponse TransportError(string message, TimeSpan? retryAfter = null)
         => new() { Status = 0, StatusText = message, RetryAfter = retryAfter };
+
+    /// <summary>A refusal for exceeding the rate limit; transient, like <see cref="TransportError"/>.</summary>
+    public static InaraResponse RateLimited(string message, TimeSpan? retryAfter = null)
+        => new() { Status = 0, StatusText = message, RetryAfter = retryAfter, IsRateLimited = true };
 }
 
 /// <summary>The status Inara returned for a single submitted event.</summary>
