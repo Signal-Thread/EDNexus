@@ -29,7 +29,7 @@ public sealed class MiningTracker
     // Status.json), so a unit refined in an SRV can be pinned to where it was mined.
     private long? _systemAddress;
     private string? _starSystem;
-    private SurfacePosition? _srvPosition;
+    private MiningFix? _srvPosition;
 
     /// <summary>Raised after a new prospect is recorded or the history is cleared.</summary>
     public event Action? Changed;
@@ -107,14 +107,14 @@ public sealed class MiningTracker
     private void OnStatus(JournalEntry e)
     {
         var inSrv = e.GetInt64("Flags") is long flags && (flags & StatusFlagInSrv) != 0;
-        var lat = e.GetDouble("Latitude");
-        var lon = e.GetDouble("Longitude");
+        // Same parsing (and range/finite checks) as the commander's surface position.
+        var fix = inSrv ? Surface.SurfacePosition.FromStatus(e, null) : null;
         var body = e.GetString("BodyName");
 
         lock (_gate)
         {
-            _srvPosition = inSrv && lat is double la && lon is double lo && !string.IsNullOrEmpty(body)
-                ? new SurfacePosition(_systemAddress, _starSystem, body, la, lo, e.GetDouble("PlanetRadius"))
+            _srvPosition = fix is not null && !string.IsNullOrEmpty(body)
+                ? new MiningFix(_systemAddress, _starSystem, body, fix.Latitude, fix.Longitude, fix.PlanetRadius)
                 : null;
         }
     }

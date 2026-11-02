@@ -39,8 +39,8 @@ public static class PluginCapabilities
     public const string UiOverlay = "ui.overlay";
 
     /// <summary>
-    /// Persist data in the plugin's scoped storage (<see cref="IPluginContext.Storage"/>). The host
-    /// has no storage backend yet: until it does, the bridge's storage refuses every call.
+    /// Persist data in the plugin's scoped storage (<see cref="IPluginContext.Storage"/>). Without
+    /// this grant (or when the host has no plugins root configured) every storage call is refused.
     /// </summary>
     public const string Storage = "storage";
 

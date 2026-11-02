@@ -37,6 +37,9 @@ public enum PluginLoadStatus
     /// (see <see cref="PluginHost"/>). No plugin code ran.
     /// </summary>
     Denied,
+
+    /// <summary>The plugin is valid but disabled (by the user's choice); none of its code was loaded.</summary>
+    Disabled,
 }
 
 /// <summary>The outcome for one folder under the plugins root.</summary>

@@ -8,6 +8,7 @@
     <Project Path="src/EDNexus.Plugins.Hosting/EDNexus.Plugins.Hosting.csproj" />
     <Project Path="src/EliteDangerous.Eddn/EliteDangerous.Eddn.csproj" />
     <Project Path="src/EliteDangerous.Edsm/EliteDangerous.Edsm.csproj" />
+    <Project Path="src/EliteDangerous.EliteBgs/EliteDangerous.EliteBgs.csproj" />
     <Project Path="src/EliteDangerous.Galnet/EliteDangerous.Galnet.csproj" />
     <Project Path="src/EliteDangerous.Inara/EliteDangerous.Inara.csproj" />
     <Project Path="src/EliteDangerous.RavenColonial/EliteDangerous.RavenColonial.csproj" />
@@ -15,6 +16,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/EDNexus.App.Tests/EDNexus.App.Tests.csproj" />
+    <Project Path="tests/EDNexus.Cli.Tests/EDNexus.Cli.Tests.csproj" />
     <Project Path="tests/EDNexus.Plugins.Abstractions.Tests/EDNexus.Plugins.Abstractions.Tests.csproj" />
     <Project Path="tests/EDNexus.Plugins.Hosting.Tests/EDNexus.Plugins.Hosting.Tests.csproj" />
     <Project Path="tests/EDNexus.Tests/EDNexus.Tests.csproj" />

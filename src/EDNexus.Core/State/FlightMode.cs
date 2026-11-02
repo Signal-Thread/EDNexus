@@ -61,6 +61,9 @@ public static class ShipStatusFlags
     // Flags2
     private const long OnFoot = 1L << 0;
 
+    /// <summary>Whether the flags say the game is reporting a latitude and longitude (on or near a body).</summary>
+    public static bool HasLatLongFlag(long flags) => (flags & HasLatLong) != 0;
+
     /// <summary>Whether the flags say hardpoints are deployed.</summary>
     public static bool HardpointsDeployed(long flags) => (flags & HardpointsOut) != 0;
 

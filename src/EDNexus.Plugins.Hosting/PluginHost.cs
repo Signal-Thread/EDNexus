@@ -37,6 +37,9 @@ namespace EDNexus.Plugins.Hosting;
 /// </summary>
 public sealed class PluginHost : IDisposable
 {
+    /// <summary>Largest entry assembly the host will read into memory (a hand-copied plugin is not subject to the install limits).</summary>
+    internal const long MaxEntryAssemblyBytes = 64L * 1024 * 1024;
+
     private static readonly PluginRecoveryResult NoRecovery = new([], [], []);
 
     private readonly object _gate = new();
@@ -48,6 +51,7 @@ public sealed class PluginHost : IDisposable
     private bool _loading;
     private volatile PluginRecoveryResult? _recovery;
     private volatile PluginDiscoveryReport? _lastReport;
+    private volatile Func<string, bool>? _loadFilter;
 
     /// <param name="pluginsRoot">The plugins root (see <see cref="PluginPaths.Resolve()"/>). It need not exist.</param>
     /// <param name="appVersion">The running EDNexus version, for <see cref="PluginManifest.MinAppVersion"/>.</param>
@@ -109,6 +113,19 @@ public sealed class PluginHost : IDisposable
             ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero);
             _unloadTimeout = value;
         }
+    }
+
+    /// <summary>
+    /// Asks, for each valid plugin <see cref="LoadAll"/> and <see cref="LoadPlugin"/> are about to
+    /// load, whether it may run (receives the plugin id). A plugin it refuses is reported as
+    /// <see cref="PluginLoadStatus.Disabled"/> and none of its code is loaded; a filter that throws
+    /// refuses. <see langword="null"/> (the default) allows everything. <see cref="PluginSupervisor"/>
+    /// installs one that honours the persisted enable/disable choice.
+    /// </summary>
+    public Func<string, bool>? LoadFilter
+    {
+        get => _loadFilter;
+        set => _loadFilter = value;
     }
 
     /// <summary>
@@ -211,7 +228,9 @@ public sealed class PluginHost : IDisposable
         {
             result = candidate.Reasons.Count > 0
                 ? new PluginLoadResult(candidate.Directory, candidate.Manifest, PluginLoadStatus.Rejected, candidate.Reasons, null)
-                : Load(candidate.Directory, candidate.Manifest!);
+                : !Allowed(candidate.Manifest!.Id)
+                    ? new PluginLoadResult(candidate.Directory, candidate.Manifest, PluginLoadStatus.Disabled, ["the plugin is disabled"], null)
+                    : Load(candidate.Directory, candidate.Manifest!);
         }
         catch (Exception ex)
         {
@@ -235,6 +254,77 @@ public sealed class PluginHost : IDisposable
                 plugin.Unload(UnloadTimeout);
         }
         return result;
+    }
+
+    private bool Allowed(string id)
+    {
+        var filter = _loadFilter;
+        if (filter is null)
+            return true;
+        try { return filter(id); }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Loads (or reloads, after <see cref="Unload"/>) the single plugin installed in
+    /// <c>&lt;root&gt;/&lt;id&gt;/</c>, re-reading its manifest and assembly from disk, so a rebuilt
+    /// plugin is picked up without restarting. Same gates and containment as <see cref="LoadAll"/>:
+    /// the result says what happened and nothing plugin-related throws. It runs plugin code on the
+    /// calling thread. Throws <see cref="InvalidOperationException"/> if the plugin is already
+    /// loaded or a load pass is running.
+    /// </summary>
+    public PluginLoadResult LoadPlugin(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_loading)
+                throw new InvalidOperationException("A plugin load pass is already in progress.");
+            if (_loaded.ContainsKey(id))
+                throw new InvalidOperationException($"Plugin '{id}' is already loaded; unload it first.");
+            _loading = true;
+        }
+
+        try
+        {
+            var missing = new PluginLoadResult(Path.Combine(PluginsRoot, id), null, PluginLoadStatus.Rejected,
+                [$"no plugin folder named '{TextRules.ForDisplay(id, 150)}' is installed"], null);
+            // The id becomes a path segment: it must be a plain folder name, never a path.
+            if (id.Length == 0 || id.StartsWith('.') || id != Path.GetFileName(id))
+                return missing;
+
+            // Same discovery pass LoadAll uses, so the same gates apply: the folder's real name
+            // must equal the manifest id (case included, even on a case-insensitive filesystem) and
+            // an id claimed by two folders loads neither.
+            var candidates = Discover([]);
+            var candidate =
+                candidates.FirstOrDefault(c => string.Equals(Path.GetFileName(c.Directory), id, StringComparison.Ordinal))
+                ?? candidates.FirstOrDefault(c => string.Equals(Path.GetFileName(c.Directory), id, StringComparison.OrdinalIgnoreCase));
+            if (candidate is null)
+                return missing;
+
+            var result = LoadCandidate(candidate);
+            RecordInLastReport(result);
+            return result;
+        }
+        finally
+        {
+            lock (_gate)
+                _loading = false;
+        }
+    }
+
+    /// <summary>Keeps <see cref="LastReport"/> current after a single-plugin load: replaces (or adds) that folder's result.</summary>
+    private void RecordInLastReport(PluginLoadResult result)
+    {
+        lock (_gate)
+        {
+            if (_lastReport is not { } report)
+                return;
+            var plugins = report.Plugins.Where(p => !string.Equals(p.Directory, result.Directory, StringComparison.Ordinal)).Append(result).ToList();
+            _lastReport = report with { Plugins = plugins };
+        }
     }
 
     /// <summary>
@@ -368,9 +458,23 @@ public sealed class PluginHost : IDisposable
         if (ResolveEntryAssembly(dir, manifest.EntryAssembly, out var entryPath) is { } badPath)
             return Result(PluginLoadStatus.Rejected, badPath);
 
+        // Read the entry assembly exactly once: the bytes that are inspected below are the bytes
+        // that get loaded, whatever happens on disk while the consent prompt is up.
+        byte[] image;
+        try
+        {
+            if (new FileInfo(entryPath!).Length > MaxEntryAssemblyBytes)
+                return Result(PluginLoadStatus.Rejected, $"entry assembly '{Show(manifest.EntryAssembly)}' is larger than the {MaxEntryAssemblyBytes / (1024 * 1024)} MiB limit");
+            image = File.ReadAllBytes(entryPath!);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Result(PluginLoadStatus.Failed, Describe($"entry assembly '{Show(manifest.EntryAssembly)}' could not be read", ex));
+        }
+
         // Built against a newer (or different-major) SDK than the manifest admits: read from the
         // assembly's metadata, so the manifest's sdkVersion is not taken on trust. No code runs.
-        if (PluginAssemblyInspector.GetReferencedSdkVersion(entryPath!) is { } built
+        if (PluginAssemblyInspector.GetReferencedSdkVersion(image) is { } built
             && PluginCompatibility.CheckBuiltAgainst(built, HostSdkVersion) is { } builtAgainst)
             return Result(PluginLoadStatus.Incompatible, builtAgainst);
 
@@ -398,7 +502,13 @@ public sealed class PluginHost : IDisposable
             Assembly assembly;
             try
             {
-                assembly = loadContext.LoadFromAssemblyPath(entryPath!);
+                // From memory, not from the path: LoadFromAssemblyPath keeps the file open (and, on
+                // Windows, locked) until the context is collected, which would stop a rebuilt
+                // plugin from being copied over a running one and picked up by a reload.
+                // (The plugin's own dependency DLLs are still loaded by path and stay locked.)
+                // (Consequences: Assembly.Location is empty and there is no PDB; see PLUGIN_FORMAT.md.)
+                using var stream = new MemoryStream(image, writable: false);
+                assembly = loadContext.LoadFromStream(stream);
             }
             catch (BadImageFormatException)
             {

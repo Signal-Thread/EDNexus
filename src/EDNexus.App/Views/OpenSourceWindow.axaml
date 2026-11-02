@@ -1,0 +1,47 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:svc="using:EDNexus.App.Services"
+        x:Class="EDNexus.App.Views.OpenSourceWindow"
+        Title="Open Source Contributions" Icon="/Assets/ednexus.png"
+        Width="720" Height="620" MinWidth="480" MinHeight="360"
+        WindowStartupLocation="CenterOwner" Background="{StaticResource CardBg}">
+  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20">
+    <StackPanel Grid.Row="0" Spacing="6">
+      <TextBlock Text="Open Source Contributions" Foreground="{StaticResource AmberBrush}" FontSize="17" FontWeight="SemiBold" />
+      <TextBlock Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
+                 Text="EDNexus is built on the open-source libraries and community data services below. Thank you to everyone who maintains them. Elite Dangerous is a trademark of Frontier Developments plc; EDNexus is not affiliated with or endorsed by Frontier." />
+    </StackPanel>
+
+    <TextBox Grid.Row="1" x:Name="FilterBox" Margin="0,12,0,8" PlaceholderText="Filter by name or licence" />
+
+    <ScrollViewer Grid.Row="2">
+      <ItemsControl x:Name="Entries">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="svc:ThirdPartyLicense">
+            <Border Background="{StaticResource SurfaceField}" CornerRadius="6" Padding="12,8" Margin="0,0,0,6">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="2">
+                  <TextBlock Text="{Binding Display}" Foreground="{StaticResource Ink}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding Authors}" Foreground="{StaticResource InkDim}" FontSize="11" TextWrapping="Wrap"
+                             IsVisible="{Binding Authors, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                  <TextBlock Text="{Binding Note}" Foreground="{StaticResource InkDim}" FontSize="11" TextWrapping="Wrap"
+                             IsVisible="{Binding Note, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="2" Margin="12,0,0,0" HorizontalAlignment="Right">
+                  <TextBlock Text="{Binding License}" Foreground="{StaticResource AmberBrush}" FontSize="12" HorizontalAlignment="Right" />
+                  <Button Content="Open" Click="OnOpenLink" Tag="{Binding SafeUrl}" Padding="8,2" FontSize="11"
+                          HorizontalAlignment="Right" IsVisible="{Binding SafeUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <Grid Grid.Row="3" ColumnDefinitions="*,Auto" Margin="0,10,0,0">
+      <TextBlock x:Name="CountLine" Foreground="{StaticResource InkDim}" FontSize="12" VerticalAlignment="Center" />
+      <Button Grid.Column="1" Content="Close" Click="OnClose" Padding="12,6" />
+    </Grid>
+  </Grid>
+</Window>

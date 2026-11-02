@@ -37,12 +37,12 @@ public sealed record ProspectResult(
 /// else (ship-based asteroid mining, or no live position fix). The journal event itself carries no
 /// position; this comes from the latest <c>Status.json</c> update.
 /// </param>
-public sealed record RefinedUnit(DateTimeOffset Timestamp, string Symbol, string Name, SurfacePosition? Position = null);
+public sealed record RefinedUnit(DateTimeOffset Timestamp, string Symbol, string Name, MiningFix? Position = null);
 
 /// <summary>A point on a planet's surface, as reported by <c>Status.json</c> while driving an SRV.</summary>
 /// <param name="SystemAddress">The system's address, from the last arrival event; null if not yet seen.</param>
 /// <param name="StarSystem">The system's name, from the last arrival event; null if not yet seen.</param>
 /// <param name="Body">The body's full name (e.g. "Swoiphs AW-C d109 5 a").</param>
 /// <param name="PlanetRadius">Body radius in metres, when Status.json reports it.</param>
-public sealed record SurfacePosition(
+public sealed record MiningFix(
     long? SystemAddress, string? StarSystem, string Body, double Latitude, double Longitude, double? PlanetRadius);

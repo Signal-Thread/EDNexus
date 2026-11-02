@@ -212,6 +212,52 @@ public sealed class LocationSampleSource : JournalSampleSource
     }
 }
 
+/// <summary>
+/// A short walk across a planet's surface: a <c>Scan</c> (so the radius fallback is exercised), then
+/// a run of <c>Status</c> snapshots with <c>HasLatLong</c> set whose position moves along a heading.
+/// A final snapshot without <c>HasLatLong</c> follows, so the sample does not leave a stale fix behind.
+/// </summary>
+public sealed class SurfacePositionSampleSource : JournalSampleSource
+{
+    private const long NearSurfaceFlags = (1L << 24) | (1L << 21);   // InMainShip | HasLatLong
+    private const long InMainShipFlag = 1L << 24;
+    private const double RadiusMetres = 3_200_000;
+
+    public override string CardKey => "surface";
+    public override string DisplayName => "Surface position";
+
+    public override IReadOnlyList<string> Sample(Random rng)
+    {
+        var body = Pick(rng, SamplePools.Systems) + " " + Pick(rng, SamplePools.BodySuffixes).Trim();
+        var lat = rng.NextDouble() * 140 - 70;
+        var lon = rng.NextDouble() * 360 - 180;
+        var heading = rng.Next(360);
+
+        var lines = new List<string> { Event("Scan", o => { o["BodyName"] = body; o["Radius"] = RadiusMetres; }) };
+        for (var i = 0; i < 5; i++)
+        {
+            var (la, lo) = (lat, lon);
+            var (h, alt) = (heading, 1500 - i * 250);
+            lines.Add(Event("Status", o =>
+            {
+                o["Flags"] = NearSurfaceFlags;
+                o["Flags2"] = 0;
+                o["BodyName"] = body;
+                o["Latitude"] = Math.Round(la, 4);
+                o["Longitude"] = Math.Round(lo, 4);
+                o["Altitude"] = alt;
+                o["Heading"] = h;
+                // PlanetRadius is deliberately omitted so the Scan fallback is what supplies it.
+            }));
+            (lat, lon) = Core.Surface.GreatCircle.Destination(lat, lon, heading, 800, RadiusMetres);
+            lon = Core.Surface.GreatCircle.NormalizeLongitude(lon);
+            lat = Math.Clamp(lat, -90, 90);
+        }
+        lines.Add(Event("Status", o => { o["Flags"] = InMainShipFlag; o["Flags2"] = 0; }));   // flag down: Position clears
+        return lines;
+    }
+}
+
 /// <summary>Random ship, name, ident, fuel and balance for the Ship card (and the header).</summary>
 public sealed class ShipSampleSource : JournalSampleSource
 {

@@ -1,0 +1,383 @@
+{
+  "generated": "2026-11-01",
+  "entries": [
+    {
+      "kind": "package",
+      "name": "Avalonia",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.Angle.Windows.Natives",
+      "version": "2.1.27548.20260419",
+      "license": "BSD-3-Clause",
+      "url": "https://avaloniaui.net/",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.BuildServices",
+      "version": "11.3.2",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.Desktop",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": true
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.Fonts.Inter",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": true
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.FreeDesktop",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.FreeDesktop.AtSpi",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.HarfBuzz",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.Native",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.Remote.Protocol",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.Skia",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.Themes.Fluent",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": true
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.Win32",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Avalonia.X11",
+      "version": "12.1.4",
+      "license": "MIT",
+      "url": "https://avaloniaui.net/?utm_source=nuget&utm_medium=referral&utm_content=project_homepage_link",
+      "authors": "Avalonia Team",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "CommunityToolkit.Mvvm",
+      "version": "8.4.2",
+      "license": "MIT",
+      "url": "https://github.com/CommunityToolkit/dotnet",
+      "authors": "Microsoft",
+      "direct": true
+    },
+    {
+      "kind": "package",
+      "name": "DiscordRichPresence",
+      "version": "1.6.1.70",
+      "license": "MIT",
+      "url": "https://github.com/Lachee/discord-rpc-csharp",
+      "authors": "Lachee",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "HarfBuzzSharp",
+      "version": "8.3.1.3",
+      "license": "MIT",
+      "url": "https://go.microsoft.com/fwlink/?linkid=868515",
+      "authors": "Microsoft",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "HarfBuzzSharp.NativeAssets.Linux",
+      "version": "8.3.1.3",
+      "license": "MIT",
+      "url": "https://go.microsoft.com/fwlink/?linkid=868515",
+      "authors": "Microsoft",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "HarfBuzzSharp.NativeAssets.macOS",
+      "version": "8.3.1.3",
+      "license": "MIT",
+      "url": "https://go.microsoft.com/fwlink/?linkid=868515",
+      "authors": "Microsoft",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "HarfBuzzSharp.NativeAssets.WebAssembly",
+      "version": "8.3.1.3",
+      "license": "MIT",
+      "url": "https://go.microsoft.com/fwlink/?linkid=868515",
+      "authors": "Microsoft",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "HarfBuzzSharp.NativeAssets.Win32",
+      "version": "8.3.1.3",
+      "license": "MIT",
+      "url": "https://go.microsoft.com/fwlink/?linkid=868515",
+      "authors": "Microsoft",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "LibVLCSharp",
+      "version": "3.10.2",
+      "license": "LGPL-2.1-or-later",
+      "url": "https://code.videolan.org/videolan/LibVLCSharp",
+      "authors": "VideoLAN",
+      "direct": true
+    },
+    {
+      "kind": "package",
+      "name": "MicroCom.Runtime",
+      "version": "0.11.6",
+      "license": "MIT",
+      "url": "https://github.com/kekekeks/MicroCom",
+      "authors": "MicroCom.Runtime",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Newtonsoft.Json",
+      "version": "13.0.1",
+      "license": "MIT",
+      "url": "https://www.newtonsoft.com/json",
+      "authors": "James Newton-King",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Sentry",
+      "version": "6.12.1",
+      "license": "MIT",
+      "url": "https://sentry.io/",
+      "authors": "Sentry Team and Contributors",
+      "direct": true
+    },
+    {
+      "kind": "package",
+      "name": "SkiaSharp",
+      "version": "3.119.4",
+      "license": "MIT",
+      "url": "https://go.microsoft.com/fwlink/?linkid=868515",
+      "authors": "Microsoft",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "SkiaSharp.NativeAssets.Linux",
+      "version": "3.119.4",
+      "license": "MIT",
+      "url": "https://go.microsoft.com/fwlink/?linkid=868515",
+      "authors": "Microsoft",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "SkiaSharp.NativeAssets.macOS",
+      "version": "3.119.4",
+      "license": "MIT",
+      "url": "https://go.microsoft.com/fwlink/?linkid=868515",
+      "authors": "Microsoft",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "SkiaSharp.NativeAssets.WebAssembly",
+      "version": "3.119.4",
+      "license": "MIT",
+      "url": "https://go.microsoft.com/fwlink/?linkid=868515",
+      "authors": "Microsoft",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "SkiaSharp.NativeAssets.Win32",
+      "version": "3.119.4",
+      "license": "MIT",
+      "url": "https://go.microsoft.com/fwlink/?linkid=868515",
+      "authors": "Microsoft",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "Tmds.DBus.Protocol",
+      "version": "0.94.1",
+      "license": "MIT",
+      "url": "https://github.com/tmds/Tmds.DBus.git",
+      "authors": "Tom Deseyn",
+      "direct": false
+    },
+    {
+      "kind": "package",
+      "name": "VideoLAN.LibVLC.Windows",
+      "version": "3.0.23.1",
+      "license": "LGPL-2.1-or-later",
+      "url": "https://code.videolan.org/videolan/libvlc-nuget",
+      "authors": "VideoLAN",
+      "direct": true
+    },
+    {
+      "kind": "font",
+      "name": "Inter",
+      "version": null,
+      "license": "OFL-1.1",
+      "url": "https://rsms.me/inter/",
+      "authors": "The Inter Project Authors",
+      "direct": true,
+      "note": "Bundled via Avalonia.Fonts.Inter. The package is MIT; the font itself is SIL Open Font License 1.1."
+    },
+    {
+      "kind": "native",
+      "name": "LibVLC (VLC media engine)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "url": "https://www.videolan.org/vlc/",
+      "authors": "VideoLAN",
+      "direct": true,
+      "note": "Shipped as separate, replaceable native libraries (not statically linked) on Windows/macOS; Linux uses the system libvlc. Source: https://code.videolan.org/videolan/vlc"
+    },
+    {
+      "kind": "data",
+      "name": "EDAstro",
+      "version": null,
+      "license": "CC-BY-NC-SA-3.0",
+      "url": "https://edastro.com",
+      "authors": "EDAstro",
+      "direct": true,
+      "note": "Exobiology points of interest. Fetched at runtime and cached on the user's machine; never bundled or redistributed. Not MIT. Licence to be confirmed with the maintainer."
+    },
+    {
+      "kind": "data",
+      "name": "EDSM",
+      "version": null,
+      "license": "Per service terms",
+      "url": "https://www.edsm.net",
+      "authors": "EDSM",
+      "direct": true,
+      "note": "System and body data, fetched at runtime."
+    },
+    {
+      "kind": "data",
+      "name": "Spansh",
+      "version": null,
+      "license": "Per service terms",
+      "url": "https://spansh.co.uk",
+      "authors": "Spansh",
+      "direct": true,
+      "note": "Route and search data, fetched at runtime."
+    },
+    {
+      "kind": "data",
+      "name": "Inara",
+      "version": null,
+      "license": "Per service terms",
+      "url": "https://inara.cz",
+      "authors": "Inara",
+      "direct": true,
+      "note": "Commander data via the Inara API, fetched at runtime with the user's own key."
+    },
+    {
+      "kind": "data",
+      "name": "EDDN (Elite Dangerous Data Network)",
+      "version": null,
+      "license": "Per service terms",
+      "url": "https://eddn.edcd.io",
+      "authors": "EDCD community",
+      "direct": true,
+      "note": "Market and journal data relay."
+    },
+    {
+      "kind": "data",
+      "name": "Raven Colonial",
+      "version": null,
+      "license": "Per service terms",
+      "url": "https://ravencolonial.com",
+      "authors": "Raven Colonial",
+      "direct": true,
+      "note": "Colonisation project data, fetched at runtime."
+    },
+    {
+      "kind": "data",
+      "name": "Galnet",
+      "version": null,
+      "license": "Frontier Developments content",
+      "url": "https://www.elitedangerous.com/news/galnet",
+      "authors": "Frontier Developments",
+      "direct": true,
+      "note": "News feed, fetched at runtime. Elite Dangerous is a trademark of Frontier Developments plc; EDNexus is not affiliated with or endorsed by Frontier."
+    }
+  ]
+}

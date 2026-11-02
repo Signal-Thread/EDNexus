@@ -73,7 +73,7 @@ public class MiningSpotTests
 
     private static RefinedUnit Unit(string symbol, string name, double lat, double lon, string body = "Swoiphs AW-C d109 5 a", long address = SwoiphsAddress) =>
         new(DateTimeOffset.Parse("2026-09-13T20:28:28Z"), symbol, name,
-            new SurfacePosition(address, Swoiphs, body, lat, lon, MoonRadius));
+            new MiningFix(address, Swoiphs, body, lat, lon, MoonRadius));
 
     [Fact]
     public void Units_mined_close_together_fold_into_one_spot()

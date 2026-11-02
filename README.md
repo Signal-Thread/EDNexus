@@ -87,6 +87,7 @@ every window.
 | `src/EliteDangerous.Inara` | Standalone, reusable Inara API client (no EDNexus dependency) |
 | `src/EliteDangerous.Spansh` | Standalone Spansh route/search client |
 | `src/EliteDangerous.Edsm` | Standalone EDSM client |
+| `src/EliteDangerous.EliteBgs` | Standalone EliteBGS faction-influence client |
 | `src/EliteDangerous.Galnet` | Standalone Galnet news-feed client |
 | `src/EliteDangerous.RavenColonial` | Standalone RavenColonial (shared colonisation project) client |
 | `tests/` | xUnit test projects |
@@ -148,6 +149,7 @@ that is not listed here.
 | Colonisation deliveries (write) | Raven Colonial | **Opt-in, default off**; each live delivery you make at a depot that has a shared project, and only while the lookup above is also on | **Your commander name**, the project id, and the commodities and tons you delivered (see below) |
 | Exobiology points of interest | EDAstro (Galactic Exploration Catalog, `edastro.com/gec/json/all`) | **Not available yet** - the code exists but no setting, UI or wiring uses it. Planned as opt-in, default off | When enabled: one request for the public POI catalogue, then cached; after a failure it waits 5 minutes before trying again (a flaky link does not retry on every lookup). No commander, system or journal data is sent. Content is CC BY-NC-SA 3.0 and is **not** covered by EDNexus's own licence: it is fetched at runtime, never bundled, and credited to EDAstro in Settings > Open source contributions |
 | Route & market search | Spansh, EDSM | When you run a search | The search/route parameters (systems, ranges, commodities) |
+| Faction influence & BGS states (read) | EliteBGS (elitebgs.app) | Not yet wired into the app. Will be **opt-in, default off** once the Settings toggle lands (#95); only when a faction or system is looked up | The faction or system name being looked up, plus a `User-Agent` with the software name and version. Replies are cached briefly in memory |
 | News | Galnet | When the Galnet card refreshes | A plain request for the public RSS feed |
 | Update check | GitHub (api.github.com / github.com) | Only if **Automatically download updates on startup** is on, or you press **Check for updates now** | A request for the latest release; no identifying data and no token is sent |
 
