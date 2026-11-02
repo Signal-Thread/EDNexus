@@ -28,6 +28,13 @@ public sealed class EdAstroClientOptions
     /// </summary>
     public long MaxResponseBytes { get; init; } = 8 * 1024 * 1024;
 
+    /// <summary>
+    /// The longest the client waits for the response body once the headers have arrived.
+    /// <see cref="HttpClient.Timeout"/> does not cover this: the request completes at the headers, so
+    /// a server that then stalls would otherwise hold the caller (and anything queued behind it) forever.
+    /// </summary>
+    public TimeSpan BodyTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
     /// <summary>The longest <c>Retry-After</c> the client will wait out before retrying a 429/503 once.</summary>
     public TimeSpan MaxRetryAfter { get; init; } = TimeSpan.FromSeconds(5);
 
@@ -129,14 +136,17 @@ public sealed class EdAstroClient : IDisposable
             if (response.Content.Headers.ContentLength is { } declared && declared > _options.MaxResponseBytes)
                 return EdsmResult<IReadOnlyList<GecPoi>>.Failure("response too large");
 
-            var body = await ReadBoundedAsync(response.Content, _options.MaxResponseBytes, ct).ConfigureAwait(false);
+            // A deadline firing here (ct itself not cancelled) is a plain failure, so the caller backs off.
+            using var bodyCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            bodyCts.CancelAfter(_options.BodyTimeout);
+            var body = await ReadBoundedAsync(response.Content, _options.MaxResponseBytes, bodyCts.Token).ConfigureAwait(false);
             if (body is null) return EdsmResult<IReadOnlyList<GecPoi>>.Failure("response too large");
 
             return EdsmResult<IReadOnlyList<GecPoi>>.Ok(Parse(body));
         }
         catch (JsonException ex) { return EdsmResult<IReadOnlyList<GecPoi>>.Failure("unparseable response: " + ex.Message); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) { return EdsmResult<IReadOnlyList<GecPoi>>.Failure(ex.Message); }   // incl. an HttpClient timeout
+        catch (Exception ex) { return EdsmResult<IReadOnlyList<GecPoi>>.Failure(ex.Message); }   // incl. an HttpClient or body-read timeout
     }
 
     private static List<GecPoi> Parse(byte[] body)

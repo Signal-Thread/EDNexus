@@ -39,6 +39,32 @@ public class ExobiologyPoiServiceTests
 
     private static EdAstroClient Client(HttpMessageHandler h, EdAstroClientOptions? o = null) => new(o ?? Options, new HttpClient(h));
 
+    [Fact]
+    public async Task A_body_that_stalls_after_the_headers_fails_instead_of_hanging()
+    {
+        var o = new EdAstroClientOptions
+        {
+            SoftwareName = "t", SoftwareVersion = "1", BaseUrl = "https://gec.test", BodyTimeout = TimeSpan.FromMilliseconds(150),
+        };
+        var client = Client(new FixedHandler(() => new StalledContent()), o);
+
+        var read = client.GetPointsOfInterestAsync();
+        var finished = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.Same(read, finished);
+        Assert.False((await read).IsOk);
+    }
+
+    [Fact]
+    public async Task Cancelling_the_caller_still_throws_while_the_body_is_stalled()
+    {
+        var o = new EdAstroClientOptions { SoftwareName = "t", SoftwareVersion = "1", BaseUrl = "https://gec.test" };
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Client(new FixedHandler(() => new StalledContent()), o).GetPointsOfInterestAsync(cts.Token));
+    }
+
     private static EdAstroClientOptions WithLimit(long bytes) => new()
     {
         SoftwareName = "t", SoftwareVersion = "1", BaseUrl = "https://gec.test", MaxResponseBytes = bytes,
@@ -573,6 +599,31 @@ public class ExobiologyPoiServiceTests
                 Content = _content(),
                 RequestMessage = new HttpRequestMessage(HttpMethod.Get, uri),
             });
+        }
+    }
+
+    /// <summary>Headers arrive, then the body never does (a read only ends when it is cancelled).</summary>
+    private sealed class StalledContent : StreamContent
+    {
+        public StalledContent() : base(new StalledStream()) { }
+
+        private sealed class StalledStream : Stream
+        {
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override int Read(byte[] buffer, int offset, int count) { Thread.Sleep(Timeout.Infinite); return 0; }
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                return 0;
+            }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         }
     }
 
