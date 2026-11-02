@@ -75,12 +75,12 @@ would be created next to them.
 `RadioPlayerService.PlayAsync(stationId)` sets `_enabled = true` and the resume intent, calls
 `Persist()` (writing `RadioEnabled=true` to settings), and clears `_suspended`. Next, Previous and the
 toggle all go through it. The router must therefore handle:
-- **Enabled gate.** `RadioEnabled` defaults to false (`AppSettings.RadioEnabled`). The router must
+- **Enabled gate.** `RadioEnabled` defaults to false (`AppSettings.Radio.RadioEnabled`). The router must
   read `Snapshot.Enabled` and ignore every command while it is false, and the service must not claim
   an OS session while the radio feature is off. Otherwise a stray Next key or MPRIS `Play` from
   `playerctl` would start LibVLC audio and silently persist the feature as enabled.
 - **Settings toggle.** The phase-1 settings toggle is a separate, media-key-only opt-out
-  (`MediaKeysEnabled`); it does not replace or alter `RadioEnabled`. Effective rule: the session is
+  (`MediaKeysEnabled`); it does not replace or alter `AppSettings.Radio.RadioEnabled`. Effective rule: the session is
   claimed only if `MediaKeysEnabled && Snapshot.Enabled && status is Playing/Paused`.
 - **Developer mode.** In developer mode the real player is suspended
   (`SuspendForDeveloperModeAsync`) and the UI drives `SimulatedRadioPlayer`. Decision: while
@@ -90,7 +90,10 @@ toggle all go through it. The router must therefore handle:
   must never call the real player directly: a command that bypasses the selector reaches
   `RadioPlayerService.PlayAsync`, which clears `_suspended` and would un-suspend real audio mid
   developer session. The selector's `Changed` fires for both players, so the router re-evaluates
-  (`Update` or `Release`) on every `Changed`, including when `IsSimulated` flips.
+  (`Update` or `Release`) on every `Changed`. `IsSimulated` can flip without a `Changed`: when the real
+  player is paused, `SuspendForDeveloperModeAsync` returns before `RaiseChanged` (it only suspends audible
+  playback), so the selector must itself raise `Changed` on each developer-mode transition, including
+  entry, or the router would keep the session claimed in developer mode.
 - **Dev-mode affordance (convention 7).** A media-key command source is not a `JournalSampleSource`
   (those emit journal events through the bus). The honest dev-mode story is a "send media command"
   button group in Settings -> Developer Options that raises `CommandReceived` on a
@@ -200,8 +203,10 @@ the documented fallback if both costs are rejected. SMTC is also the only option
   needed or wanted (it would be redundant, and an extra permission for Flathub review to question).
   Conversely the short `org.mpris.MediaPlayer2.ednexus` name would be **denied** inside the sandbox.
   The shim therefore picks the name at startup: under Flatpak (`FLATPAK_ID` set, or `/.flatpak-info`
-  exists) use `org.mpris.MediaPlayer2.io.github.Signal_Thread_LLC.EDNexus` (from the app-id in
-  `packaging/flatpak/io.github.Signal_Thread_LLC.EDNexus.yml`); otherwise use
+  exists) use `org.mpris.MediaPlayer2.$FLATPAK_ID`, reading the id at runtime (the `Application` key of
+  `/.flatpak-info` is the fallback) rather than hard-coding the stable id, because a development or
+  alternate build runs under a different app id and the sandbox would deny any other name. The stable id
+  is `io.github.Signal_Thread_LLC.EDNexus` (`packaging/flatpak/io.github.Signal_Thread_LLC.EDNexus.yml`); otherwise use
   `org.mpris.MediaPlayer2.ednexus`. `DesktopEntry` should be the app's desktop file id (without
   `.desktop`) so shells can attribute it.
 - **Name collisions / multiple instances.** The MPRIS spec wants one unique name per player, with an
@@ -272,6 +277,7 @@ public enum MediaKeyCommand { PlayPause, Play, Pause, Next, Previous, Stop }
 /// <summary>What the OS "Now Playing" UI should show.</summary>
 public sealed record MediaSessionInfo(
     bool IsPlaying,
+    string StationId,       // stable per-station id; the Linux shim builds mpris:trackid from it
     string? StationName,    // _Localised-style display text, not an id
     bool CanGoNext,
     bool CanGoPrevious);
@@ -306,6 +312,12 @@ public static IMediaKeyService Create() =>
 ```
 
 `TryCreate` returns null on any failure (no session bus, WinRT unavailable) instead of throwing.
+The Linux shim derives `mpris:trackid` from `StationId` as a valid D-Bus object path (for example
+`/org/ednexus/radio/track/<escaped id>`; characters outside `[A-Za-z0-9_]` must be escaped).
+SMTC needs a window handle, so the factory is not called at startup: `SmtcMediaKeyService.TryCreate`
+takes the `IntPtr` from `TopLevel.TryGetPlatformHandle()`, and the App calls `Create(handle)` from the
+main window's `Opened` event (the Linux and no-op paths ignore the handle). Until then the router sees
+`NullMediaKeyService`; swapping it in must unsubscribe the old `CommandReceived` and dispose it.
 The router subscribes `CommandReceived`, resolves `Context.Radio.Active` per command, applies the
 gating above, and calls the mapped method (see the command table). Platform code lives in
 `src/EDNexus.App/Services/Media/`; the abstraction, enum, record, router, and null implementation in
