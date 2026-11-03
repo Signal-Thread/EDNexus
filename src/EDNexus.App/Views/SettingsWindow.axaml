@@ -68,6 +68,9 @@
                 <CheckBox x:Name="RevealApiKey" Grid.Column="1" Content="Show" Margin="10,0,0,0"
                           Foreground="{StaticResource InkDim}" IsCheckedChanged="OnRevealApiKeyChanged" />
               </Grid>
+              <Button Content="Open Inara API keys page ↗" Click="OnOpenInaraApiKeys" HorizontalAlignment="Left"
+                      Padding="8,2" FontSize="11"
+                      ToolTip.Tip="Opens inara.cz/settings-api in your default browser. You must be signed in to Inara." />
               <TextBlock x:Name="InaraRateLimitNote" IsVisible="False" Foreground="{StaticResource Warning}"
                          FontSize="12" TextWrapping="Wrap" />
             </StackPanel>
