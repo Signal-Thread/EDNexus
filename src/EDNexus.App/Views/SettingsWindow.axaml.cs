@@ -362,6 +362,17 @@ public partial class SettingsWindow : Window
     private void OnRevealApiKeyChanged(object? sender, RoutedEventArgs e)
         => InaraApiKey.RevealPassword = RevealApiKey.IsChecked == true;
 
+    /// <summary>Where a commander generates their personal Inara API key (Inara → Profile → API keys).</summary>
+    private const string InaraApiKeysUrl = "https://inara.cz/settings-api/";
+
+    private void OnOpenInaraApiKeys(object? sender, RoutedEventArgs e)
+    {
+        // UseShellExecute hands the URL to the OS's registered default http(s) handler, so it opens in
+        // whatever browser the commander chose — not a hardcoded one.
+        try { Process.Start(new ProcessStartInfo(InaraApiKeysUrl) { UseShellExecute = true })?.Dispose(); }
+        catch { /* Best-effort: no browser registered must not crash the settings dialog. */ }
+    }
+
     private void OnOpenLogs(object? sender, RoutedEventArgs e)
     {
         try
