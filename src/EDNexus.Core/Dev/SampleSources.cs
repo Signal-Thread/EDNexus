@@ -565,6 +565,88 @@ public sealed class ShoppingListSampleSource : JournalSampleSource
 }
 
 /// <summary>
+/// Several concurrent colonisation projects for the Colonisation card's picker and combined list: a
+/// few open builds that share some commodities, one finished build, and a delivery against the first.
+/// Each depot is preceded by a <c>Docked</c> so the project carries a station and system name.
+/// </summary>
+public sealed class ColonisationProjectsSampleSource : JournalSampleSource
+{
+    public override string CardKey => "colonisation";
+    public override string DisplayName => "Colonisation projects";
+
+    public override IReadOnlyList<string> Sample(Random rng)
+    {
+        var events = new List<string>();
+        var sites = SamplePools.PickDistinct(rng, SamplePools.ConstructionSites, rng.Next(3, 5));
+        // A shared core of commodities makes the combined list sum across projects.
+        var shared = SamplePools.PickDistinct(rng, SamplePools.Construction, 4);
+        (long MarketId, string Sym, string Loc)? delivery = null;
+
+        for (var i = 0; i < sites.Count; i++)
+        {
+            var system = Pick(rng, SamplePools.Systems);
+            var station = "Orbital Construction Site: " + sites[i];
+            var marketId = 3_800_000_000L + rng.Next(0, 99_999_999);
+            var finished = i == sites.Count - 1;   // the last one is already built
+
+            var picks = new List<(string Sym, string Loc)>(shared);
+            foreach (var extra in SamplePools.PickDistinct(rng, SamplePools.Construction, rng.Next(2, 6)))
+                if (!picks.Any(p => p.Sym == extra.Sym)) picks.Add(extra);
+
+            var resources = new JsonArray();
+            double totalReq = 0, totalProv = 0;
+            foreach (var (sym, loc) in picks)
+            {
+                var required = rng.Next(50, 9_000);
+                var provided = finished ? required : rng.Next(0, required);
+                totalReq += required;
+                totalProv += provided;
+                resources.Add(new JsonObject
+                {
+                    ["Name"] = $"${sym}_name;",
+                    ["Name_Localised"] = loc,
+                    ["RequiredAmount"] = required,
+                    ["ProvidedAmount"] = provided,
+                    ["Payment"] = rng.Next(500, 12_000),
+                });
+                if (i == 0 && delivery is null && !finished) delivery = (marketId, sym, loc);
+            }
+
+            events.Add(Event("Docked", o =>
+            {
+                o["StationName"] = station;
+                o["StationType"] = "SurfaceStation";
+                o["StarSystem"] = system;
+                o["MarketID"] = marketId;
+            }));
+            var progress = finished ? 1.0 : Math.Round(totalProv / totalReq, 4);
+            events.Add(Event("ColonisationConstructionDepot", o =>
+            {
+                o["MarketID"] = marketId;
+                o["ConstructionProgress"] = progress;
+                o["ConstructionComplete"] = finished;
+                o["ConstructionFailed"] = false;
+                o["ResourcesRequired"] = resources;
+            }));
+        }
+
+        if (delivery is { } d)
+            events.Add(Event("ColonisationContribution", o =>
+            {
+                o["MarketID"] = d.MarketId;
+                o["Contributions"] = new JsonArray(new JsonObject
+                {
+                    ["Name"] = $"${d.Sym}_name;",
+                    ["Name_Localised"] = d.Loc,
+                    ["Amount"] = rng.Next(1, 40),
+                });
+            }));
+
+        return events;
+    }
+}
+
+/// <summary>
 /// A random colonisation construction depot for the Colonisation card, plus a small cargo hold
 /// carrying some of what the depot still needs — so the "in hold" cross-reference highlight shows.
 /// </summary>

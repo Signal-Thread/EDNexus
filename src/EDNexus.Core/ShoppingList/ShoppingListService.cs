@@ -73,6 +73,13 @@ public static class ShoppingListService
     }
 
     /// <summary>
+    /// Commodity entries for every outstanding line of several colonisation depots. Lines for the same
+    /// commodity are summed when the list is built, so this serves the combined all-projects view too.
+    /// </summary>
+    public static IReadOnlyList<ShoppingEntry> FromColonisationProjects(IEnumerable<ColonisationSite> sites) =>
+        sites.SelectMany(s => FromColonisation(s)).ToList();
+
+    /// <summary>
     /// Entries for the pinned ship blueprint (costed at one roll) and the pinned on-foot suit or weapon
     /// upgrade. Materials in an unrecognised category are skipped. Empty when nothing is pinned.
     /// </summary>
