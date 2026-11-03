@@ -116,9 +116,25 @@ public sealed class ColonisationTracker
             if (!_sites.Remove(marketId)) return false;
             if (_activeMarketId == marketId) _activeMarketId = null;
             if (_selectedMarketId == marketId) _selectedMarketId = null;
+            // Fall back to the most recently updated survivor so the card keeps showing projects.
+            if (_activeMarketId is null && _sites.Count > 0)
+                _activeMarketId = _sites.Values.OrderByDescending(s => s.Updated).First().MarketId;
         }
         Changed?.Invoke();
         return true;
+    }
+
+    /// <summary>Drops every project and the selection, e.g. when a different commander logs in.</summary>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            _sites.Clear();
+            _activeMarketId = null;
+            _selectedMarketId = null;
+            _showAll = false;
+        }
+        Changed?.Invoke();
     }
 
     /// <summary>The state worth remembering across sessions.</summary>

@@ -214,6 +214,7 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
     private void UpdateCombined(IReadOnlyList<ColonisationSite> sites)
     {
         ClearShared();
+        _sharedMarketId = 0;   // returning to a single project must look its shared totals up again
         CanForget = false;
         var open = sites.Count(p => p.IsOpen);
         var combined = ColonisationAggregator.Combine(sites);

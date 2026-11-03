@@ -408,6 +408,35 @@ public class ColonisationProjectsTests : IDisposable
     }
 
     [Fact]
+    public void Forgetting_the_selected_project_falls_back_to_a_remaining_one()
+    {
+        var (bus, _, tracker) = NewTracker();
+        Publish(bus, Depot(11, "2026-06-03T00:00:00Z", Steel100));
+        Publish(bus, Depot(22, "2026-06-03T01:00:00Z", Alu50));
+        Publish(bus, Depot(33, "2026-06-03T02:00:00Z", Steel100));
+
+        Assert.True(tracker.Forget(33));
+        Assert.Equal(22, tracker.SelectedSite!.MarketId);   // newest survivor, not "nothing"
+    }
+
+    [Fact]
+    public void Persistence_does_not_carry_projects_over_to_a_different_commander()
+    {
+        var store = new ColonisationProjectStore(_dir);
+        var (bus, state, tracker) = NewTracker();
+        using var persistence = new ColonisationProjectPersistence(bus, state, tracker, store);
+
+        Publish(bus, LoadGame);
+        Publish(bus, Depot(11, "2026-06-03T01:00:00Z", Steel100));
+        Publish(bus, """{ "timestamp":"2026-06-03T03:00:00Z", "event":"LoadGame", "Commander":"CMDR Other" }""");
+        persistence.Flush();
+
+        Assert.Empty(tracker.Sites);
+        Assert.Single(store.Load("CMDR Test").ToSites());   // saved under the first commander
+        Assert.Empty(store.Load("CMDR Other").ToSites());   // never mixed into the second
+    }
+
+    [Fact]
     public void Persistence_flushes_pending_changes_on_dispose()
     {
         var store = new ColonisationProjectStore(_dir);

@@ -49,13 +49,18 @@ public sealed class ColonisationProjectPersistence : IDisposable
     {
         if (Suppressed || _state.Name is not { Length: > 0 } name) return;
 
+        bool switchedCommander;
         lock (_gate)
         {
             if (string.Equals(_commander, name, StringComparison.OrdinalIgnoreCase)) return;
             // Saving the old commander's projects under the new name would mix them up: write them first.
             if (_dirty) FlushLocked();
+            switchedCommander = _commander is not null;
             _commander = name;
         }
+
+        // The previous commander's projects must not be merged into (and later saved under) the new one.
+        if (switchedCommander) _tracker.Clear();
 
         // Restore outside the lock: it raises Changed, which re-enters OnChanged.
         _tracker.Restore(_store.Load(name));
