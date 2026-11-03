@@ -4,17 +4,22 @@ using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using EDNexus.Core.Colonisation;
 using EDNexus.Core.State;
 
 namespace EDNexus.App.ViewModels;
 
 /// <summary>
-/// Active colonisation construction site: progress, the outstanding shopping list, and — when the
-/// build is registered on a shared tracker — what the whole squadron still owes it.
+/// Colonisation projects: pick one to see its progress and outstanding shopping list (and, when it is
+/// registered on a shared tracker, what the whole squadron still owes), or pick "All projects" for one
+/// combined list of everything still needed to finish every open build.
 /// </summary>
 public sealed partial class ColonisationCardViewModel : CardViewModel
 {
     private string _signature = "";
+    private string _pickerSignature = "";
+    private string _combinedSignature = "";
+    private bool _syncing;
 
     // The depot the shared totals were fetched for, so a lookup runs once per site rather than per tick.
     private long _sharedMarketId;
@@ -45,6 +50,43 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
 
     public ObservableCollection<ShoppingLine> ShoppingList { get; } = new();
 
+    // --- Project picker and combined view ---
+
+    /// <summary>The picker's entries: "All projects" first, then each known project, newest first.</summary>
+    public ObservableCollection<ProjectChoice> Choices { get; } = new();
+
+    [ObservableProperty] private ProjectChoice? _selectedChoice;
+
+    /// <summary>When off (the default), finished and failed projects are hidden from the picker.</summary>
+    [ObservableProperty] private bool _showCompleted;
+
+    /// <summary>True while the combined all-projects list is showing instead of a single project.</summary>
+    [ObservableProperty] private bool _showCombined;
+
+    [ObservableProperty] private string _combinedSummary = "";
+
+    /// <summary>True when the selected project can be dropped from the remembered list.</summary>
+    [ObservableProperty] private bool _canForget;
+
+    public ObservableCollection<CombinedLine> CombinedList { get; } = new();
+
+    /// <summary>Inverse of <see cref="ShowCombined"/>, for the single-project block's visibility.</summary>
+    public bool ShowSingle => !ShowCombined;
+
+    partial void OnShowCombinedChanged(bool value) => OnPropertyChanged(nameof(ShowSingle));
+
+    partial void OnShowCompletedChanged(bool value) => _pickerSignature = "";
+
+    partial void OnSelectedChoiceChanged(ProjectChoice? value)
+    {
+        if (_syncing || value is null) return;
+        var tracker = Context.Host.Colonisation;
+        if (value.MarketId is long id) tracker.Select(id);
+        else tracker.SetShowAll(true);
+        _signature = "";
+        _combinedSignature = "";
+    }
+
     /// <summary>Inverse of <see cref="HasColonisation"/>, for the empty-state hint's visibility.</summary>
     public bool NoColonisation => !HasColonisation;
 
@@ -52,19 +94,35 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
 
     public override void Update(CommanderState s)
     {
-        var site = Context.Host.Colonisation.ActiveSite;
+        var tracker = Context.Host.Colonisation;
+        var sites = tracker.Sites;
+        var site = tracker.SelectedSite;
         if (site is null)
         {
             if (HasColonisation)
             {
                 HasColonisation = false;
+                ShowCombined = false;
+                Choices.Clear();
                 ShoppingList.Clear();
-                _signature = "";
+                CombinedList.Clear();
+                _signature = _pickerSignature = _combinedSignature = "";
                 _sharedMarketId = 0;   // docking at the same depot again must look it up again
                 ClearShared();
             }
             return;
         }
+
+        HasColonisation = true;
+        SyncPicker(tracker, sites, site);
+
+        if (tracker.ShowAll)
+        {
+            ShowCombined = true;
+            UpdateCombined(sites);
+            return;
+        }
+        ShowCombined = false;
 
         // Docking at a different depot means different shared totals — look them up once, not per tick.
         // While a lookup for the previous depot is still in flight the new one has to wait: the id is
@@ -77,8 +135,8 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
             LoadSharedAsync(site.StarSystem, site.MarketId).Forget("Colonisation: shared project lookup");
         }
 
-        HasColonisation = true;
-        ColonisationTitle = site.StationName ?? site.StarSystem ?? "Construction site";
+        ColonisationTitle = site.StarSystem is { Length: > 0 } sys && sys != site.DisplayName
+            ? $"{site.DisplayName} · {sys}" : site.DisplayName;
         ColonisationProgress = Math.Clamp(site.Progress, 0, 1);
         ColonisationStatus = site.Complete ? "Complete"
             : site.Failed ? "Failed"
@@ -89,6 +147,7 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
         var list = site.BuildShoppingList(s.Cargo, Context.Host.CarrierCargo.Stock);
         var signature = site.MarketId + "|" + site.Progress.ToString("0.####") + "|"
             + string.Join("|", list.Select(i => $"{i.Name}:{i.Remaining}:{i.InHold}:{i.OnCarrier}"));
+        CanForget = true;
         if (signature == _signature) return;
         _signature = signature;
 
@@ -108,17 +167,82 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
 
     public override void Reset()
     {
-        _signature = "";
+        _signature = _pickerSignature = _combinedSignature = "";
         _sharedMarketId = 0;
         ShoppingList.Clear();
+        CombinedList.Clear();
+        Choices.Clear();
         ClearShared();
+    }
+
+    /// <summary>Drop the selected project from the remembered list (it returns if its depot is seen again).</summary>
+    [RelayCommand]
+    private void ForgetSelected()
+    {
+        var tracker = Context.Host.Colonisation;
+        if (!tracker.ShowAll && tracker.SelectedSite is { } site) tracker.Forget(site.MarketId);
+        _signature = _pickerSignature = "";
+    }
+
+    /// <summary>Rebuild the picker only when the set of projects or the selection changed.</summary>
+    private void SyncPicker(ColonisationTracker tracker, IReadOnlyList<ColonisationSite> sites, ColonisationSite selected)
+    {
+        var visible = sites.Where(p => ShowCompleted || p.IsOpen || p.MarketId == selected.MarketId).ToList();
+        var signature = (tracker.ShowAll ? "all" : selected.MarketId.ToString())
+            + "|" + ShowCompleted + "|" + string.Join("|", visible.Select(p => $"{p.MarketId}:{p.DisplayName}:{p.Progress:0.###}:{p.IsOpen}"));
+        if (signature == _pickerSignature) return;
+        _pickerSignature = signature;
+
+        _syncing = true;
+        try
+        {
+            Choices.Clear();
+            Choices.Add(new ProjectChoice(null, $"All projects ({sites.Count(p => p.IsOpen)} open)"));
+            foreach (var p in visible)
+            {
+                var state = p.Complete ? " — complete" : p.Failed ? " — failed" : !p.IsOpen ? " — supplied"
+                    : $" — {p.Progress * 100:0}%";
+                Choices.Add(new ProjectChoice(p.MarketId, p.DisplayName + state));
+            }
+            SelectedChoice = tracker.ShowAll
+                ? Choices[0]
+                : Choices.FirstOrDefault(c => c.MarketId == selected.MarketId);
+        }
+        finally { _syncing = false; }
+    }
+
+    private void UpdateCombined(IReadOnlyList<ColonisationSite> sites)
+    {
+        ClearShared();
+        _sharedMarketId = 0;   // returning to a single project must look its shared totals up again
+        CanForget = false;
+        var open = sites.Count(p => p.IsOpen);
+        var combined = ColonisationAggregator.Combine(sites);
+        var remaining = combined.Sum(c => (long)c.Remaining);
+        CombinedSummary = open == 0
+            ? "No open projects — everything known is complete."
+            : $"{open} open project{(open == 1 ? "" : "s")} · {combined.Count} commodities · {remaining:N0} t remaining";
+
+        var signature = string.Join("|", combined.Select(c =>
+            $"{c.Symbol}:{c.Remaining}:" + string.Join(",", c.Projects.Select(p => $"{p.MarketId}={p.Remaining}"))));
+        if (signature == _combinedSignature) return;
+        _combinedSignature = signature;
+
+        CombinedList.Clear();
+        foreach (var c in combined)
+        {
+            // One project owing it needs no breakdown line; several get "Name 120 · Name 40".
+            var breakdown = c.Projects.Count <= 1 ? ""
+                : string.Join(" · ", c.Projects.Select(p => $"{p.ProjectName} {p.Remaining:N0}"));
+            CombinedList.Add(new CombinedLine(c.Name, c.Remaining.ToString("N0"), breakdown, c.Fraction));
+        }
     }
 
     /// <summary>Re-read the shared totals — squadmates deliver while the commander is flying.</summary>
     [RelayCommand]
     private Task RefreshShared()
     {
-        var site = Context.Host.Colonisation.ActiveSite;
+        var site = Context.Host.Colonisation.SelectedSite;
         if (site is not null) _sharedMarketId = site.MarketId;   // a manual refresh claims the depot too
         return site is null ? Task.CompletedTask : LoadSharedAsync(site.StarSystem, site.MarketId);
     }
@@ -148,7 +272,7 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
             var shared = await lookup.GetForDepotAsync(systemName, marketId, CancellationToken.None);
             // Undocked, or docked somewhere else, while the lookup was in flight: these totals belong
             // to a depot the card is no longer showing.
-            if (shared is null || Context.Host.Colonisation.ActiveSite?.MarketId != marketId) return;
+            if (shared is null || Context.Host.Colonisation.SelectedSite?.MarketId != marketId) return;
 
             var architect = string.IsNullOrWhiteSpace(shared.Architect) ? "" : $" · started by {shared.Architect}";
             SharedTitle = $"{shared.BuildName}{architect}";
@@ -178,6 +302,18 @@ public sealed partial class ColonisationCardViewModel : CardViewModel
             SharedBusy = false;
         }
     }
+}
+
+/// <summary>A picker entry: one project, or the combined list when <see cref="MarketId"/> is null.</summary>
+public sealed record ProjectChoice(long? MarketId, string Label)
+{
+    public override string ToString() => Label;
+}
+
+/// <param name="Breakdown">Per-project shares ("Born's Pride 120 · New Horizon 40"), empty when one project owes it.</param>
+public sealed record CombinedLine(string Name, string Remaining, string Breakdown, double Fraction)
+{
+    public bool HasBreakdown => Breakdown.Length > 0;
 }
 
 /// <param name="HoldNote">"✓ 648 in hold" / "648 in hold" / "" — highlights what's already aboard.</param>

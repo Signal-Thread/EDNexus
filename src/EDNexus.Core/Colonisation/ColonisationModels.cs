@@ -38,6 +38,18 @@ public sealed class ColonisationSite
 
     public IReadOnlyList<ColonisationResource> Resources { get; init; } = Array.Empty<ColonisationResource>();
 
+    /// <summary>What to call the project in a picker: its station, else its system, else the market id.</summary>
+    public string DisplayName =>
+        !string.IsNullOrWhiteSpace(StationName) ? StationName!
+        : !string.IsNullOrWhiteSpace(StarSystem) ? StarSystem!
+        : $"Market {MarketId}";
+
+    /// <summary>
+    /// True while the project still has work to do: neither finished nor failed, and at least one
+    /// commodity outstanding. Only open projects contribute to the combined list.
+    /// </summary>
+    public bool IsOpen => !Complete && !Failed && TotalRemaining > 0;
+
     /// <summary>Commodities still owing at least one ton, worst shortfall first.</summary>
     public IEnumerable<ColonisationResource> Outstanding =>
         Resources.Where(r => !r.IsComplete).OrderByDescending(r => r.Remaining);

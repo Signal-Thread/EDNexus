@@ -990,8 +990,53 @@
                 </Grid>
                 <StackPanel IsVisible="{Binding !IsCollapsed}">
                   <TextBlock Classes="label" IsVisible="{Binding NoColonisation}" TextWrapping="Wrap"
-                             Text="No construction site in range. Dock at a colonisation construction ship and open its Construction Services panel to load the depot." />
+                             Text="No construction project known yet. Dock at a colonisation construction ship and open its Construction Services panel to load the depot; projects are remembered between sessions." />
 
+                  <!-- Project picker: one project, or "All projects" for the combined list. -->
+                  <StackPanel IsVisible="{Binding HasColonisation}" Margin="0,0,0,10">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+                      <ComboBox Grid.Column="0" ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}"
+                                HorizontalAlignment="Stretch" />
+                      <Button Grid.Column="1" Classes="mini" Content="Forget" Margin="8,0,0,0"
+                              IsVisible="{Binding CanForget}" Command="{Binding ForgetSelectedCommand}"
+                              ToolTip.Tip="Stop tracking this project (it returns if you dock at its depot again)" />
+                    </Grid>
+                    <CheckBox IsChecked="{Binding ShowCompleted}" Foreground="{StaticResource Ink}"
+                              Content="Show completed projects" />
+                  </StackPanel>
+
+                  <!-- Combined list: everything still needed to finish every open project. -->
+                  <StackPanel IsVisible="{Binding ShowCombined}">
+                    <TextBlock Classes="label" Text="{Binding CombinedSummary}" TextWrapping="Wrap" Margin="0,0,0,10" />
+                    <Grid ColumnDefinitions="*,110" Margin="0,0,0,2">
+                      <TextBlock Grid.Column="0" Classes="label" Text="COMMODITY" />
+                      <TextBlock Grid.Column="1" Classes="label" Text="REMAINING" HorizontalAlignment="Right" />
+                    </Grid>
+                    <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                      <ItemsControl ItemsSource="{Binding CombinedList}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:CombinedLine">
+                            <Grid ColumnDefinitions="*,110" Margin="0,5">
+                              <StackPanel Grid.Column="0" Margin="0,0,12,0" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Name}" Classes="value" FontSize="13" />
+                                <TextBlock Text="{Binding Breakdown}" Classes="label" TextWrapping="Wrap"
+                                           IsVisible="{Binding HasBreakdown}" />
+                                <ProgressBar Minimum="0" Maximum="1" Value="{Binding Fraction}" Height="4"
+                                             Foreground="{StaticResource AmberDim}" Background="{StaticResource SurfaceRaised}"
+                                             Margin="0,4,0,0" />
+                              </StackPanel>
+                              <TextBlock Grid.Column="1" Text="{Binding Remaining}" Classes="value" FontSize="13"
+                                         Foreground="{StaticResource AmberBrush}"
+                                         HorizontalAlignment="Right" VerticalAlignment="Center" />
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </ScrollViewer>
+                  </StackPanel>
+
+                  <StackPanel IsVisible="{Binding ShowSingle}">
                   <StackPanel IsVisible="{Binding HasColonisation}">
                     <TextBlock Classes="big" Text="{Binding ColonisationTitle}" TextWrapping="Wrap" />
                     <Grid ColumnDefinitions="*,Auto" Margin="0,10,0,4">
@@ -1054,6 +1099,7 @@
                         </ItemsControl.ItemTemplate>
                       </ItemsControl>
                     </ScrollViewer>
+                  </StackPanel>
                   </StackPanel>
                 </StackPanel>
               </StackPanel>

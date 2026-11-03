@@ -147,6 +147,18 @@ status.WriteLine("Replaying latest journal to warm up state...\n");
 watcher.Replay();
 plugins?.Drain(PluginHarness.ReplayDrainTimeout);
 
+// Projects the app remembered for this commander: read-only here (the harness never writes), merged
+// under whatever the replayed journal just showed, so a project not in the latest journal still lists.
+if (state.Name is { Length: > 0 } cmdr)
+{
+    try
+    {
+        var projectStore = new ColonisationProjectStore(Path.GetDirectoryName(SettingsStore.DefaultPath())!);
+        colonisation.Restore(projectStore.Load(cmdr));
+    }
+    catch (Exception ex) { Console.Error.WriteLine($"  [colonisation] could not read saved projects: {ex.Message}"); }
+}
+
 // --twitch-card is a payload dump, not a state dump: print just the JSON the extension would
 // receive, so it can be piped straight into a file or a POST body, then stop.
 if (twitchCardOnly)
@@ -279,7 +291,7 @@ static void PrintShoppingList(ColonisationTracker colonisation, EngineeringTrack
 
     var entries = new List<ShoppingEntry>(settings.Shopping.Manual);
     if (settings.Shopping.LinkColonisation)
-        entries.AddRange(ShoppingListService.FromColonisation(colonisation.ActiveSite));
+        entries.AddRange(ShoppingListService.FromColonisationProjects(colonisation.FocusedSites));
     if (settings.Shopping.LinkEngineering)
         entries.AddRange(ShoppingListService.FromEngineering(settings.Engineering, engineering, s));
     var rows = ShoppingListService.Build(entries, s);
@@ -298,10 +310,34 @@ static void PrintShoppingList(ColonisationTracker colonisation, EngineeringTrack
 
 static void PrintColonisation(ColonisationTracker tracker, CarrierCargoTracker carrierCargo, CommanderState s)
 {
-    var site = tracker.ActiveSite;
+    var projects = tracker.Sites;
+    var site = tracker.SelectedSite;
     if (site is null) return;
 
     Console.WriteLine("\n======== Colonisation ========");
+    Console.WriteLine($"  Projects  : {projects.Count} known, {projects.Count(p => p.IsOpen)} open");
+    foreach (var p in projects.OrderBy(p => !p.IsOpen).ThenByDescending(p => p.Updated))
+    {
+        var st = p.Complete ? "COMPLETE" : p.Failed ? "FAILED" : !p.IsOpen ? "supplied" : $"{p.Progress * 100:0.0}%";
+        var mark = p.MarketId == site.MarketId ? "*" : " ";
+        var sys = string.IsNullOrEmpty(p.StarSystem) || p.StarSystem == p.DisplayName ? "" : $"  ({p.StarSystem})";
+        Console.WriteLine($"   {mark} {p.MarketId,-11} {st,9}  {p.TotalRemaining,8:N0} t left  {p.DisplayName}{sys}  [{p.Updated.LocalDateTime:yyyy-MM-dd HH:mm}]");
+    }
+
+    var combined = tracker.Combined;
+    if (combined.Count > 0)
+    {
+        Console.WriteLine($"  --- all open projects combined ({combined.Sum(c => (long)c.Remaining):N0} t remaining) ---");
+        Console.WriteLine($"      {"remaining",9}  commodity");
+        foreach (var c in combined)
+        {
+            var split = c.Projects.Count > 1
+                ? "  (" + string.Join(", ", c.Projects.Select(p => $"{p.ProjectName} {p.Remaining:N0}")) + ")" : "";
+            Console.WriteLine($"      {c.Remaining,9:N0}  {c.Name}{split}");
+        }
+    }
+
+    Console.WriteLine("  --- selected project ---");
     var where = site.StationName ?? site.StarSystem ?? $"market {site.MarketId}";
     var status = site.Complete ? "COMPLETE" : site.Failed ? "FAILED" : $"{site.Progress * 100:0.0}%";
     Console.WriteLine($"  Site      : {where}");

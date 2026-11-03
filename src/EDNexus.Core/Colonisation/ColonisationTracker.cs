@@ -16,6 +16,8 @@ public sealed class ColonisationTracker
     private readonly object _gate = new();
     private readonly Dictionary<long, ColonisationSite> _sites = new();
     private long? _activeMarketId;
+    private long? _selectedMarketId;
+    private bool _showAll;
 
     /// <summary>Raised after any depot/contribution event changes the tracked picture.</summary>
     public event Action? Changed;
@@ -42,6 +44,136 @@ public sealed class ColonisationTracker
                 return _activeMarketId is long id && _sites.TryGetValue(id, out var s) ? s : null;
         }
     }
+
+    /// <summary>
+    /// The project the card shows on its own: the one the commander picked, else the one whose
+    /// depot/contribution was seen most recently. Seeing a depot picks it, as docking always has.
+    /// </summary>
+    public ColonisationSite? SelectedSite
+    {
+        get
+        {
+            lock (_gate)
+                return _selectedMarketId is long id && _sites.TryGetValue(id, out var s) ? s : ActiveSiteLocked();
+        }
+    }
+
+    /// <summary>True when the commander wants the combined all-projects list rather than one project.</summary>
+    public bool ShowAll
+    {
+        get { lock (_gate) return _showAll; }
+    }
+
+    /// <summary>
+    /// What the single-project view and the linked shopping list should cover: every open project
+    /// when <see cref="ShowAll"/>, otherwise just the <see cref="SelectedSite"/>.
+    /// </summary>
+    public IReadOnlyList<ColonisationSite> FocusedSites
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_showAll) return _sites.Values.Where(s => s.IsOpen).OrderByDescending(s => s.Updated).ToList();
+                var one = _selectedMarketId is long id && _sites.TryGetValue(id, out var s) ? s : ActiveSiteLocked();
+                return one is null ? Array.Empty<ColonisationSite>() : new[] { one };
+            }
+        }
+    }
+
+    /// <summary>The summed outstanding commodities of every open project.</summary>
+    public IReadOnlyList<CombinedCommodity> Combined => ColonisationAggregator.Combine(Sites);
+
+    /// <summary>Shows one known project on its own. An unknown market id is ignored.</summary>
+    public void Select(long marketId)
+    {
+        lock (_gate)
+        {
+            if (!_sites.ContainsKey(marketId)) return;
+            if (_selectedMarketId == marketId && !_showAll) return;
+            _selectedMarketId = marketId;
+            _showAll = false;
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>Switches between the combined all-projects list and the single-project view.</summary>
+    public void SetShowAll(bool showAll)
+    {
+        lock (_gate)
+        {
+            if (_showAll == showAll) return;
+            _showAll = showAll;
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>Stops tracking a project (for example a finished one). It returns if its depot is seen again.</summary>
+    public bool Forget(long marketId)
+    {
+        lock (_gate)
+        {
+            if (!_sites.Remove(marketId)) return false;
+            if (_activeMarketId == marketId) _activeMarketId = null;
+            if (_selectedMarketId == marketId) _selectedMarketId = null;
+            // Fall back to the most recently updated survivor so the card keeps showing projects.
+            if (_activeMarketId is null && _sites.Count > 0)
+                _activeMarketId = _sites.Values.OrderByDescending(s => s.Updated).First().MarketId;
+        }
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>Drops every project and the selection, e.g. when a different commander logs in.</summary>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            _sites.Clear();
+            _activeMarketId = null;
+            _selectedMarketId = null;
+            _showAll = false;
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>The state worth remembering across sessions.</summary>
+    public ColonisationProjectData Snapshot()
+    {
+        lock (_gate)
+            return new ColonisationProjectData
+            {
+                SelectedMarketId = _selectedMarketId,
+                ShowAll = _showAll,
+                Projects = _sites.Values.OrderBy(s => s.MarketId).Select(s => (ColonisationProjectRecord?)ColonisationProjectRecord.From(s)).ToList(),
+            };
+    }
+
+    /// <summary>
+    /// Folds remembered projects in. A project already seen this session is replaced only by a
+    /// strictly newer saved copy, so journal events that arrived first are never rolled back. The
+    /// saved selection is adopted only if nothing has been selected yet.
+    /// </summary>
+    public void Restore(ColonisationProjectData data)
+    {
+        var sites = data.ToSites();
+        lock (_gate)
+        {
+            foreach (var site in sites)
+                if (!_sites.TryGetValue(site.MarketId, out var existing) || site.Updated > existing.Updated)
+                    _sites[site.MarketId] = site;
+
+            if (_activeMarketId is null && _sites.Count > 0)
+                _activeMarketId = _sites.Values.OrderByDescending(s => s.Updated).First().MarketId;
+            if (_selectedMarketId is null && data.SelectedMarketId is long sel && _sites.ContainsKey(sel))
+                _selectedMarketId = sel;
+            _showAll = data.ShowAll || _showAll;
+        }
+        Changed?.Invoke();
+    }
+
+    private ColonisationSite? ActiveSiteLocked() =>
+        _activeMarketId is long id && _sites.TryGetValue(id, out var s) ? s : null;
 
     private void OnDepot(JournalEntry e)
     {
@@ -81,6 +213,7 @@ public sealed class ColonisationTracker
         {
             _sites[marketId] = site;
             _activeMarketId = marketId;
+            _selectedMarketId = marketId;
         }
         Changed?.Invoke();
     }
@@ -126,13 +259,14 @@ public sealed class ColonisationTracker
                 Resources = updated,
             };
             _activeMarketId = marketId;
+            _selectedMarketId = marketId;
         }
         Changed?.Invoke();
     }
 
     private static string? ReadString(JsonElement item, string prop)
-        => item.TryGetProperty(prop, out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
+        => item.ValueKind == JsonValueKind.Object && item.TryGetProperty(prop, out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
 
     private static int ReadInt(JsonElement item, string prop)
-        => item.TryGetProperty(prop, out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out var v) ? v : 0;
+        => item.ValueKind == JsonValueKind.Object && item.TryGetProperty(prop, out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out var v) ? v : 0;
 }

@@ -40,6 +40,7 @@ public sealed class EngineHost : IDisposable
     private readonly ReporterHost? _reporters;
     private readonly DiscordPresenceController? _discordPresence;
     private readonly RavenContributionSync? _ravenContributions;
+    private readonly ColonisationProjectPersistence? _colonisationProjects;
     private readonly TwitchStreamCardService? _twitchCard;
     private readonly StreamStateApiClient? _twitchCardClient;
     private readonly HttpClient _http;
@@ -141,6 +142,13 @@ public sealed class EngineHost : IDisposable
         JournalDirectory = journalDir ?? JournalPaths.Resolve();
         _tracker = new StateTracker(Bus, State);
         Colonisation = new ColonisationTracker(Bus, State);
+        // Remembers construction projects between sessions. Wired only with settings (so the CLI's
+        // replay never writes) and silent while developer mode fabricates projects.
+        if (settings is not null)
+            _colonisationProjects = new ColonisationProjectPersistence(
+                Bus, State, Colonisation,
+                new ColonisationProjectStore(Path.GetDirectoryName(SettingsStore.DefaultPath())!),
+                reportingSuppressed);
         CarrierCargo = new CarrierCargoTracker(Bus);
         Market = new MarketTracker(Bus, State);
         Engineering = new EngineeringTracker(Bus);
@@ -369,6 +377,7 @@ public sealed class EngineHost : IDisposable
         // Flush any queued reports before tearing down the shared HttpClient.
         try { _reporters?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3)); }
         catch (AggregateException) { /* best effort */ }
+        _colonisationProjects?.Dispose();
         _ravenContributions?.Dispose();   // before _http goes: cancels any delivery still in flight
         _discordPresence?.Dispose();
         _twitchCard?.Dispose();

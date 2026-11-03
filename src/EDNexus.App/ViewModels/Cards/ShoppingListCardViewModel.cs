@@ -87,7 +87,7 @@ public sealed partial class ShoppingListCardViewModel : CardViewModel
 
         var entries = new List<ShoppingEntry>(settings.Manual);
         if (settings.LinkColonisation)
-            entries.AddRange(ShoppingListService.FromColonisation(Context.Host.Colonisation.ActiveSite));
+            entries.AddRange(ShoppingListService.FromColonisationProjects(Context.Host.Colonisation.FocusedSites));
         if (settings.LinkEngineering)
             entries.AddRange(ShoppingListService.FromEngineering(Context.GetEngineeringPin(), Context.Host.Engineering, s));
 
