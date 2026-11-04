@@ -485,13 +485,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>Same as <see cref="DismissCarrierShareError"/>, named for the Settings window's call.</summary>
     public void ClearCarrierShareError() => DismissCarrierShareError();
 
-    /// <summary>Carrier sharing stopped itself: persist that it is off and put the reason in front of the commander. Runs on a background thread.</summary>
+    /// <summary>
+    /// Carrier sharing stopped itself: persist that it is off and put the reason in front of the commander.
+    /// Called on the sharing worker's thread; the engine has already switched it off in memory, which is
+    /// what stops the sending. The save is posted to the UI thread because that is where every other edit
+    /// of the shared settings happens, so serialising them cannot race a change.
+    /// </summary>
     private void OnCarrierShareFaulted(EDNexus.Core.Colonisation.CarrierShareFault fault)
-    {
-        try { _boot.ApplyShareCarrierCargo(false, _boot.Settings.Colonisation.RavenApiKey); }
-        catch (Exception ex) { Trace.TraceError("Settings: could not save that carrier sharing was switched off: " + ex.Message); }
-        Dispatcher.UIThread.Post(() => CarrierShareError = fault.Message);
-    }
+        => Dispatcher.UIThread.Post(() =>
+        {
+            try { _boot.ApplyShareCarrierCargo(false, _boot.Settings.Colonisation.RavenApiKey); }
+            catch (Exception ex) { Trace.TraceError("Settings: could not save that carrier sharing was switched off: " + ex.Message); }
+            CarrierShareError = fault.Message;
+        });
 
     [ObservableProperty] private string _privacyStatus = "";
     [ObservableProperty] private string _commanderName = "—";

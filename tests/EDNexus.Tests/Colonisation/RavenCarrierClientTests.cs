@@ -280,6 +280,48 @@ public class RavenCarrierClientTests
         Assert.DoesNotContain(Key, result.Error!);
     }
 
+    [Theory]
+    [InlineData("http://raven.test")]
+    [InlineData("ftp://raven.test")]
+    [InlineData("raven.test")]
+    public async Task The_key_is_never_sent_to_a_base_address_that_is_not_https(string baseUrl)
+    {
+        var handler = new ScriptedHandler((_, _) => Json(HttpStatusCode.OK, "{}"));
+        var client = new RavenColonialClient(
+            new RavenColonialClientOptions { SoftwareName = "T", SoftwareVersion = "1", BaseUrl = baseUrl },
+            new HttpClient(handler));
+
+        var result = await client.PatchCarrierCargoAsync(1, Key, Deltas(("steel", 5)));
+
+        Assert.False(result.IsOk);
+        Assert.Contains("https", result.Error!);
+        Assert.DoesNotContain(Key, result.Error!);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.MovedPermanently)]
+    [InlineData(HttpStatusCode.Found)]
+    [InlineData(HttpStatusCode.TemporaryRedirect)]
+    [InlineData(HttpStatusCode.PermanentRedirect)]
+    public async Task A_redirect_is_a_failure_and_the_key_goes_nowhere_else(HttpStatusCode status)
+    {
+        // The app gives this call a client that does not follow redirects, so the 3xx reaches the
+        // client as-is. It must be a failure, and the only request made is the one to Raven itself.
+        var (client, handler) = NewClient((_, _) =>
+        {
+            var redirect = new HttpResponseMessage(status);
+            redirect.Headers.Location = new Uri("https://elsewhere.test/steal");
+            return redirect;
+        });
+
+        var result = await client.PatchCarrierCargoAsync(1, Key, Deltas(("steel", 5)));
+
+        Assert.False(result.IsOk);
+        Assert.Equal((int)status, result.StatusCode);
+        Assert.Equal("raven.test", Assert.Single(handler.Requests).Uri!.Host);
+    }
+
     [Fact]
     public async Task A_transport_failure_is_a_failure_that_never_echoes_the_key()
     {

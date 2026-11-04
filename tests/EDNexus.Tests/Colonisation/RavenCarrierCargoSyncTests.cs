@@ -506,6 +506,39 @@ public class RavenCarrierCargoSyncTests
         Assert.True(rig.Enabled);
     }
 
+    [Fact]
+    public async Task A_different_carrier_starts_from_its_own_baseline_not_the_previous_ones()
+    {
+        using var rig = new Rig();
+        await rig.PublishAsync(Transfer("steel", 100, timestamp: "2026-11-02T04:05:52Z"));   // baseline 1000 -> 1100
+
+        // The commander's carrier changes (a new one registered, or another account loaded). Its steel is
+        // 1150, which with +50 is 1200: exactly what the old carrier's books would call a duplicate.
+        rig.State.CarrierId = Other;
+        rig.State.MarketId = Other;
+        rig.Carrier.Server["steel"] = 1150;
+        rig.Carrier.Lookup = new SharedCarrierLookup(true, new Dictionary<string, int> { ["steel"] = 1150 });
+        await rig.PublishAsync(Transfer("steel", 50, timestamp: "2026-11-02T04:06:52Z"));
+
+        Assert.Equal(2, rig.Carrier.Patches.Count);
+        Assert.Empty(rig.Faults);
+        Assert.True(rig.Enabled);
+    }
+
+    [Fact]
+    public async Task A_different_commander_starts_from_a_fresh_baseline_too()
+    {
+        using var rig = new Rig();
+        await rig.PublishAsync(Transfer("steel", 100, timestamp: "2026-11-02T04:05:52Z"));
+
+        rig.State.Name = "Bob";
+        rig.Carrier.Server["steel"] = 1150;
+        rig.Carrier.Lookup = new SharedCarrierLookup(true, new Dictionary<string, int> { ["steel"] = 1150 });
+        await rig.PublishAsync(Transfer("steel", 50, timestamp: "2026-11-02T04:06:52Z"));
+
+        Assert.Empty(rig.Faults);
+    }
+
     // --- Lifetime ---
 
     [Fact]

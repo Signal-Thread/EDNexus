@@ -45,6 +45,7 @@ public sealed class EngineHost : IDisposable
     private readonly TwitchStreamCardService? _twitchCard;
     private readonly StreamStateApiClient? _twitchCardClient;
     private readonly HttpClient _http;
+    private readonly HttpClient? _carrierHttp;
     private Task? _runTask;
 
     public JournalEventBus Bus { get; } = new();
@@ -222,8 +223,17 @@ public sealed class EngineHost : IDisposable
 
             // The commander's own carrier cargo, with the same wiring rules: settings only, switches read
             // live, silent in developer mode. It is authenticated, so the key is read live too.
+            // The API key rides in a custom header, which the default handler would carry to another host
+            // on a cross-host redirect, so this traffic gets its own client that never follows one.
+            _carrierHttp = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false })
+            {
+                Timeout = TimeSpan.FromSeconds(20),
+            };
+            _carrierHttp.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("EDNexus", ResolveVersion()));
+            var ravenCarriers = new RavenColonialClient(
+                new RavenColonialClientOptions { SoftwareName = "EDNexus", SoftwareVersion = version }, _carrierHttp);
             _ravenCarrierCargo = new RavenCarrierCargoSync(
-                Bus, State, new RavenColonialCarrierCargo(raven, () => settings.Colonisation.RavenApiKey),
+                Bus, State, new RavenColonialCarrierCargo(ravenCarriers, () => settings.Colonisation.RavenApiKey),
                 isEnabled: () => settings.Colonisation.CarrierSharingActive,
                 onFault: fault => OnCarrierShareFault(settings, fault),
                 isSuppressed: reportingSuppressed);
@@ -403,11 +413,12 @@ public sealed class EngineHost : IDisposable
         catch (AggregateException) { /* best effort */ }
         _colonisationProjects?.Dispose();
         _ravenContributions?.Dispose();   // before _http goes: cancels any delivery still in flight
-        _ravenCarrierCargo?.Dispose();
+        _ravenCarrierCargo?.Dispose();   // before its client goes, like the deliveries above
         _discordPresence?.Dispose();
         _twitchCard?.Dispose();
         _twitchCardClient?.Dispose();
         _cts.Dispose();
+        _carrierHttp?.Dispose();
         _http.Dispose();
     }
 

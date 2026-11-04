@@ -208,6 +208,12 @@ public sealed class RavenColonialClient : IDisposable
     /// </summary>
     /// <param name="marketId">The carrier's market id.</param>
     /// <param name="apiKey">The commander's API key. Never logged, and scrubbed from any failure text.</param>
+    /// <remarks>
+    /// The key travels in a custom header, which .NET keeps when it follows a redirect to another host
+    /// (it strips only <c>Authorization</c>). So the <see cref="HttpClient"/> given to this client for
+    /// this call must not follow redirects (<c>AllowAutoRedirect = false</c>); a 3xx is then an ordinary
+    /// failure. The app builds such a client for the carrier sharing. The address must be https.
+    /// </remarks>
     /// <param name="deltas">
     /// Commodity to signed tons. Names are put into Raven's spelling (<see cref="RavenCommodityKey"/>),
     /// repeated names are added together, and commodities that net to zero are dropped; when nothing is
@@ -219,6 +225,10 @@ public sealed class RavenColonialClient : IDisposable
         if (marketId <= 0) return RavenResult<RavenCarrierCargoUpdate>.Failure("invalid carrier id");
         if (!IsSafeHeaderValue(apiKey)) return RavenResult<RavenCarrierCargoUpdate>.Failure("invalid API key");
         var key = apiKey.Trim();
+
+        // The key rides in a header, so it must never travel in the clear.
+        if (!Uri.TryCreate(Base, UriKind.Absolute, out var baseUri) || baseUri.Scheme != Uri.UriSchemeHttps)
+            return RavenResult<RavenCarrierCargoUpdate>.Failure("carrier sharing needs an https base address");
 
         var send = new Dictionary<string, int>(StringComparer.Ordinal);
         if (deltas is not null)

@@ -112,6 +112,7 @@ public sealed class RavenCarrierCargoSync : IDisposable
     // Touched only by the worker, so they need no lock.
     private readonly Dictionary<string, CachedLookup> _lookups = new(StringComparer.OrdinalIgnoreCase);
     private readonly CarrierDriftMonitor _drift = new();
+    private string? _driftFor;          // whose books _drift is keeping
 
     /// <param name="bus">The journal bus to listen on.</param>
     /// <param name="state">Supplies the commander's own carrier id and the market they are docked at.</param>
@@ -215,6 +216,16 @@ public sealed class RavenCarrierCargoSync : IDisposable
     {
         // Settings can change while a movement waits in the queue; honour the latest answer.
         if (!_isEnabled() || _isSuppressed()) return;
+
+        // The drift monitor keeps one carrier's books. A different commander or carrier (a new carrier
+        // registered, another account loaded) starts a fresh set, or its first send would be judged
+        // against the old carrier's totals.
+        var owner = $"{movement.Commander}|{movement.MarketId}";
+        if (!string.Equals(_driftFor, owner, StringComparison.OrdinalIgnoreCase))
+        {
+            _drift.Reset();
+            _driftFor = owner;
+        }
 
         var known = await ResolveAsync(movement.Commander, movement.MarketId, ct).ConfigureAwait(false);
         if (known is null) return;
