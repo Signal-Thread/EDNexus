@@ -147,7 +147,7 @@ that is not listed here.
 | Discord Rich Presence | Your own Discord client (local IPC, not an upload by EDNexus) | When enabled in Settings | System/ship/activity; options hide the system and the commander name |
 | Colonisation lookups (read) | Raven Colonial | When you dock at a construction depot, unless switched off in Settings → Data reporting | The depot's system name and market id, then the matched project's id |
 | Colonisation deliveries (write) | Raven Colonial | **Opt-in, default off**; each live delivery you make at a depot that has a shared project, and only while the lookup above is also on | **Your commander name**, the project id, and the commodities and tons you delivered (see below) |
-| Fleet carrier cargo (write) | Raven Colonial | **Opt-in, default off, needs your Raven Colonial API key**; each live change to the cargo in **your own** carrier (transfers, and trades at its market), and only if Raven Colonial already tracks that carrier | The carrier's market id and the commodities and tons that moved, sent with your API key (see below) |
+| Fleet carrier cargo (write) | Raven Colonial | **Opt-in, default off, needs your Raven Colonial API key**; each live change to the cargo in **your own** carrier (transfers, and trades at its market), and only if that carrier is registered to you on Raven Colonial | The carrier's market id and the commodities and tons that moved, sent with your API key (see below) |
 | Exobiology points of interest | EDAstro (Galactic Exploration Catalog, `edastro.com/gec/json/all`) | **Not available yet** - the code exists but no setting, UI or wiring uses it. Planned as opt-in, default off | When enabled: one request for the public POI catalogue, then cached; after a failure it waits 5 minutes before trying again (a flaky link does not retry on every lookup). No commander, system or journal data is sent. Content is CC BY-NC-SA 3.0 and is **not** covered by EDNexus's own licence: it is fetched at runtime, never bundled, and credited to EDAstro in Settings > Open source contributions |
 | Route & market search | Spansh, EDSM | When you run a search | The search/route parameters (systems, ranges, commodities) |
 | Faction influence & BGS states (read) | EliteBGS (elitebgs.app) | Not yet wired into the app. Will be **opt-in, default off** once the Settings toggle lands (#95); only when a faction or system is looked up | The faction or system name being looked up, plus a `User-Agent` with the software name and version. Replies are cached briefly in memory |
@@ -181,7 +181,8 @@ to that carrier on [Raven Colonial](https://ravencolonial.com), so your squadron
   machine, like the Inara key, and removed from crash reports). Raven Colonial decides who can see a carrier's
   cargo; EDNexus cannot restrict that.
 - **Own carrier only.** A squadron carrier, another commander's carrier, or any other station's market is never
-  reported. A carrier Raven Colonial does not track is skipped without an error.
+  reported. A carrier that is not registered to you on Raven Colonial (linked to your account, as listed under your
+  commander name there) is skipped without an error.
 - **Changes, not a snapshot.** Without the Frontier companion API the journal cannot list a carrier's cargo, so
   EDNexus sends only the movements it sees live and never overwrites the totals Raven Colonial holds.
 - **Two reporters double everything.** Raven Colonial adds up what it is told; if the RavenColonial EDMC plugin or

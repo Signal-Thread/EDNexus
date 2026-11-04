@@ -116,6 +116,70 @@ public class RavenCarrierClientTests
         Assert.Empty(handler.Requests);
     }
 
+    // --- The carriers registered to a commander ---
+
+    [Fact]
+    public async Task A_commanders_registered_carriers_are_read_from_their_fc_all_route()
+    {
+        var (client, handler) = NewClient((_, _) => Json(HttpStatusCode.OK, """
+        [ { "marketId": 3711552256, "name": "X8J-LVZ", "displayName": "CORTANA'S REQUIEM", "owner": "Jane Doe", "cargo": { "Steel": 906 } },
+          { "marketId": "3700009999", "name": "SQD-1AA", "cargo": {} } ]
+        """));
+
+        var result = await client.GetCommanderCarriersAsync("Jane Doe");
+
+        Assert.True(result.IsOk);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Equal("https://raven.test/api/cmdr/Jane%20Doe/fc/all", request.Uri!.AbsoluteUri);
+        Assert.Equal(new long[] { 3711552256, 3700009999 }, result.Value!.Select(c => c.MarketId));
+        Assert.Equal(906, result.Value![0].Cargo["steel"]);
+    }
+
+    [Fact]
+    public async Task A_commander_with_no_carriers_is_an_empty_list_not_a_failure()
+    {
+        var (client, _) = NewClient((_, _) => Json(HttpStatusCode.OK, "[]"));
+
+        var result = await client.GetCommanderCarriersAsync("Nobody");
+
+        Assert.True(result.IsOk);
+        Assert.Empty(result.Value!);
+    }
+
+    [Fact]
+    public async Task An_unknown_commander_or_a_non_list_reply_is_an_empty_list()
+    {
+        var (notFound, _) = NewClient((_, _) => Json(HttpStatusCode.NotFound, ""));
+        var (odd, _) = NewClient((_, _) => Json(HttpStatusCode.OK, """{ "unexpected": true }"""));
+
+        Assert.Empty((await notFound.GetCommanderCarriersAsync("Nobody")).Value!);
+        Assert.Empty((await odd.GetCommanderCarriersAsync("Nobody")).Value!);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    [InlineData("..")]
+    public async Task A_blank_or_dot_segment_commander_never_touches_the_network(string cmdr)
+    {
+        var (client, handler) = NewClient();
+
+        var result = await client.GetCommanderCarriersAsync(cmdr);
+
+        Assert.True(result.IsOk);
+        Assert.Empty(result.Value!);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task A_failed_commander_lookup_is_a_failure_so_it_can_be_asked_again()
+    {
+        var (client, _) = NewClient((_, _) => Json(HttpStatusCode.InternalServerError, ""));
+
+        Assert.False((await client.GetCommanderCarriersAsync("Jane")).IsOk);
+    }
+
     // --- Writing cargo ---
 
     [Fact]

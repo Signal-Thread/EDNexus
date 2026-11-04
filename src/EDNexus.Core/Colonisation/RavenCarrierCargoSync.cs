@@ -58,9 +58,10 @@ public sealed record CarrierShareFault(CarrierShareFaultKind Kind, string Messag
 /// receive.
 /// </para>
 /// <para>
-/// <b>Unknown carriers just skip.</b> The tracker only holds carriers it has been told about. When it
-/// does not know the commander's, nothing is sent and nothing is reported as an error; the answer is
-/// remembered for <see cref="UnknownTtl"/> so a carrier linked mid-session is picked up soon.
+/// <b>Registered carriers only.</b> The carrier has to be registered to the commander on the tracker
+/// (linked to their account, as listed under their name), not merely known to it. When it is not,
+/// nothing is sent and nothing is reported as an error; the answer is remembered for
+/// <see cref="UnknownTtl"/> so a carrier registered mid-session is picked up soon.
 /// </para>
 /// <para>
 /// <b>Two reporters.</b> The tracker adds up whatever it is told, so another tool reporting the same
@@ -72,10 +73,10 @@ public sealed record CarrierShareFault(CarrierShareFaultKind Kind, string Messag
 /// </remarks>
 public sealed class RavenCarrierCargoSync : IDisposable
 {
-    /// <summary>How long "the tracker holds this carrier" is trusted before it is asked again.</summary>
+    /// <summary>How long "this carrier is registered to the commander" is trusted before it is asked again.</summary>
     internal static readonly TimeSpan KnownTtl = TimeSpan.FromMinutes(10);
 
-    /// <summary>How long "the tracker does not know this carrier" is trusted — shorter, so a carrier linked mid-session is found.</summary>
+    /// <summary>How long "this carrier is not registered to the commander" is trusted — shorter, so a carrier registered mid-session is found.</summary>
     internal static readonly TimeSpan UnknownTtl = TimeSpan.FromMinutes(5);
 
     private const int QueueCapacity = 32;
@@ -109,7 +110,7 @@ public sealed class RavenCarrierCargoSync : IDisposable
     private TaskCompletionSource _idle = CompletedIdle();
 
     // Touched only by the worker, so they need no lock.
-    private readonly Dictionary<long, CachedLookup> _lookups = new();
+    private readonly Dictionary<string, CachedLookup> _lookups = new(StringComparer.OrdinalIgnoreCase);
     private readonly CarrierDriftMonitor _drift = new();
 
     /// <param name="bus">The journal bus to listen on.</param>
@@ -157,8 +158,11 @@ public sealed class RavenCarrierCargoSync : IDisposable
         if (!_isEnabled()) return;             // opt-in, read live so toggles take effect
         if (_isSuppressed()) return;           // developer mode: fabricated events stay on this machine
 
-        // Own carrier only. The id the movement happened on must be the commander's own carrier's;
-        // while either is unknown there is no way to say, so nothing is sent.
+        // Own, registered carrier only. The id the movement happened on must be the commander's own
+        // carrier's, and the registry is asked about that commander by name; while either is unknown
+        // there is no way to say, so nothing is sent.
+        var commander = _state.Name?.Trim();
+        if (string.IsNullOrEmpty(commander)) return;
         if (CarrierCargoMovements.Read(e, _state.MarketId) is not { } movement) return;
         if (_state.CarrierId is not long own || movement.MarketId != own) return;
 
@@ -175,7 +179,7 @@ public sealed class RavenCarrierCargoSync : IDisposable
             if (_pending++ == 0) _idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
-        if (!_queue.Writer.TryWrite(new Movement(own, movement.Deltas)))
+        if (!_queue.Writer.TryWrite(new Movement(commander, own, movement.Deltas)))
         {
             Trace.TraceWarning("Raven Colonial: carrier cargo change not shared (queue full or shutting down).");
             Complete();
@@ -212,7 +216,7 @@ public sealed class RavenCarrierCargoSync : IDisposable
         // Settings can change while a movement waits in the queue; honour the latest answer.
         if (!_isEnabled() || _isSuppressed()) return;
 
-        var known = await ResolveAsync(movement.MarketId, ct).ConfigureAwait(false);
+        var known = await ResolveAsync(movement.Commander, movement.MarketId, ct).ConfigureAwait(false);
         if (known is null) return;
         if (!_isEnabled() || _isSuppressed()) return;
 
@@ -252,22 +256,23 @@ public sealed class RavenCarrierCargoSync : IDisposable
         }
     }
 
-    /// <summary>What the tracker holds for the carrier, from the cache when fresh; null when it is not tracked or could not be asked. A failed lookup is not cached.</summary>
-    private async Task<SharedCarrierLookup?> ResolveAsync(long marketId, CancellationToken ct)
+    /// <summary>What the tracker holds for the carrier, from the cache when fresh; null when it is not registered to the commander or could not be asked. A failed lookup is not cached.</summary>
+    private async Task<SharedCarrierLookup?> ResolveAsync(string commander, long marketId, CancellationToken ct)
     {
         var now = _time.GetUtcNow();
-        if (_lookups.TryGetValue(marketId, out var cached) && cached.Expires > now)
+        var key = $"{commander}|{marketId}";
+        if (_lookups.TryGetValue(key, out var cached) && cached.Expires > now)
             return cached.Lookup.Known ? cached.Lookup : null;
 
-        var found = await _carrier.FindAsync(marketId, ct).ConfigureAwait(false);
+        var found = await _carrier.FindAsync(commander, marketId, ct).ConfigureAwait(false);
         if (found.Error is not null)
         {
             Trace.TraceWarning($"Raven Colonial: could not look up the carrier ({found.Error}); change not shared.");
             return null;
         }
 
-        _lookups[marketId] = new CachedLookup(found, now + (found.Known ? KnownTtl : UnknownTtl));
-        if (!found.Known) Trace.TraceInformation("Raven Colonial: the carrier is not tracked there; change not shared.");
+        _lookups[key] = new CachedLookup(found, now + (found.Known ? KnownTtl : UnknownTtl));
+        if (!found.Known) Trace.TraceInformation("Raven Colonial: the carrier is not registered to this commander there; change not shared.");
         return found.Known ? found : null;
     }
 
@@ -307,7 +312,7 @@ public sealed class RavenCarrierCargoSync : IDisposable
         catch (ObjectDisposedException) { /* the worker already ended */ }
     }
 
-    private sealed record Movement(long MarketId, IReadOnlyList<CarrierCargoDelta> Deltas);
+    private sealed record Movement(string Commander, long MarketId, IReadOnlyList<CarrierCargoDelta> Deltas);
 
     private sealed record CachedLookup(SharedCarrierLookup Lookup, DateTimeOffset Expires);
 }

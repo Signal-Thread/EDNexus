@@ -174,6 +174,32 @@ public sealed class RavenColonialClient : IDisposable
     }
 
     /// <summary>
+    /// The fleet carriers registered to a commander on Raven Colonial — the ones linked to their account,
+    /// with the cargo reported for each (<c>GET /api/cmdr/{cmdr}/fc/all</c>). An OK result with an empty
+    /// list means the commander has none, or Raven does not know the commander.
+    /// </summary>
+    public async Task<RavenResult<IReadOnlyList<RavenCarrier>>> GetCommanderCarriersAsync(
+        string cmdr, CancellationToken ct = default)
+    {
+        IReadOnlyList<RavenCarrier> none = Array.Empty<RavenCarrier>();
+        if (!IsSafeSegment(cmdr)) return RavenResult<IReadOnlyList<RavenCarrier>>.Ok(none);
+
+        var result = await GetAsync($"{Base}/api/cmdr/{Uri.EscapeDataString(cmdr.Trim())}/fc/all", ct, body =>
+        {
+            using var doc = JsonDocument.Parse(body);
+            var carriers = new List<RavenCarrier>();
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                foreach (var el in doc.RootElement.EnumerateArray())
+                    if (ReadCarrier(el, 0) is { MarketId: > 0 } carrier)
+                        carriers.Add(carrier);
+            return RavenResult<IReadOnlyList<RavenCarrier>>.Ok(carriers);
+        }).ConfigureAwait(false);
+
+        // "No such commander" is an empty registry, not a missing value.
+        return result.IsOk && result.Value is null ? RavenResult<IReadOnlyList<RavenCarrier>>.Ok(none) : result;
+    }
+
+    /// <summary>
     /// Reports a change to a carrier's cargo: <c>PATCH /api/fc/{marketId}/cargo</c> with a JSON object of
     /// commodity to <em>signed</em> tons (positive adds to the carrier, negative removes), authenticated
     /// with the commander's Raven Colonial API key in the <c>rcc-key</c> header. Never throws; a rejected,

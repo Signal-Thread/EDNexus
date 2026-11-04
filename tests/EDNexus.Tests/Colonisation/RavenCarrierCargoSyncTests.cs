@@ -32,14 +32,16 @@ public class RavenCarrierCargoSyncTests
         public Exception? ThrowOnPatch { get; set; }
         public Action? OnFind { get; set; }
         public int FindCalls;
+        public List<string> FoundFor { get; } = new();
         public List<Patched> Patches { get; } = new();
 
         /// <summary>Another tool reporting the same movement: applied to the server on top of ours.</summary>
         public bool SecondReporter { get; set; }
 
-        public Task<SharedCarrierLookup> FindAsync(long marketId, CancellationToken ct = default)
+        public Task<SharedCarrierLookup> FindAsync(string commander, long marketId, CancellationToken ct = default)
         {
             Interlocked.Increment(ref FindCalls);
+            lock (FoundFor) FoundFor.Add(commander);
             OnFind?.Invoke();
             return Task.FromResult(Lookup);
         }
@@ -232,6 +234,54 @@ public class RavenCarrierCargoSyncTests
         Assert.Empty(rig.Carrier.Patches);
     }
 
+    // --- Registered carriers only ---
+
+    [Fact]
+    public async Task The_registry_is_asked_about_the_current_commander()
+    {
+        using var rig = new Rig();
+
+        await rig.PublishAsync(Transfer());
+
+        Assert.Equal("Jane Doe", Assert.Single(rig.Carrier.FoundFor));
+    }
+
+    [Fact]
+    public async Task Nothing_is_sent_without_a_commander_name()
+    {
+        using var rig = new Rig();
+        rig.State.Name = null;
+
+        await rig.PublishAsync(Transfer());
+
+        Assert.Empty(rig.Carrier.Patches);
+        Assert.Equal(0, rig.Carrier.FindCalls);
+    }
+
+    [Fact]
+    public async Task A_carrier_not_registered_to_this_commander_is_skipped_quietly()
+    {
+        using var rig = new Rig();
+        rig.Carrier.Lookup = new SharedCarrierLookup(false, new Dictionary<string, int>());
+
+        await rig.PublishAsync(Transfer());
+
+        Assert.Empty(rig.Carrier.Patches);
+        Assert.Empty(rig.Faults);
+    }
+
+    [Fact]
+    public async Task Switching_commander_asks_the_registry_again_for_the_new_one()
+    {
+        using var rig = new Rig();
+        await rig.PublishAsync(Transfer(timestamp: "2026-11-02T04:05:52Z"));
+
+        rig.State.Name = "Bob";
+        await rig.PublishAsync(Transfer(timestamp: "2026-11-02T04:06:52Z"));
+
+        Assert.Equal(new[] { "Jane Doe", "Bob" }, rig.Carrier.FoundFor);
+    }
+
     // --- Gates ---
 
     [Fact]
@@ -312,7 +362,7 @@ public class RavenCarrierCargoSyncTests
         await rig.PublishAsync(Transfer(timestamp: "2026-11-02T04:06:52Z"));
 
         Assert.Empty(rig.Carrier.Patches);
-        Assert.Empty(rig.Faults);                       // not an error: it simply is not tracked there
+        Assert.Empty(rig.Faults);                       // not an error: it simply is not registered to this commander there
         Assert.Equal(1, rig.Carrier.FindCalls);         // asked once, then trusted for a while
     }
 
@@ -546,24 +596,51 @@ public class RavenCarrierCargoSyncTests
     }
 
     [Fact]
-    public async Task The_adapter_reports_an_unknown_carrier_as_not_known()
+    public async Task The_adapter_reports_a_carrier_missing_from_the_commanders_list_as_not_registered()
     {
-        var (adapter, _) = NewAdapter(_ => Reply(HttpStatusCode.NotFound, ""), () => "k");
+        var (adapter, _) = NewAdapter(_ => Reply(HttpStatusCode.OK, """[ { "marketId": 3700009999, "name": "SQD-1AA", "cargo": {} } ]"""), () => "k");
 
-        var lookup = await adapter.FindAsync(Mine);
+        var lookup = await adapter.FindAsync("Jane Doe", Mine);
 
         Assert.False(lookup.Known);
         Assert.Null(lookup.Error);
     }
 
     [Fact]
-    public async Task The_adapter_hands_back_the_carriers_cargo_as_the_baseline()
+    public async Task The_adapter_reports_an_unknown_commander_as_not_registered()
     {
-        var (adapter, _) = NewAdapter(_ => Reply(HttpStatusCode.OK, """{ "marketId": 3711552256, "name": "X8J-LVZ", "cargo": { "Steel": 1276 } }"""), () => "k");
+        var (adapter, _) = NewAdapter(_ => Reply(HttpStatusCode.OK, "[]"), () => "k");
 
-        var lookup = await adapter.FindAsync(Mine);
+        var lookup = await adapter.FindAsync("Nobody", Mine);
+
+        Assert.False(lookup.Known);
+        Assert.Null(lookup.Error);
+    }
+
+    [Fact]
+    public async Task The_adapter_hands_back_a_registered_carriers_cargo_as_the_baseline()
+    {
+        var (adapter, handler) = NewAdapter(_ => Reply(HttpStatusCode.OK, """
+            [ { "marketId": 3700009999, "name": "SQD-1AA", "cargo": { "Gold": 7 } },
+              { "marketId": 3711552256, "name": "X8J-LVZ", "cargo": { "Steel": 1276 } } ]
+            """), () => "k");
+
+        var lookup = await adapter.FindAsync("Jane Doe", Mine);
 
         Assert.True(lookup.Known);
         Assert.Equal(1276, lookup.Cargo["steel"]);
+        Assert.DoesNotContain("gold", lookup.Cargo.Keys);                     // only this carrier's cargo
+        Assert.Contains("/api/cmdr/Jane%20Doe/fc/all", Assert.Single(handler.Requests).Url);
+    }
+
+    [Fact]
+    public async Task The_adapter_reports_a_failed_registry_lookup_as_an_error_not_as_unregistered()
+    {
+        var (adapter, _) = NewAdapter(_ => Reply(HttpStatusCode.InternalServerError, ""), () => "k");
+
+        var lookup = await adapter.FindAsync("Jane Doe", Mine);
+
+        Assert.False(lookup.Known);
+        Assert.NotNull(lookup.Error);
     }
 }

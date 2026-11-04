@@ -94,7 +94,7 @@
               <CheckBox x:Name="ShareCarrierToggle" Content="Share my fleet carrier's cargo with Raven Colonial"
                         Foreground="{StaticResource Ink}" />
               <TextBlock Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
-                         Text="Reports each change to the cargo in your own fleet carrier (what you transfer to or from your ship, and what you buy or sell at its market) to Raven Colonial, so your squadron can see what is stocked. Only your own carrier is shared, and only if Raven Colonial already tracks it. Needs your personal Raven Colonial API key, from your account on ravencolonial.com." />
+                         Text="Reports each change to the cargo in your own fleet carrier (what you transfer to or from your ship, and what you buy or sell at its market) to Raven Colonial, so your squadron can see what is stocked. Only your own carrier is shared, and only if it is registered to you on Raven Colonial (linked to your account there); anything else is skipped. Needs your personal Raven Colonial API key, from your account on ravencolonial.com." />
               <!-- Masked by default, like the Inara key: keys get leaked through streams and screenshots. -->
               <Grid ColumnDefinitions="*,Auto">
                 <TextBox x:Name="RavenApiKeyBox" PlaceholderText="Raven Colonial API key" PasswordChar="●"

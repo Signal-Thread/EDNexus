@@ -3,8 +3,8 @@ using EliteDangerous.RavenColonial;
 namespace EDNexus.Core.Colonisation;
 
 /// <summary>What the shared tracker said about a carrier.</summary>
-/// <param name="Known">True when the tracker holds this carrier. False with a null <paramref name="Error"/> is a definite "not tracked here".</param>
-/// <param name="Cargo">What the tracker holds for the carrier, in the tracker's own spelling, empty when not known.</param>
+/// <param name="Known">True when the carrier is registered to the commander there. False with a null <paramref name="Error"/> is a definite "not registered".</param>
+/// <param name="Cargo">What the tracker holds for the carrier, in the tracker's own spelling, empty when not registered.</param>
 /// <param name="Error">Set when the question could not be answered and may be asked again.</param>
 public sealed record SharedCarrierLookup(bool Known, IReadOnlyDictionary<string, int> Cargo, string? Error = null);
 
@@ -20,8 +20,11 @@ public sealed record SharedCarrierWrite(IReadOnlyDictionary<string, int> Totals,
 /// </summary>
 public interface ISharedCarrierCargo
 {
-    /// <summary>Asks whether the tracker holds this carrier, and what it holds for it.</summary>
-    Task<SharedCarrierLookup> FindAsync(long marketId, CancellationToken ct = default);
+    /// <summary>
+    /// Asks whether this carrier is registered to the commander on the tracker (linked to their account,
+    /// not merely known to the service), and what the tracker holds for it.
+    /// </summary>
+    Task<SharedCarrierLookup> FindAsync(string commander, long marketId, CancellationToken ct = default);
 
     /// <summary>Reports a signed change to the carrier's cargo (commodity, in the tracker's spelling, to tons).</summary>
     Task<SharedCarrierWrite> PatchAsync(long marketId, IReadOnlyDictionary<string, int> deltas, CancellationToken ct = default);
@@ -48,11 +51,12 @@ public sealed class RavenColonialCarrierCargo : ISharedCarrierCargo
         _apiKey = apiKey;
     }
 
-    public async Task<SharedCarrierLookup> FindAsync(long marketId, CancellationToken ct = default)
+    public async Task<SharedCarrierLookup> FindAsync(string commander, long marketId, CancellationToken ct = default)
     {
-        var found = await _client.GetCarrierAsync(marketId, ct).ConfigureAwait(false);
-        if (!found.IsOk) return new SharedCarrierLookup(false, NoCargo, found.Error ?? "lookup failed");
-        return found.Value is { } carrier
+        var registered = await _client.GetCommanderCarriersAsync(commander, ct).ConfigureAwait(false);
+        if (!registered.IsOk) return new SharedCarrierLookup(false, NoCargo, registered.Error ?? "lookup failed");
+
+        return registered.Value?.FirstOrDefault(c => c.MarketId == marketId) is { } carrier
             ? new SharedCarrierLookup(true, carrier.Cargo)
             : new SharedCarrierLookup(false, NoCargo);
     }
