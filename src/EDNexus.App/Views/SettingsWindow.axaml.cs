@@ -88,6 +88,8 @@ public partial class SettingsWindow : Window
         RavenLookupToggle.IsChecked = boot.Settings.Colonisation.SharedProjectLookup;
         ShareDeliveriesToggle.IsChecked = boot.Settings.Colonisation.ShareDeliveries;
         ShareDeliveriesToggle.IsEnabled = RavenLookupToggle.IsChecked == true;
+        ShareCarrierToggle.IsChecked = boot.Settings.Colonisation.ShareCarrierCargo;
+        RavenApiKeyBox.Text = boot.Settings.Colonisation.RavenApiKey;
         MiningSpotAnnounceToggle.IsChecked = boot.Settings.Mining.AnnounceKnownSpots;
         if (boot.Settings.Mining.KnownSpots.Count > 0)
             MiningSpotsSummary.Text += $" {boot.Settings.Mining.KnownSpots.Count:N0} spots recorded so far.";
@@ -222,6 +224,17 @@ public partial class SettingsWindow : Window
             return;
         }
 
+        // Sharing carrier cargo cannot be on without a key to send it with, and a key that could not go in
+        // a header is certainly not one: say so here rather than save an opt-in that can never send.
+        if (ShareCarrierToggle.IsChecked == true && !ColonisationSettings.IsPlausibleRavenApiKey(RavenApiKeyBox.Text))
+        {
+            ShowSaveError(string.IsNullOrWhiteSpace(RavenApiKeyBox.Text)
+                ? "Enter your Raven Colonial API key to share your fleet carrier's cargo, or untick the option."
+                : "That does not look like a Raven Colonial API key (it has spaces or unusual characters). Paste it again.",
+                RavenApiKeyBox);
+            return;
+        }
+
         if (TwitchOAuthOptions.ValidateEbsBaseUrl(TwitchEbsBox.Text) is { } ebsError)
         {
             ShowSaveError(ebsError, TwitchEbsBox);
@@ -275,6 +288,10 @@ public partial class SettingsWindow : Window
             _boot.ApplySharedProjectLookup(RavenLookupToggle.IsChecked == true);
             // An opt-in to send data is never kept alive behind a disabled checkbox.
             _boot.ApplyShareDeliveries(RavenLookupToggle.IsChecked == true && ShareDeliveriesToggle.IsChecked == true);
+            var shareCarrier = ShareCarrierToggle.IsChecked == true;
+            _boot.ApplyShareCarrierCargo(shareCarrier, RavenApiKeyBox.Text ?? string.Empty);
+            // Switching it back on is the commander acting on the error, so the red bar has done its job.
+            if (shareCarrier) _dashboard?.ClearCarrierShareError();
             _boot.ApplyMiningThreshold(miningThreshold);
             _boot.ApplyMiningSpotAnnouncements(MiningSpotAnnounceToggle.IsChecked == true);
             _boot.ApplyOverlayOnlyWhenGameFocused(OverlayGameOnlyToggle.IsChecked == true);
@@ -361,6 +378,9 @@ public partial class SettingsWindow : Window
 
     private void OnRevealApiKeyChanged(object? sender, RoutedEventArgs e)
         => InaraApiKey.RevealPassword = RevealApiKey.IsChecked == true;
+
+    private void OnRevealRavenKeyChanged(object? sender, RoutedEventArgs e)
+        => RavenApiKeyBox.RevealPassword = RevealRavenKey.IsChecked == true;
 
     /// <summary>Where a commander generates their personal Inara API key (Inara → Profile → API keys).</summary>
     private const string InaraApiKeysUrl = "https://inara.cz/settings-api/";

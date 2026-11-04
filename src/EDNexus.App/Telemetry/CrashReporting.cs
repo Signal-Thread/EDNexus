@@ -192,6 +192,8 @@ public sealed class CrashReporting : IDisposable
     {
         // The Inara key could ride out inside an HTTP-failure message; never let it.
         _settings?.Reporting.Inara.ApiKey,
+        // Likewise the Raven Colonial key, which rides in a request header.
+        _settings?.Colonisation.RavenApiKey,
         _commander?.Name,
     };
 

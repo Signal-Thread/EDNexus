@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using EDNexus.Core.Colonisation;
 using EDNexus.Core.Journal;
+using EDNexus.Core.State;
 using Xunit;
 
 namespace EDNexus.Tests;
@@ -101,5 +102,108 @@ public class CarrierCargoTrackerTests
 
         Assert.Equal(0, steel.StillNeeded);
         Assert.True(steel.CoveredByStock);
+    }
+
+    // --- Trades at the carrier's own market (the journal has 100+ of these per active carrier owner). ---
+
+    private const long MyCarrier = 3711552256;
+
+    private static (JournalEventBus bus, CommanderState state, CarrierCargoTracker carrier) NewWithState()
+    {
+        var bus = new JournalEventBus();
+        var state = new CommanderState();
+        _ = new StateTracker(bus, state);
+        var carrier = new CarrierCargoTracker(bus, state);
+        Publish(bus, $$"""{ "timestamp":"2026-11-02T04:00:00Z", "event":"CarrierStats", "CarrierID":{{MyCarrier}}, "CarrierType":"FleetCarrier", "Callsign":"X8J-LVZ" }""");
+        return (bus, state, carrier);
+    }
+
+    private static string Sell(long marketId, string type, int count) => $$"""
+    { "timestamp":"2026-11-02T04:10:00Z", "event":"MarketSell", "MarketID":{{marketId}}, "Type":"{{type}}", "Count":{{count}}, "SellPrice":1, "TotalSale":1, "AvgPricePaid":1 }
+    """;
+
+    private static string Buy(long marketId, string type, int count) => $$"""
+    { "timestamp":"2026-11-02T04:10:00Z", "event":"MarketBuy", "MarketID":{{marketId}}, "Type":"{{type}}", "Count":{{count}}, "BuyPrice":1, "TotalCost":1 }
+    """;
+
+    [Fact]
+    public void Selling_to_and_buying_from_your_own_carriers_market_moves_its_stock()
+    {
+        var (bus, _, carrier) = NewWithState();
+
+        Publish(bus, Sell(MyCarrier, "superconductors", 1276));
+        Publish(bus, Buy(MyCarrier, "superconductors", 276));
+
+        Assert.Equal(1000, carrier.Stock["superconductors"]);
+    }
+
+    [Fact]
+    public void Trades_at_other_stations_do_not_touch_the_carrier_stock()
+    {
+        var (bus, _, carrier) = NewWithState();
+
+        Publish(bus, Sell(128666762, "superconductors", 500));   // some other market
+
+        Assert.Empty(carrier.Stock);
+    }
+
+    [Fact]
+    public void Market_trades_are_ignored_until_the_own_carrier_is_known()
+    {
+        var bus = new JournalEventBus();
+        var state = new CommanderState();
+        _ = new StateTracker(bus, state);
+        var carrier = new CarrierCargoTracker(bus, state);
+
+        Publish(bus, Sell(MyCarrier, "superconductors", 500));   // no CarrierStats yet: cannot tell it from any station
+
+        Assert.Empty(carrier.Stock);
+    }
+
+    [Fact]
+    public void A_transfer_at_a_different_carrier_is_not_my_carriers_cargo()
+    {
+        var (bus, _, carrier) = NewWithState();
+        Publish(bus, """{ "timestamp":"2026-11-02T04:05:00Z", "event":"Docked", "StationName":"SQD-1AA", "StationType":"FleetCarrier", "MarketID":3700009999 }""");
+
+        Publish(bus, Transfer("steel", 100, "tocarrier"));
+
+        Assert.Empty(carrier.Stock);
+    }
+
+    [Fact]
+    public void A_transfer_at_my_own_carrier_counts()
+    {
+        var (bus, _, carrier) = NewWithState();
+        Publish(bus, $$"""{ "timestamp":"2026-11-02T04:05:00Z", "event":"Docked", "StationName":"X8J-LVZ", "StationType":"FleetCarrier", "MarketID":{{MyCarrier}} }""");
+
+        Publish(bus, Transfer("steel", 100, "tocarrier"));
+
+        Assert.Equal(100, carrier.Stock["steel"]);
+    }
+
+    [Fact]
+    public void Transfers_still_count_when_the_dock_or_carrier_is_unknown()
+    {
+        // The existing behaviour, kept for a journal replayed without its CarrierStats or Docked.
+        var bus = new JournalEventBus();
+        var carrier = new CarrierCargoTracker(bus, new CommanderState());
+
+        Publish(bus, Transfer("steel", 100, "tocarrier"));
+
+        Assert.Equal(100, carrier.Stock["steel"]);
+    }
+
+    [Fact]
+    public void The_shopping_list_sees_a_commodity_sold_to_the_carrier_market()
+    {
+        var (bus, _, carrier) = NewWithState();
+        var colonisation = new ColonisationTracker(bus);
+        Publish(bus, Depot);
+
+        Publish(bus, Sell(MyCarrier, "steel", 1276));
+
+        var steel = Assert.Single(colonisation.ActiveSite!.BuildShoppingList(new Dictionary<string, int>(), carrier.Stock), i => i.Name == "Steel");
+        Assert.Equal(1276, steel.OnCarrier);
     }
 }

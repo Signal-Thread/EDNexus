@@ -279,6 +279,18 @@
                  TextWrapping="Wrap" />
     </Border>
 
+    <!-- Carrier sharing error bar: Raven Colonial carrier sharing stopped itself and has been switched off
+         (a refused API key, or another tool reporting the same carrier). Red, and it stays until dismissed. -->
+    <Border DockPanel.Dock="Bottom" Background="{StaticResource BadChipBg}" BorderBrush="{StaticResource CardBorder}"
+            BorderThickness="0,0,0,1" Padding="20,8" IsVisible="{Binding HasCarrierShareError}">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Text="{Binding CarrierShareError, StringFormat='✕ {0}'}" Foreground="{StaticResource Bad}"
+                   TextWrapping="Wrap" VerticalAlignment="Center" />
+        <Button Grid.Column="1" Content="Dismiss" Command="{Binding DismissCarrierShareErrorCommand}"
+                Classes="action" Margin="12,0,0,0" VerticalAlignment="Center" />
+      </Grid>
+    </Border>
+
     <!-- Footer / status bar -->
     <Border DockPanel.Dock="Bottom" Background="{StaticResource Surface100}" BorderBrush="{StaticResource CardBorder}"
             BorderThickness="0,1,0,0" Padding="20,8">

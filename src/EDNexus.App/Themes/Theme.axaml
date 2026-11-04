@@ -37,6 +37,8 @@
 
   <SolidColorBrush x:Key="Good" Color="#FF5FD08B" />
   <SolidColorBrush x:Key="Bad" Color="#FFE0654F" />
+  <!-- Low-alpha wash of Bad for error bars that must be seen while playing (the carrier-sharing stop). -->
+  <SolidColorBrush x:Key="BadChipBg" Color="#33E0654F" />
   <!-- Caution/stale-data state; distinct from Amber so a warning never reads as the brand accent. -->
   <SolidColorBrush x:Key="Warning" Color="#FFE0A33C" />
 

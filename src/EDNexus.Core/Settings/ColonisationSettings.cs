@@ -21,4 +21,35 @@ public sealed class ColonisationSettings
     /// the same service.
     /// </summary>
     public bool ShareDeliveries { get; set; }
+
+    /// <summary>
+    /// When true, each live change to the cargo in the commander's <em>own</em> fleet carrier (a transfer
+    /// to or from the ship, or a trade at the carrier's market) is reported to Raven Colonial, so a
+    /// squadron can see what is stocked. Default <b>false</b>. It sends the carrier's market id and the
+    /// commodities and tons that moved, authenticated with <see cref="RavenApiKey"/>. If another tool
+    /// (the RavenColonial EDMC plugin, SrvSurvey) also reports the same carrier, every movement is counted
+    /// twice; EDNexus watches for that, switches this off and says so. Independent of
+    /// <see cref="SharedProjectLookup"/>: it neither looks up nor sends anything about construction sites.
+    /// </summary>
+    public bool ShareCarrierCargo { get; set; }
+
+    /// <summary>
+    /// The commander's Raven Colonial API key, sent in the <c>rcc-key</c> header when sharing carrier
+    /// cargo. Kept in the settings file like the Inara key (and, like it, redacted from crash reports).
+    /// Empty until the commander enters one.
+    /// </summary>
+    public string RavenApiKey { get; set; } = "";
+
+    /// <summary>
+    /// True when <paramref name="key"/> could be an API key: printable ASCII with no spaces, which is
+    /// all an HTTP header value can safely carry. Says nothing about whether Raven Colonial accepts it.
+    /// </summary>
+    public static bool IsPlausibleRavenApiKey(string? key)
+    {
+        var trimmed = key?.Trim();
+        return !string.IsNullOrEmpty(trimmed) && trimmed.All(c => c is > ' ' and <= '~');
+    }
+
+    /// <summary>True when carrier cargo is both opted in and has a key to send it with: the one switch the sync reads.</summary>
+    public bool CarrierSharingActive => ShareCarrierCargo && !string.IsNullOrWhiteSpace(RavenApiKey);
 }

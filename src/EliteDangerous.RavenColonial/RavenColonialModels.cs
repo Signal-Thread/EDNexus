@@ -66,7 +66,38 @@ public sealed class RavenResult<T> where T : class
     /// <summary>Failure detail when <see cref="IsOk"/> is false; null on success.</summary>
     public string? Error { get; init; }
 
+    /// <summary>The HTTP status behind a failure, when the service answered at all (so a caller can tell a rejected key from an outage); null otherwise.</summary>
+    public int? StatusCode { get; init; }
+
     public static RavenResult<T> Ok(T? value) => new() { IsOk = true, Value = value };
 
-    public static RavenResult<T> Failure(string message) => new() { IsOk = false, Error = message };
+    public static RavenResult<T> Failure(string message, int? statusCode = null)
+        => new() { IsOk = false, Error = message, StatusCode = statusCode };
 }
+
+/// <summary>
+/// A fleet carrier as Raven Colonial holds it, with the cargo the squadron's tools have reported for it.
+/// </summary>
+/// <param name="MarketId">The carrier's market id (the same number as its <c>CarrierID</c> in the journal).</param>
+/// <param name="Name">The carrier's callsign, e.g. "X8J-LVZ".</param>
+/// <param name="DisplayName">The name its owner gave it, when Raven has it.</param>
+/// <param name="Owner">The commander who owns it, when named.</param>
+/// <param name="SystemName">The system it is in, when known.</param>
+/// <param name="Cargo">Commodity (Raven's lower-case spelling, see <see cref="RavenCommodityKey"/>) to tons held; empty commodities omitted.</param>
+public sealed record RavenCarrier(
+    long MarketId,
+    string Name,
+    string? DisplayName,
+    string? Owner,
+    string? SystemName,
+    IReadOnlyDictionary<string, int> Cargo);
+
+/// <summary>What <see cref="RavenColonialClient.PatchCarrierCargoAsync"/> sent, and what Raven says the carrier holds afterwards.</summary>
+/// <param name="Sent">Commodity (Raven's spelling) to signed tons, after merging and dropping zero changes.</param>
+/// <param name="Totals">
+/// The carrier's cargo as the reply reports it, in Raven's spelling. Empty when the reply carried none.
+/// Comparing it with what was expected is how a second tool reporting the same cargo is noticed.
+/// </param>
+public sealed record RavenCarrierCargoUpdate(
+    IReadOnlyDictionary<string, int> Sent,
+    IReadOnlyDictionary<string, int> Totals);

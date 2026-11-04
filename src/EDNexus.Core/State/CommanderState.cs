@@ -76,6 +76,21 @@ public sealed class CommanderState : ObservableObject
     /// <summary>The docked station's kind, from <c>Docked</c>/<c>Location</c> (e.g. "Coriolis", "FleetCarrier"). Null when not docked.</summary>
     public string? StationType { get => _stationType; set => Set(ref _stationType, value); }
 
+    private long? _marketId;
+    /// <summary>
+    /// The docked station's market id, from <c>Docked</c>/<c>Location</c>/<c>CarrierJump</c>. Null when not
+    /// docked. <c>CargoTransfer</c> does not say which carrier it moved cargo on; this is how it is told.
+    /// </summary>
+    public long? MarketId { get => _marketId; set => Set(ref _marketId, value); }
+
+    private long? _carrierId;
+    /// <summary>
+    /// The commander's own fleet carrier's id, from <c>CarrierStats</c>. It is the same number as the
+    /// carrier's <see cref="MarketId"/> when docked there, so docked-at-my-carrier is
+    /// <c>MarketId == CarrierId</c>. A squadron carrier is not recorded. Null until one is seen.
+    /// </summary>
+    public long? CarrierId { get => _carrierId; set => Set(ref _carrierId, value); }
+
     private string? _carrierName;
     /// <summary>The name the commander gave their own fleet carrier, from <c>CarrierStats</c>. Null until one is seen.</summary>
     public string? CarrierName

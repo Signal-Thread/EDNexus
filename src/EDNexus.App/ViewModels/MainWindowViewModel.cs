@@ -347,6 +347,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
                 TwitchReauthRequired?.Invoke();
             };
         }
+        host.CarrierShareFaulted += OnCarrierShareFaulted;
         host.VoiceCallouts.CalloutRaised += OnVoiceCalloutRaised;
 
         // The dev-mode radio simulation listens on this host's bus, where the 🎲 publishes.
@@ -466,6 +467,32 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         else if (EDNexus.Core.Twitch.StreamCardWarning.Clears(result))
             Dispatcher.UIThread.Post(() => TwitchWarning = "");
     }
+
+    /// <summary>
+    /// An error, shown in red on the main window, that Raven Colonial carrier sharing stopped itself
+    /// (its API key was refused, or a second tool is reporting the same carrier). Empty when there is
+    /// nothing to say. It stays until the commander dismisses it or switches sharing back on, because
+    /// the setting is already off and nothing else would ever tell them.
+    /// </summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasCarrierShareError))] private string _carrierShareError = "";
+
+    public bool HasCarrierShareError => CarrierShareError.Length > 0;
+
+    /// <summary>Clears <see cref="CarrierShareError"/>; also called when the commander switches sharing back on.</summary>
+    [RelayCommand]
+    public void DismissCarrierShareError() => CarrierShareError = "";
+
+    /// <summary>Same as <see cref="DismissCarrierShareError"/>, named for the Settings window's call.</summary>
+    public void ClearCarrierShareError() => DismissCarrierShareError();
+
+    /// <summary>Carrier sharing stopped itself: persist that it is off and put the reason in front of the commander. Runs on a background thread.</summary>
+    private void OnCarrierShareFaulted(EDNexus.Core.Colonisation.CarrierShareFault fault)
+    {
+        try { _boot.ApplyShareCarrierCargo(false, _boot.Settings.Colonisation.RavenApiKey); }
+        catch (Exception ex) { Trace.TraceError("Settings: could not save that carrier sharing was switched off: " + ex.Message); }
+        Dispatcher.UIThread.Post(() => CarrierShareError = fault.Message);
+    }
+
     [ObservableProperty] private string _privacyStatus = "";
     [ObservableProperty] private string _commanderName = "—";
     [ObservableProperty] private string _balance = "0 cr";
