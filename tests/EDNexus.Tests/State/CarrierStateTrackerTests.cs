@@ -207,4 +207,70 @@ public class CarrierStateTrackerTests
         Assert.Null(state.StationType);
         Assert.Equal("Nomad's Reach", state.CarrierName);   // the carrier still exists
     }
+
+    // --- Market ids: what the Raven Colonial carrier sharing needs to tell "my carrier" from any other station. ---
+
+    [Fact]
+    public void CarrierStats_records_the_own_carriers_market_id()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, OwnCarrierStats);
+
+        Assert.Equal(3700005632, state.CarrierId);
+    }
+
+    [Fact]
+    public void A_squadron_carriers_stats_do_not_become_the_own_carrier()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """{ "timestamp":"2026-07-12T02:55:06Z", "event":"CarrierStats", "CarrierID":3700009999, "CarrierType":"SquadronCarrier", "Callsign":"SQD-1AA" }""");
+
+        Assert.Null(state.CarrierId);
+    }
+
+    [Fact]
+    public void Switching_commander_forgets_the_previous_commanders_carrier_id()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """{ "timestamp":"2026-07-12T02:00:00Z", "event":"Commander", "Name":"Jane" }""");
+        Publish(bus, OwnCarrierStats);
+        Publish(bus, """{ "timestamp":"2026-07-12T03:00:00Z", "event":"Commander", "Name":"Bob" }""");
+
+        Assert.Null(state.CarrierId);
+    }
+
+    [Fact]
+    public void Docking_records_the_stations_market_id_and_undocking_clears_it()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, DockedAtOwnCarrier);
+        Assert.Equal(3700005632, state.MarketId);
+
+        Publish(bus, """{ "timestamp":"2026-07-12T04:00:00Z", "event":"Undocked", "StationName":"K7Q-B3L" }""");
+        Assert.Null(state.MarketId);
+    }
+
+    [Fact]
+    public void Location_while_docked_records_the_market_id()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, """
+        { "timestamp":"2026-07-12T03:20:00Z", "event":"Location", "Docked":true, "StarSystem":"HIP 23759",
+          "StationName":"K7Q-B3L", "StationType":"FleetCarrier", "MarketID":3700005632 }
+        """);
+
+        Assert.Equal(3700005632, state.MarketId);
+    }
+
+    [Fact]
+    public void A_ship_jump_leaves_the_market_behind_but_a_carrier_jump_carries_it()
+    {
+        var (bus, state) = NewTracker();
+        Publish(bus, DockedAtOwnCarrier);
+        Publish(bus, """{ "timestamp":"2026-07-12T05:00:00Z", "event":"CarrierJump", "Docked":true, "StarSystem":"Ga Gu", "StationName":"K7Q-B3L", "StationType":"FleetCarrier", "MarketID":3700005632 }""");
+        Assert.Equal(3700005632, state.MarketId);
+
+        Publish(bus, """{ "timestamp":"2026-07-12T06:00:00Z", "event":"FSDJump", "StarSystem":"Sol" }""");
+        Assert.Null(state.MarketId);
+    }
 }

@@ -40,10 +40,12 @@ public sealed class EngineHost : IDisposable
     private readonly ReporterHost? _reporters;
     private readonly DiscordPresenceController? _discordPresence;
     private readonly RavenContributionSync? _ravenContributions;
+    private readonly RavenCarrierCargoSync? _ravenCarrierCargo;
     private readonly ColonisationProjectPersistence? _colonisationProjects;
     private readonly TwitchStreamCardService? _twitchCard;
     private readonly StreamStateApiClient? _twitchCardClient;
     private readonly HttpClient _http;
+    private readonly HttpClient? _carrierHttp;
     private Task? _runTask;
 
     public JournalEventBus Bus { get; } = new();
@@ -149,7 +151,7 @@ public sealed class EngineHost : IDisposable
                 Bus, State, Colonisation,
                 new ColonisationProjectStore(Path.GetDirectoryName(SettingsStore.DefaultPath())!),
                 reportingSuppressed);
-        CarrierCargo = new CarrierCargoTracker(Bus);
+        CarrierCargo = new CarrierCargoTracker(Bus, State);
         Market = new MarketTracker(Bus, State);
         Engineering = new EngineeringTracker(Bus);
         Exobiology = new ExobiologyTracker(Bus, State);
@@ -217,6 +219,23 @@ public sealed class EngineHost : IDisposable
             _ravenContributions = new RavenContributionSync(
                 Bus, State, new RavenColonialContributor(raven),
                 isEnabled: () => settings.Colonisation.ShareDeliveries && settings.Colonisation.SharedProjectLookup,
+                isSuppressed: reportingSuppressed);
+
+            // The commander's own carrier cargo, with the same wiring rules: settings only, switches read
+            // live, silent in developer mode. It is authenticated, so the key is read live too.
+            // The API key rides in a custom header, which the default handler would carry to another host
+            // on a cross-host redirect, so this traffic gets its own client that never follows one.
+            _carrierHttp = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false })
+            {
+                Timeout = TimeSpan.FromSeconds(20),
+            };
+            _carrierHttp.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("EDNexus", ResolveVersion()));
+            var ravenCarriers = new RavenColonialClient(
+                new RavenColonialClientOptions { SoftwareName = "EDNexus", SoftwareVersion = version }, _carrierHttp);
+            _ravenCarrierCargo = new RavenCarrierCargoSync(
+                Bus, State, new RavenColonialCarrierCargo(ravenCarriers, () => settings.Colonisation.RavenApiKey),
+                isEnabled: () => settings.Colonisation.CarrierSharingActive,
+                onFault: fault => OnCarrierShareFault(settings, fault),
                 isSuppressed: reportingSuppressed);
         }
 
@@ -358,6 +377,21 @@ public sealed class EngineHost : IDisposable
     /// <summary>Raised when the journal watcher hits an unexpected error (the loop keeps running unless it died).</summary>
     public event Action<Exception>? WatcherError;
 
+    /// <summary>
+    /// Raised, on a background thread, when carrier cargo sharing stopped itself (Raven Colonial refused
+    /// the API key, or another tool is reporting the same carrier). By the time it fires the setting is
+    /// already off in memory; the app persists that and tells the commander.
+    /// </summary>
+    public event Action<CarrierShareFault>? CarrierShareFaulted;
+
+    private void OnCarrierShareFault(AppSettings settings, CarrierShareFault fault)
+    {
+        // First, and before anything can throw: this is what actually stops the sending.
+        settings.Colonisation.ShareCarrierCargo = false;
+        System.Diagnostics.Trace.TraceWarning($"Raven Colonial: carrier cargo sharing switched off ({fault.Kind}).");
+        CarrierShareFaulted?.Invoke(fault);
+    }
+
     private void OnWatcherError(Exception ex)
     {
         System.Diagnostics.Trace.TraceError("Journal watcher error: " + ex);
@@ -379,10 +413,12 @@ public sealed class EngineHost : IDisposable
         catch (AggregateException) { /* best effort */ }
         _colonisationProjects?.Dispose();
         _ravenContributions?.Dispose();   // before _http goes: cancels any delivery still in flight
+        _ravenCarrierCargo?.Dispose();   // before its client goes, like the deliveries above
         _discordPresence?.Dispose();
         _twitchCard?.Dispose();
         _twitchCardClient?.Dispose();
         _cts.Dispose();
+        _carrierHttp?.Dispose();
         _http.Dispose();
     }
 

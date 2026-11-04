@@ -89,6 +89,7 @@ public sealed class StateTracker
     {
         _state.CarrierName = null;
         _state.CarrierCallsign = null;
+        _state.CarrierId = null;
         _state.CarrierFuel = 0;
         _state.CarrierJumpRange = 0;
         _state.CarrierUsedCapacity = 0;
@@ -150,6 +151,11 @@ public sealed class StateTracker
         // of "K7Q-B3L", and only for the commander's own carrier.
         if (e.GetString("Name") is { Length: > 0 } name) _state.CarrierName = name;
         if (e.GetString("Callsign") is { Length: > 0 } callsign) _state.CarrierCallsign = callsign;
+
+        // The id is what a docked MarketID is matched against to tell the commander's own carrier from
+        // any other. A squadron carrier reports CarrierStats too, but is not "my carrier".
+        if (e.GetString("CarrierType") != "SquadronCarrier" && e.GetInt64("CarrierID") is long id and > 0)
+            _state.CarrierId = id;
     }
 
     /// <summary>
@@ -180,6 +186,7 @@ public sealed class StateTracker
         _state.Docked = e.GetBool("Docked") ?? _state.Docked;
         _state.StationName = e.GetString("StationName");
         _state.StationType = e.GetString("StationType");
+        _state.MarketId = _state.Docked ? e.GetInt64("MarketID") : null;
     }
 
     private void OnJump(JournalEntry e)
@@ -196,6 +203,7 @@ public sealed class StateTracker
         _state.Docked = stillDocked;
         _state.StationName = stillDocked ? e.GetString("StationName") : null;
         _state.StationType = stillDocked ? e.GetString("StationType") : null;
+        _state.MarketId = stillDocked ? e.GetInt64("MarketID") : null;
 
         // Any ship jump uses up a pending FSD injection, whether or not the jump needed it.
         if (e.Event == "FSDJump") _state.FsdInjectionMultiplier = 1;
@@ -213,6 +221,7 @@ public sealed class StateTracker
         _state.Docked = true;
         _state.StationName = e.GetString("StationName");
         _state.StationType = e.GetString("StationType");
+        _state.MarketId = e.GetInt64("MarketID");
     }
 
     private void OnUndocked(JournalEntry e)
@@ -220,6 +229,7 @@ public sealed class StateTracker
         _state.Docked = false;
         _state.StationName = null;
         _state.StationType = null;
+        _state.MarketId = null;
     }
 
     /// <summary>A jump has begun. Only a hyperspace jump has a destination; a supercruise one does not.</summary>

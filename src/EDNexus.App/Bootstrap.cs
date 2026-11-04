@@ -243,6 +243,18 @@ public sealed class Bootstrap
         Store.Save(Settings);
     }
 
+    /// <summary>
+    /// Persist whether the cargo in the commander's own fleet carrier is reported to Raven Colonial, and
+    /// the API key it is reported with. Off by default; it sends the carrier's market id and the
+    /// commodities and tons that moved, under the commander's key.
+    /// </summary>
+    public void ApplyShareCarrierCargo(bool enabled, string apiKey)
+    {
+        Settings.Colonisation.RavenApiKey = apiKey.Trim();
+        Settings.Colonisation.ShareCarrierCargo = enabled;
+        Store.Save(Settings);
+    }
+
     /// <summary>Persist the Mining option that announces known spots on arriving in a system.</summary>
     public void ApplyMiningSpotAnnouncements(bool enabled)
     {

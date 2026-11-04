@@ -152,10 +152,120 @@ public sealed class RavenColonialClient : IDisposable
 
             return response.IsSuccessStatusCode
                 ? RavenResult<RavenContribution>.Ok(new RavenContribution(buildId.Trim(), send))
-                : RavenResult<RavenContribution>.Failure($"HTTP {(int)response.StatusCode}");
+                : RavenResult<RavenContribution>.Failure($"HTTP {(int)response.StatusCode}", (int)response.StatusCode);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex) { return RavenResult<RavenContribution>.Failure(ex.Message); }   // incl. an HttpClient timeout
+    }
+
+    /// <summary>
+    /// A fleet carrier as Raven Colonial holds it, with the cargo reported for it. An OK result with a
+    /// null value means Raven does not know the carrier — the answer that tells a caller to leave it be.
+    /// </summary>
+    public async Task<RavenResult<RavenCarrier>> GetCarrierAsync(long marketId, CancellationToken ct = default)
+    {
+        if (marketId <= 0) return RavenResult<RavenCarrier>.Ok(null);
+
+        return await GetAsync($"{Base}/api/fc/{marketId.ToString(CultureInfo.InvariantCulture)}", ct, body =>
+        {
+            using var doc = JsonDocument.Parse(body);
+            return RavenResult<RavenCarrier>.Ok(ReadCarrier(doc.RootElement, marketId));
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The fleet carriers registered to a commander on Raven Colonial — the ones linked to their account,
+    /// with the cargo reported for each (<c>GET /api/cmdr/{cmdr}/fc/all</c>). An OK result with an empty
+    /// list means the commander has none, or Raven does not know the commander.
+    /// </summary>
+    public async Task<RavenResult<IReadOnlyList<RavenCarrier>>> GetCommanderCarriersAsync(
+        string cmdr, CancellationToken ct = default)
+    {
+        IReadOnlyList<RavenCarrier> none = Array.Empty<RavenCarrier>();
+        if (!IsSafeSegment(cmdr)) return RavenResult<IReadOnlyList<RavenCarrier>>.Ok(none);
+
+        var result = await GetAsync($"{Base}/api/cmdr/{Uri.EscapeDataString(cmdr.Trim())}/fc/all", ct, body =>
+        {
+            using var doc = JsonDocument.Parse(body);
+            var carriers = new List<RavenCarrier>();
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                foreach (var el in doc.RootElement.EnumerateArray())
+                    if (ReadCarrier(el, 0) is { MarketId: > 0 } carrier)
+                        carriers.Add(carrier);
+            return RavenResult<IReadOnlyList<RavenCarrier>>.Ok(carriers);
+        }).ConfigureAwait(false);
+
+        // "No such commander" is an empty registry, not a missing value.
+        return result.IsOk && result.Value is null ? RavenResult<IReadOnlyList<RavenCarrier>>.Ok(none) : result;
+    }
+
+    /// <summary>
+    /// Reports a change to a carrier's cargo: <c>PATCH /api/fc/{marketId}/cargo</c> with a JSON object of
+    /// commodity to <em>signed</em> tons (positive adds to the carrier, negative removes), authenticated
+    /// with the commander's Raven Colonial API key in the <c>rcc-key</c> header. Never throws; a rejected,
+    /// failed or unreachable call is a <see cref="RavenResult{T}.Failure"/>, with
+    /// <see cref="RavenResult{T}.StatusCode"/> set when Raven answered (401/403 mean the key was refused).
+    /// </summary>
+    /// <param name="marketId">The carrier's market id.</param>
+    /// <param name="apiKey">The commander's API key. Never logged, and scrubbed from any failure text.</param>
+    /// <remarks>
+    /// The key travels in a custom header, which .NET keeps when it follows a redirect to another host
+    /// (it strips only <c>Authorization</c>). So the <see cref="HttpClient"/> given to this client for
+    /// this call must not follow redirects (<c>AllowAutoRedirect = false</c>); a 3xx is then an ordinary
+    /// failure. The app builds such a client for the carrier sharing. The address must be https.
+    /// </remarks>
+    /// <param name="deltas">
+    /// Commodity to signed tons. Names are put into Raven's spelling (<see cref="RavenCommodityKey"/>),
+    /// repeated names are added together, and commodities that net to zero are dropped; when nothing is
+    /// left no request is made.
+    /// </param>
+    public async Task<RavenResult<RavenCarrierCargoUpdate>> PatchCarrierCargoAsync(
+        long marketId, string apiKey, IReadOnlyDictionary<string, int> deltas, CancellationToken ct = default)
+    {
+        if (marketId <= 0) return RavenResult<RavenCarrierCargoUpdate>.Failure("invalid carrier id");
+        if (!IsSafeHeaderValue(apiKey)) return RavenResult<RavenCarrierCargoUpdate>.Failure("invalid API key");
+        var key = apiKey.Trim();
+
+        // The key rides in a header, so it must never travel in the clear.
+        if (!Uri.TryCreate(Base, UriKind.Absolute, out var baseUri) || baseUri.Scheme != Uri.UriSchemeHttps)
+            return RavenResult<RavenCarrierCargoUpdate>.Failure("carrier sharing needs an https base address");
+
+        var send = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (deltas is not null)
+            foreach (var (name, units) in deltas)
+            {
+                var commodity = RavenCommodityKey.Normalize(name);
+                if (commodity.Length == 0) continue;
+                send[commodity] = send.TryGetValue(commodity, out var already) ? already + units : units;
+            }
+        foreach (var commodity in send.Where(kv => kv.Value == 0).Select(kv => kv.Key).ToList())
+            send.Remove(commodity);
+        if (send.Count == 0) return RavenResult<RavenCarrierCargoUpdate>.Failure("nothing to send");
+
+        var url = $"{Base}/api/fc/{marketId.ToString(CultureInfo.InvariantCulture)}/cargo";
+        var json = JsonSerializer.Serialize(send);
+
+        try
+        {
+            // A fresh request per attempt: a request message (and its content) can only be sent once.
+            using var response = await SendWithRetryAsync(async token =>
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Patch, url)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json"),
+                };
+                request.Headers.TryAddWithoutValidation("rcc-key", key);
+                return await _http.SendAsync(request, token).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+                return RavenResult<RavenCarrierCargoUpdate>.Failure($"HTTP {(int)response.StatusCode}", (int)response.StatusCode);
+
+            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            return RavenResult<RavenCarrierCargoUpdate>.Ok(new RavenCarrierCargoUpdate(send, ReadCargoReply(body)));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { return RavenResult<RavenCarrierCargoUpdate>.Failure(ex.Message.Replace(key, "***")); }   // incl. an HttpClient timeout
     }
 
     private string Base => _options.BaseUrl.TrimEnd('/');
@@ -173,7 +283,7 @@ public sealed class RavenColonialClient : IDisposable
                 return RavenResult<T>.Ok(null);
 
             if (!response.IsSuccessStatusCode)
-                return RavenResult<T>.Failure($"HTTP {(int)response.StatusCode}");
+                return RavenResult<T>.Failure($"HTTP {(int)response.StatusCode}", (int)response.StatusCode);
 
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             return string.IsNullOrWhiteSpace(body) ? RavenResult<T>.Ok(null) : parse(body);
@@ -225,6 +335,57 @@ public sealed class RavenColonialClient : IDisposable
     {
         var trimmed = value?.Trim();
         return !string.IsNullOrEmpty(trimmed) && trimmed is not ("." or "..");
+    }
+
+    /// <summary>A header value must be printable ASCII with no spaces: anything else cannot be sent safely (or is not a key).</summary>
+    private static bool IsSafeHeaderValue(string? value)
+    {
+        var trimmed = value?.Trim();
+        return !string.IsNullOrEmpty(trimmed) && trimmed.All(c => c is > ' ' and <= '~');
+    }
+
+    private static RavenCarrier? ReadCarrier(JsonElement root, long requestedId)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+
+        var id = ReadLong(root, "marketId");
+        var name = ReadString(root, "name");
+        // An empty object is how "nothing here" looks when a service answers 200 for everything.
+        if (id is null && string.IsNullOrEmpty(name)) return null;
+
+        return new RavenCarrier(
+            MarketId: id ?? requestedId,
+            Name: name ?? "",
+            DisplayName: ReadString(root, "displayName"),
+            Owner: ReadString(root, "owner"),
+            SystemName: ReadString(root, "systemName"),
+            Cargo: root.TryGetProperty("cargo", out var cargo) ? ReadCargoMap(cargo) : new Dictionary<string, int>());
+    }
+
+    /// <summary>The reply to a cargo write: a commodity map, or nothing usable (an empty body is still a successful write).</summary>
+    private static IReadOnlyDictionary<string, int> ReadCargoReply(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return new Dictionary<string, int>();
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return ReadCargoMap(doc.RootElement);
+        }
+        catch (JsonException) { return new Dictionary<string, int>(); }
+    }
+
+    /// <summary>Commodity to tons in Raven's spelling; entries that are not whole numbers, or are zero, are left out.</summary>
+    private static Dictionary<string, int> ReadCargoMap(JsonElement map)
+    {
+        var cargo = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (map.ValueKind != JsonValueKind.Object) return cargo;
+        foreach (var entry in map.EnumerateObject())
+        {
+            var commodity = RavenCommodityKey.Normalize(entry.Name);
+            if (commodity.Length == 0 || AsInt(entry.Value) is not { } units || units == 0) continue;
+            cargo[commodity] = cargo.TryGetValue(commodity, out var already) ? already + units : units;
+        }
+        return cargo;
     }
 
     private static RavenProject? ReadProject(JsonElement root)

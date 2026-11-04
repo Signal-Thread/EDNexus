@@ -88,6 +88,24 @@
                          Text="Sends your commander NAME and what you delivered to Raven Colonial after each delivery. Its endpoint is unauthenticated: anyone can post under any name, and your deliveries are added to the project's totals as sent. If another tool (SrvSurvey, for example) also reports your deliveries to the same project, they will be counted twice. Needs the lookup above." />
             </StackPanel>
           </Border>
+
+          <Border Background="{StaticResource SurfaceField}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="10">
+              <CheckBox x:Name="ShareCarrierToggle" Content="Share my fleet carrier's cargo with Raven Colonial"
+                        Foreground="{StaticResource Ink}" />
+              <TextBlock Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
+                         Text="Reports each change to the cargo in your own fleet carrier (what you transfer to or from your ship, and what you buy or sell at its market) to Raven Colonial, so your squadron can see what is stocked. Only your own carrier is shared, and only if it is registered to you on Raven Colonial (linked to your account there); anything else is skipped. Needs your personal Raven Colonial API key, from your account on ravencolonial.com." />
+              <!-- Masked by default, like the Inara key: keys get leaked through streams and screenshots. -->
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox x:Name="RavenApiKeyBox" PlaceholderText="Raven Colonial API key" PasswordChar="●"
+                         Foreground="{StaticResource Ink}" Background="{StaticResource CardBg}" />
+                <CheckBox x:Name="RevealRavenKey" Grid.Column="1" Content="Show" Margin="10,0,0,0"
+                          Foreground="{StaticResource InkDim}" IsCheckedChanged="OnRevealRavenKeyChanged" />
+              </Grid>
+              <TextBlock Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
+                         Text="What leaves this machine: your carrier's market id, and the commodities and tons that moved, sent with your API key (which identifies your Raven Colonial account). Raven Colonial decides who can see a carrier's cargo; EDNexus cannot restrict that. The key is kept in your settings file on this machine, like the Inara key, and is removed from crash reports. If another tool (the RavenColonial EDMC plugin, SrvSurvey) also reports your carrier, every movement is counted twice. EDNexus watches for that: if the carrier's totals stop adding up, it switches this off and shows a red error on the main window. Use one reporter at a time." />
+            </StackPanel>
+          </Border>
         </StackPanel>
 
         <StackPanel Spacing="8">
