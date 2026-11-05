@@ -62,12 +62,26 @@ public class CommodityMeanPriceEstimatorTests
 
         estimator.RequestEstimate("lowtemperaturediamond", "Low Temperature Diamonds");
 
-        // The fetch runs on a background task; wait for it deterministically via the fake's own signal
-        // rather than a fixed sleep.
+        // The fetch runs on a background task. The fake's signal fires inside the search call, before
+        // the estimator has averaged the quotes and written the cache, so it only proves the fetch
+        // started; the result itself is awaited by condition below, never by a fixed sleep.
         await trade.Completed.Task;
-        await Task.Delay(20); // let the estimator finish writing the cache after the awaited call returns
+        var resolved = await WaitUntilAsync(() => estimator.TryGet("lowtemperaturediamond") is not null);
 
+        Assert.True(resolved, "The background estimate never reached the cache.");
         Assert.Equal(250_000, estimator.TryGet("lowtemperaturediamond"));
+    }
+
+    /// <summary>Yields until <paramref name="condition"/> holds; the timeout is a failure bound, not a wait.</summary>
+    private static async Task<bool> WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline) return false;
+            await Task.Yield();
+        }
+        return true;
     }
 
     private sealed class FakeTradeSearch : ITradeSearch

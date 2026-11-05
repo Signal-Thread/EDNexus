@@ -155,9 +155,11 @@ public class TwitchStreamCardServiceTests
         };
 
         using var service = Create(state, client);
-        service.RequestPublish();
+        // Subscribe before asking for the publish: the pump can answer the 401 and raise the event
+        // before the next line runs, and an event raised with no handler attached is lost for good.
         var reauth = new TaskCompletionSource();
         service.ReauthRequired += () => reauth.TrySetResult();
+        service.RequestPublish();
 
         Assert.True(await client.WaitForPublishAsync());
         await reauth.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -182,11 +184,13 @@ public class TwitchStreamCardServiceTests
         var token = "stale-token";
 
         using var service = Create(state, client, token: () => token);
-        service.RequestPublish();
-        // The fake releases its signal before returning the 401, and the pump sets the latch only
-        // after that call returns — so waiting on the publish alone races the write.
+        // Subscribe before asking for the publish: the pump can answer the 401 and raise the event
+        // before a later subscription runs, and an event raised with no handler attached is lost for
+        // good. The fake also releases its signal before returning the 401 and the pump sets the latch
+        // only after that call returns — so waiting on the publish alone races the write.
         var reauth = new TaskCompletionSource();
         service.ReauthRequired += () => reauth.TrySetResult();
+        service.RequestPublish();
         Assert.True(await client.WaitForPublishAsync());
         await reauth.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(service.StoppedForReauth);
