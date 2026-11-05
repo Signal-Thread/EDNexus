@@ -1,4 +1,5 @@
 using System.Globalization;
+using EDNexus.App.Services.Plugins;
 using EDNexus.App.Telemetry;
 using EDNexus.Core.Mining;
 using EDNexus.Core.Settings;
@@ -37,11 +38,26 @@ public sealed class Bootstrap
     /// </summary>
     public EbsCleanupQueue TwitchCleanup { get; }
 
+    /// <summary>
+    /// The plugin system: the commander's persisted plugin choices, and the runtime (host, bridge,
+    /// supervisor) built for each engine host. Process-wide, like the stores it owns; the engine
+    /// host's owner attaches and detaches the per-engine runtime. Nothing loads until the owner
+    /// calls <see cref="PluginService.StartAsync"/>, and no plugin runs without a persisted grant.
+    /// </summary>
+    public PluginService Plugins { get; }
+
     public Bootstrap(SettingsStore store, AppSettings settings, CrashReporting crash)
     {
         Store = store;
         Settings = settings;
         Crash = crash;
+        // Settings are saved on the UI thread, where the rest of the app edits them.
+        Plugins = new PluginService(
+            settings,
+            save => store.TrySave(save),
+            post => Avalonia.Threading.Dispatcher.UIThread.Post(post),
+            isSimulated: () => Dev.Enabled,
+            onError: ex => crash.Capture(ex, "plugins"));
         TwitchCleanup = new EbsCleanupQueue(settings, store);
         TwitchCleanup.Start();
         Twitch = BuildTwitchAuth();

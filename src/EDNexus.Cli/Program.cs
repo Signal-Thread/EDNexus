@@ -30,7 +30,8 @@ using EDNexus.Core.Voice;
 //               the app's own default. Implies --once.
 //   --plugins   load installed plugins (EDNEXUS_PLUGINS_DIR or the default plugins folder) before the
 //               replay, then print a per-plugin summary. Every declared capability is granted (no
-//               consent UI); UI registrations are counted, not rendered. Runs plugin code in-process
+//               consent UI); UI registrations are counted, not rendered; storage is the real
+//               sandboxed backend (writes land in <plugins folder>/<id>/data). Runs plugin code in-process
 //               against the real journal; only use plugins you trust.
 //   --plugin <folder>
 //               as --plugins, but load only that one plugin folder (copied to a temp folder first,

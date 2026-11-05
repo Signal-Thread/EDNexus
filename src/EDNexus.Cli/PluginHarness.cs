@@ -11,7 +11,8 @@ namespace EDNexus.Cli;
 
 /// <summary>
 /// Headless plugin runner for <c>--plugins</c> / <c>--plugin &lt;path&gt;</c>: loads plugins through the
-/// real <see cref="PluginHost"/> and <see cref="PluginBridge"/> against the CLI's engine, then
+/// same <see cref="PluginRuntime"/> the desktop app uses (real <see cref="PluginHost"/>,
+/// <see cref="PluginBridge"/> and <see cref="PluginSupervisor"/>) against the CLI's engine, then
 /// reports per-plugin results.
 /// <para>
 /// Security: plugin code runs in-process with full trust, against the <em>real</em> journal being
@@ -21,8 +22,11 @@ namespace EDNexus.Cli;
 /// <c>state</c>. Only run plugins you trust.
 /// </para>
 /// <para>
-/// Stand-ins: UI registrations are counted, not rendered, and storage is an in-memory stub with none
-/// of the real backend's key validation or quotas (the summary says so).
+/// Storage is the real sandboxed backend (key validation, quotas, <c>&lt;root&gt;/&lt;id&gt;/data</c>),
+/// so a plugin that is granted <c>storage</c> really writes to disk: under the real plugins folder
+/// for <c>--plugins</c>, under the scratch copy (removed on exit) for <c>--plugin</c>. The only
+/// stand-in left is UI: registrations are counted, not rendered, until the dashboard and overlay
+/// registries exist (#58, #59).
 /// </para>
 /// </summary>
 internal sealed class PluginHarness : IDisposable
@@ -45,8 +49,7 @@ internal sealed class PluginHarness : IDisposable
     private const int MaxPrintedErrors = 10;
     private const int MaxTextLength = 500;
 
-    private readonly PluginBridge _bridge;
-    private readonly PluginHost? _host;
+    private readonly PluginRuntime? _runtime;
     private readonly List<string> _problems = [];
     private readonly ConcurrentDictionary<string, PluginStats> _stats = new(StringComparer.Ordinal);
     private string? _tempRoot;
@@ -61,7 +64,6 @@ internal sealed class PluginHarness : IDisposable
     /// <param name="appVersion">App version plugins are gated against; defaults to <see cref="ResolveAppVersion"/>.</param>
     public PluginHarness(JournalEventBus bus, CommanderState state, string? pluginsRoot, string? singlePluginFolder, SemanticVersion? appVersion = null)
     {
-        PluginBridge? bridge = null;
         try
         {
             string? root;
@@ -89,20 +91,23 @@ internal sealed class PluginHarness : IDisposable
                 Root = root ?? "(no plugins folder)";
             }
 
-            bridge = new PluginBridge(bus, state, new PluginBridgeOptions
-            {
-                // TODO(#243): route through the shared quarantine sink once it owns this hook.
-                HandlerError = err => _stats.GetOrAdd(err.PluginId, _ => new PluginStats())
-                    .AddError($"{err.EventName}: {err.ExceptionType}: {err.Message}"),
-            });
-            _bridge = bridge;
-
             if (root is not null)
-                _host = new PluginHost(root, appVersion ?? ResolveAppVersion(), m => m.Capabilities.ToList(), BuildContext);
+            {
+                _runtime = PluginRuntime.Create(bus, state, new PluginRuntimeOptions
+                {
+                    PluginsRoot = root,
+                    AppVersion = appVersion ?? ResolveAppVersion(),
+                    // No UI to ask: every declared capability is granted (see the class remarks).
+                    Consent = m => m.Capabilities.ToList(),
+                    EnablementStore = new InMemoryPluginEnablementStore(),
+                    HandlerErrorObserver = err => _stats.GetOrAdd(err.PluginId, _ => new PluginStats())
+                        .AddError($"{err.EventName}: {err.ExceptionType}: {err.Message}"),
+                    ContextFactory = BuildContext,
+                });
+            }
         }
         catch
         {
-            bridge?.Dispose();
             DeleteTempRoot();
             throw;
         }
@@ -132,7 +137,7 @@ internal sealed class PluginHarness : IDisposable
     public string? ScratchRoot => _tempRoot;
 
     /// <summary>Whether a plugins folder could be determined (false: nothing is loaded).</summary>
-    public bool HasPluginsFolder => _host is not null;
+    public bool HasPluginsFolder => _runtime is not null;
 
     /// <summary>
     /// What a strict run fails on: non-Loaded plugins, handler/log errors, a drain timeout, unload
@@ -153,14 +158,19 @@ internal sealed class PluginHarness : IDisposable
                     var n = _stats.TryGetValue(p.Manifest!.Id, out var s) ? s.ErrorTotal : 0;
                     if (n > 0) all.Add($"{p.Manifest.Id}: {n} error(s)");
                 }
+                // The supervisor quarantines a plugin whose handlers keep failing, exactly as in the app.
+                if (_runtime is not null)
+                {
+                    foreach (var status in _runtime.Supervisor.Statuses.Where(st => st.State == PluginState.Quarantined))
+                        all.Add($"{SanitizeText(status.Id)}: {status.State} ({SanitizeText(status.LastError)})");
+                }
             }
             return all;
         }
     }
 
-    private IPluginContext BuildContext(PluginManifest manifest, IReadOnlySet<string> granted)
+    private IPluginContext BuildContext(PluginManifest manifest, IReadOnlySet<string> granted, PluginBridgeSession session)
     {
-        var session = _bridge.Attach(manifest, granted);
         var stats = _stats.GetOrAdd(manifest.Id, _ => new PluginStats());
         stats.Session = session;
         stats.UiSurfaces = string.Join("+", new[] { PluginCapabilities.UiDashboard, PluginCapabilities.UiOverlay }.Where(granted.Contains));
@@ -175,7 +185,8 @@ internal sealed class PluginHarness : IDisposable
             new CountingEvents(session.Events, stats),
             session.State,
             new HarnessLog(stats),
-            granted.Contains(PluginCapabilities.Storage) ? new MemoryStorage(stats) : session.Storage,
+            // The real, sandboxed storage (denied unless granted); only the calls are counted.
+            new CountingStorage(session.Storage, stats),
             // IUiRegistry.Register cannot tell a dashboard registration from an overlay one, so the
             // stub is offered when either surface was granted and the summary names which were.
             stats.UiSurfaces.Length > 0 ? new CountingUi(stats) : session.Ui,
@@ -187,7 +198,7 @@ internal sealed class PluginHarness : IDisposable
     /// no plugins folder. Note <see cref="PluginHost.LoadAll"/> first runs install recovery on the
     /// plugins root, which can move folders there, so a bare <c>--plugins</c> is not strictly read-only.
     /// </summary>
-    public PluginDiscoveryReport? Load() => _report = _host?.LoadAll();
+    public PluginDiscoveryReport? Load() => _report = _runtime?.Start();
 
     /// <summary>
     /// Waits (bounded) for plugins' queued events to be delivered, after the replay. Returns false,
@@ -220,7 +231,7 @@ internal sealed class PluginHarness : IDisposable
     {
         w.WriteLine("\n======== Plugins ========");
         w.WriteLine($"  Source    : {Root}");
-        if (_host is null) { w.WriteLine("  No plugins folder could be determined; nothing was loaded."); return; }
+        if (_runtime is null) { w.WriteLine("  No plugins folder could be determined; nothing was loaded."); return; }
         if (_report is null) { w.WriteLine("  (not loaded)"); return; }
         foreach (var e in _report.Errors) w.WriteLine($"  ! {SanitizeText(e)}");
         if (_report.Plugins.Count == 0) { w.WriteLine("  No plugins found."); return; }
@@ -236,10 +247,10 @@ internal sealed class PluginHarness : IDisposable
             var errors = s.Errors;
             w.WriteLine($"      caps    : {(r.Manifest.Capabilities.Count == 0 ? "(none)" : string.Join(", ", r.Manifest.Capabilities))}");
             w.WriteLine($"      events  : {s.EventsSeen} seen, {s.Session?.DroppedEventCount ?? 0} dropped");
-            // TODO(#56): replace with the real dashboard/overlay registries.
+            // TODO(#58, #59): replace with the real dashboard/overlay registries.
             w.WriteLine($"      ui      : {s.UiRegistrations} registration(s) (stub: counted, not rendered; surfaces granted: {(s.UiSurfaces.Length == 0 ? "none" : s.UiSurfaces)}, not attributable per surface)");
-            // TODO(#60): replace with the real storage backend (key validation, quotas).
-            w.WriteLine($"      storage : {s.StorageWrites} write(s), {s.StorageRemoves} remove(s) (in-memory stub, discarded; real limits not applied)");
+            var dataDir = Path.Combine(_runtime.PluginsRoot, r.Manifest.Id, "data");
+            w.WriteLine($"      storage : {s.StorageWrites} write(s), {s.StorageRemoves} remove(s) (real sandboxed storage: {SanitizeText(_tempRoot is null ? dataDir : "scratch copy, removed on exit")})");
             w.WriteLine($"      log     : {s.LogLines} line(s)");
             w.WriteLine($"      errors  : {s.ErrorTotal}");
             foreach (var err in errors.Take(MaxPrintedErrors)) w.WriteLine($"          {err}");
@@ -250,10 +261,10 @@ internal sealed class PluginHarness : IDisposable
     /// <summary>Unloads plugins, printing any unload problem to stderr and recording it. Idempotent.</summary>
     public void Unload()
     {
-        if (_host is null) return;
+        if (_runtime is null) return;
         try
         {
-            foreach (var u in _host.UnloadAll())
+            foreach (var u in _runtime.Host.UnloadAll())
             {
                 foreach (var e in u.Errors)
                 {
@@ -277,8 +288,7 @@ internal sealed class PluginHarness : IDisposable
         if (_disposed) return;
         _disposed = true;
         Unload();
-        _host?.Dispose();
-        _bridge.Dispose();
+        _runtime?.Dispose();
         DeleteTempRoot();
     }
 
@@ -404,19 +414,18 @@ internal sealed class PluginHarness : IDisposable
         }
     }
 
-    /// <summary>Stub UI registry: counts registrations. TODO(#56): replace with the real registries.</summary>
+    /// <summary>Stub UI registry: counts registrations. TODO(#58, #59): replace with the real registries.</summary>
     private sealed class CountingUi(PluginStats stats) : IUiRegistry
     {
         public void Register(string id, object descriptor) => stats.Ui();
     }
 
-    /// <summary>In-memory storage stub, no real limits. TODO(#60): replace with the real backend.</summary>
-    private sealed class MemoryStorage(PluginStats stats) : IPluginStorage
+    /// <summary>Counts the calls a plugin makes to its real storage; every call is passed straight through.</summary>
+    private sealed class CountingStorage(IPluginStorage inner, PluginStats stats) : IPluginStorage
     {
-        private readonly ConcurrentDictionary<string, string> _data = new();
-        public string? GetString(string key) => _data.TryGetValue(key, out var v) ? v : null;
-        public void SetString(string key, string value) { stats.Storage(); _data[key] = value; }
-        public void Remove(string key) { stats.StorageRemove(); _data.TryRemove(key, out _); }
+        public string? GetString(string key) => inner.GetString(key);
+        public void SetString(string key, string value) { inner.SetString(key, value); stats.Storage(); }
+        public void Remove(string key) { inner.Remove(key); stats.StorageRemove(); }
     }
 }
 

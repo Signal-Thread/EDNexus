@@ -33,8 +33,10 @@ dotnet run --project src/EDNexus.Cli -- --twitch-card
 # Load plugins (EDNEXUS_PLUGINS_DIR or the default folder) before the replay and print a
 # per-plugin summary. Plugin code runs in-process against your REAL journal with every declared
 # capability granted and no consent prompt (a stderr warning marks network+events/state plugins);
-# only run plugins you trust. UI registrations are counted, not rendered; storage is an in-memory
-# stub. Like the app, loading runs install recovery on the plugins folder, so it is not read-only.
+# only run plugins you trust. UI registrations are counted, not rendered; storage is the real
+# sandboxed backend (writes land in <plugins folder>/<id>/data). The harness uses the same
+# PluginRuntime as the app. Like the app, loading runs install recovery on the plugins folder, so it
+# is not read-only.
 # With no per-user plugins folder nothing is loaded (no temp-folder fallback).
 dotnet run --project src/EDNexus.Cli -- --once --plugins
 
