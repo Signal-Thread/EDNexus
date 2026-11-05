@@ -1,0 +1,35 @@
+{
+  // The manifest tolerates // comments and trailing commas (see src/EDNexus.Plugins.Hosting/PLUGIN_FORMAT.md),
+  // so this file doubles as documentation. Delete the comments in your own plugin if you prefer strict JSON.
+
+  // Lowercase reverse-DNS, unique. It is also the install folder name: the folder this file sits
+  // in MUST be called exactly this, or the host rejects the plugin.
+  "id": "com.ednexus.samples.hellocommander",
+
+  // Display name shown to the commander.
+  "name": "Hello Commander",
+
+  // The plugin's OWN version, strict SemVer 2.0.0. Not the SDK version.
+  "version": "1.0.0",
+
+  "author": "EDNexus contributors",
+  "description": "Sample plugin: counts hyperspace jumps and logs a greeting for each one.",
+
+  // The EDNexus.Plugins.Abstractions contract version this plugin was built against,
+  // "major.minor". Must match the SDK you compiled with (PluginSdk.CurrentVersionString).
+  "sdkVersion": "2.0",
+
+  // Path of the entry assembly, relative to this folder, '/'-separated.
+  "entryAssembly": "HelloCommander.dll",
+
+  // Full CLR name of the class implementing IEDNexusPlugin.
+  "entryType": "HelloCommander.HelloCommanderPlugin",
+
+  // What the plugin asks for; the commander decides what is actually granted.
+  //   events  - subscribe to journal events (FSDJump).
+  //   state   - read the commander's name and system (IReadOnlyCommanderState).
+  //   storage - remember the lifetime jump total between sessions.
+  // "ui.dashboard" is deliberately NOT declared: the host has no UI contribution points yet, so
+  // declaring it would only add a consent line for a feature that does nothing.
+  "capabilities": [ "events", "state", "storage" ]
+}

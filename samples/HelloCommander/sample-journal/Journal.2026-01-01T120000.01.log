@@ -1,0 +1,8 @@
+{ "timestamp":"2026-01-01T12:00:00Z", "event":"Fileheader", "part":1, "language":"English\\UK", "gameversion":"4.0.0.1500", "build":"r1" }
+{ "timestamp":"2026-01-01T12:00:01Z", "event":"Commander", "FID":"F0000000", "Name":"Jameson" }
+{ "timestamp":"2026-01-01T12:00:02Z", "event":"LoadGame", "FID":"F0000000", "Commander":"Jameson", "Ship":"python", "Ship_Localised":"Python", "ShipName":"Hello", "ShipIdent":"HC-01", "Credits":1000000, "GameMode":"Solo" }
+{ "timestamp":"2026-01-01T12:00:03Z", "event":"Location", "StarSystem":"Sol", "SystemAddress":10477373803, "Docked":false }
+{ "timestamp":"2026-01-01T12:05:00Z", "event":"FSDJump", "StarSystem":"Alpha Centauri", "SystemAddress":1, "StarPos":[3.03,-0.09,3.16], "JumpDist":4.38, "FuelUsed":0.3, "FuelLevel":31.7 }
+{ "timestamp":"2026-01-01T12:06:00Z", "event":"FSDJump", "StarSystem":"Barnard's Star", "SystemAddress":2, "StarPos":[-3.03,1.37,4.9], "JumpDist":6.0, "FuelUsed":0.4, "FuelLevel":31.3 }
+{ "timestamp":"2026-01-01T12:07:00Z", "event":"FSDJump", "StarSystem":"Wolf 359", "SystemAddress":3, "StarPos":[3.87,6.48,-1.6], "JumpDist":7.8, "FuelUsed":0.5, "FuelLevel":30.8 }
+{ "timestamp":"2026-01-01T12:08:00Z", "event":"Docked", "StationName":"Test Port", "StationType":"Coriolis", "MarketID":1 }
