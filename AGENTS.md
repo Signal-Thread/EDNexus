@@ -49,6 +49,12 @@ dotnet run --project src/EDNexus.Cli -- --once --plugins-strict
 
 # Unit tests (xUnit).
 dotnet test EDNexus.slnx
+
+# Build the sample plugin and run it through the plugin host against a synthetic journal
+# (the build assembles samples/HelloCommander/out/com.ednexus.samples.hellocommander/).
+dotnet build samples/HelloCommander/HelloCommander.csproj
+dotnet run --project src/EDNexus.Cli -- --once --dir samples/HelloCommander/sample-journal \
+  --plugin samples/HelloCommander/out/com.ednexus.samples.hellocommander
 ```
 
 The CLI `--once` harness is the primary way to validate against real journal data; `EDNexus.Tests`
@@ -69,6 +75,13 @@ Journal.*.log + *.json  ──►  JournalWatcher  ──►  JournalEventBus  �
 | `src/EDNexus.Cli` | Headless harness for validation. |
 | `src/EDNexus.Ebs` | Twitch Extension Backend Service: relays commander state to viewers. |
 | `extension/` | The Twitch extension frontend (vanilla HTML/CSS/JS, no build step). |
+| `src/EDNexus.Plugins.Abstractions`, `src/EDNexus.Plugins.Hosting` | Plugin SDK contract (plugins reference only this) and the plugin loader/installer/bridge. |
+| `samples/HelloCommander` | Sample plugin + template. Its build assembles `out/<id>/` (git-ignored); `tests/EDNexus.Samples.Tests` loads it through the real host. |
+
+Plugin authoring (manifest, capabilities, lifecycle/threading, packaging, SDK versioning) is
+documented in **[`docs/PLUGINS.md`](docs/PLUGINS.md)**; the on-disk format spec is
+`src/EDNexus.Plugins.Hosting/PLUGIN_FORMAT.md`. Keep both in step with the code when you change the
+SDK or host: `docs/PLUGINS.md` says explicitly what is not implemented, so update it when that changes.
 
 Key types live in `src/EDNexus.Core`: `JournalWatcher`, `JournalEntry`, `JournalEventBus`,
 `StateTracker`, `CommanderState`, `EngineHost`.

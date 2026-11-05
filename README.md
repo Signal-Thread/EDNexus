@@ -50,7 +50,9 @@ and folds that into a single live commander state that every feature reads from.
 - **Twitch stream card** — publishes a viewer-facing card of your session to a Twitch extension
   through the EDNexus Extension Backend Service (EBS). Opt-in; you choose which sections are shown.
 - **Plugin SDK (in development)** — `EDNexus.Plugins.Abstractions` and `EDNexus.Plugins.Hosting`
-  define the plugin contract and loader; the desktop app does not load plugins yet.
+  define the plugin contract and loader; the desktop app does not load plugins yet. See the
+  **[plugin developer guide](docs/PLUGINS.md)** and the [`Hello Commander` sample](samples/HelloCommander/README.md)
+  (runs today in the CLI harness: `--once --plugin <folder>`).
 - **Live journal parsing** — a watcher tails the game's own `Journal.*.log` and status sidecar files
   (no third-party account or API key required to get started).
 - **Auto-update (Windows)** — opt-in: downloads the new installer, checks it against the SHA-256
@@ -82,7 +84,8 @@ every window.
 | `src/EDNexus.Ebs` | Twitch Extension Backend Service: relays the commander's stream card to viewers (ASP.NET, Docker image) |
 | `extension/` | The Twitch extension frontend (vanilla HTML/CSS/JS, no build step) |
 | `src/EDNexus.Plugins.Abstractions` | Plugin SDK contract (interfaces a plugin implements) |
-| `src/EDNexus.Plugins.Hosting` | Plugin package loader / sandbox host |
+| `src/EDNexus.Plugins.Hosting` | Plugin package installer and loader (isolated load contexts; not a security sandbox) |
+| `samples/HelloCommander` | Sample plugin and copy-paste template; see [`docs/PLUGINS.md`](docs/PLUGINS.md) |
 | `src/EliteDangerous.Eddn` | Standalone, reusable EDDN upload client (no EDNexus dependency) |
 | `src/EliteDangerous.Inara` | Standalone, reusable Inara API client (no EDNexus dependency) |
 | `src/EliteDangerous.Spansh` | Standalone Spansh route/search client |
