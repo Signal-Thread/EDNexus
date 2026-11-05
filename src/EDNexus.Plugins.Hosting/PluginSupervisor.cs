@@ -36,14 +36,32 @@ namespace EDNexus.Plugins.Hosting;
 /// on disk afresh. The old assembly is only truly collected once nothing references it; a plugin
 /// that leaked a thread, a timer or a static into the host keeps it alive (see
 /// <see cref="PluginUnloadResult.Stuck"/>). The new copy loads regardless, so the rebuilt code
-/// runs; the old one just lingers in memory until the process exits. Faults are attributed to the
-/// plugin's current load: while a reload unloads the old copy its reports are dropped, and the new
-/// copy's reports are counted from the moment it starts loading. The bridge's error callback does
-/// not yet say which load a report came from, so a stuck old copy that is still running after the
-/// new one has started loading can still be charged to it (callers that know the load can pass its
-/// <see cref="GetGeneration"/> to <see cref="ReportFault(string, string, long)"/>). UI contributions
+/// runs; the old one just lingers in memory until the process exits. UI contributions
 /// (<see cref="Abstractions.IUiRegistry"/>) are not yet implemented, so there are none to remove
 /// on disable; they will be torn down with the plugin's context.
+/// </para>
+/// <para>
+/// <b>Which load a fault belongs to.</b> Faults are charged to the plugin's current load: while a
+/// reload unloads the old copy its reports are dropped, and the new copy's reports are counted from
+/// the moment it starts loading. A stuck old copy can keep running (and faulting) after that, so
+/// the bridge stamps every <see cref="PluginHandlerError"/> with the
+/// <see cref="PluginBridgeSession.Generation"/> of the session it came from, and the code that
+/// builds the context calls <see cref="RecordAttach"/> with it. From then on
+/// <see cref="ReportHandlerError"/> ignores any report whose generation is not the plugin's
+/// current session, so a stale copy cannot quarantine the one that replaced it.
+/// <see cref="PluginRuntime"/> does this wiring. A supervisor nobody calls <see cref="RecordAttach"/>
+/// on cannot tell sessions apart and charges every report to the current load (the pre-existing
+/// behaviour). Callers that track loads themselves can instead pass the supervisor's own
+/// <see cref="GetGeneration"/> to <see cref="ReportFault(string, string, long)"/>.
+/// </para>
+/// <para>
+/// <b>Consent on reload.</b> The supervisor does not decide consent. Every load, reload included,
+/// goes through <see cref="PluginHost"/>, which re-reads <c>plugin.json</c> and the assembly from
+/// disk and asks its consent callback about the manifest it just read, before any plugin code
+/// loads. A reload therefore never reuses an earlier approval for different files: with
+/// <see cref="PluginConsent.FromGrants"/> (keyed on the manifest's contents, not just its id) a
+/// plugin whose manifest changed on disk comes back <see cref="PluginLoadStatus.Denied"/> until the
+/// commander approves it again.
 /// </para>
 /// </remarks>
 public sealed class PluginSupervisor : IDisposable
@@ -76,6 +94,12 @@ public sealed class PluginSupervisor : IDisposable
         public long Generation;
         /// <summary>Whether fault reports count: false while the old copy unloads and once the plugin is not running.</summary>
         public bool Accepting;
+        /// <summary>The bridge session number of the plugin's current copy, once <see cref="RecordAttach"/> has said (0: not yet).</summary>
+        public long Attach;
+        /// <summary>Whether <see cref="RecordAttach"/> has ever been called for this plugin; only then are session numbers enforced.</summary>
+        public bool AttachTracked;
+        /// <summary>A new load began and its session has not attached yet: no session-stamped report can be from it.</summary>
+        public bool AwaitingAttach;
     }
 
     /// <summary>
@@ -133,6 +157,61 @@ public sealed class PluginSupervisor : IDisposable
     {
         lock (_gate)
             return _entries.TryGetValue(id, out var e) ? e.Generation : 0;
+    }
+
+    /// <summary>
+    /// Says which bridge session (<see cref="PluginBridgeSession.Generation"/>) belongs to the load of
+    /// <paramref name="pluginId"/> that is under way or has just finished, so that
+    /// <see cref="ReportHandlerError"/> can ignore reports from any other session. Call it from the
+    /// context factory right after <c>PluginBridge.Attach</c>. Safe from any thread; never throws.
+    /// </summary>
+    /// <param name="pluginId">The plugin's manifest id.</param>
+    /// <param name="attachGeneration">The new session's <see cref="PluginBridgeSession.Generation"/>.</param>
+    public void RecordAttach(string pluginId, long attachGeneration)
+    {
+        try
+        {
+            lock (_gate)
+            {
+                if (_disposed || attachGeneration <= 0) return;
+                if (!_entries.TryGetValue(pluginId, out var e))
+                {
+                    // Start(): the plugin has no status until its load result is recorded.
+                    if (!_starting) return;
+                    _entries[pluginId] = e = new Entry { State = PluginState.Loading, Generation = 1, Accepting = true };
+                }
+                e.Attach = attachGeneration;
+                e.AttachTracked = true;
+                e.AwaitingAttach = false;
+            }
+        }
+        catch { /* the context factory must not fail because of bookkeeping */ }
+    }
+
+    /// <summary>
+    /// Drops everything the supervisor holds for a plugin that has been uninstalled: unloads it if it
+    /// is still loaded and removes its status, so it no longer appears in <see cref="Statuses"/> and
+    /// later reports for it are ignored. Returns false if the id was unknown. Idempotent. Call it
+    /// after removing the plugin's folder (the installer has no uninstall hook of its own yet); it
+    /// does not touch the disk or the persisted enable / grant choices
+    /// (<see cref="PluginRuntime.Uninstalled"/> does). No <see cref="StatusChanged"/> is raised: the
+    /// caller that uninstalled the plugin knows. Runs plugin code (<c>Shutdown</c>) and can wait up
+    /// to <see cref="PluginHost.UnloadTimeout"/>: see the threading note on the class.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">The supervisor is disposed.</exception>
+    public bool Forget(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ThrowIfDisposed();
+        lock (_lifecycle)
+        {
+            if (!Known(id)) return false;
+            // Reports stop counting before the unload, as in Disable / Reload.
+            Mutate(id, e => { e.Accepting = false; e.QuarantinePending = false; });
+            UnloadQuietly(id);
+            lock (_gate)
+                return _entries.Remove(id);
+        }
     }
 
     /// <summary>
@@ -269,12 +348,13 @@ public sealed class PluginSupervisor : IDisposable
     /// <summary>
     /// The sink for <see cref="PluginBridgeOptions.HandlerError"/>. Safe to call from any thread
     /// (including a plugin's own dispatch thread); never throws and never blocks on plugin code.
+    /// Ignores a report from a session other than the plugin's current one (see <see cref="RecordAttach"/>).
     /// </summary>
     public void ReportHandlerError(PluginHandlerError error)
     {
         try
         {
-            ReportFault(error.PluginId, $"handler for '{error.EventName}' threw {error.ExceptionType}: {error.Message}");
+            ReportFaultCore(error.PluginId, $"handler for '{error.EventName}' threw {error.ExceptionType}: {error.Message}", null, error.Generation);
         }
         catch { /* an error sink must not fault the thread that reports to it */ }
     }
@@ -283,15 +363,15 @@ public sealed class PluginSupervisor : IDisposable
     /// Records one failed call into a plugin's code (any kind: handler, UI build, ...) against its
     /// current load, and quarantines the plugin if the rolling-window threshold is exceeded.
     /// </summary>
-    public void ReportFault(string pluginId, string description) => ReportFaultCore(pluginId, description, null);
+    public void ReportFault(string pluginId, string description) => ReportFaultCore(pluginId, description, null, 0);
 
     /// <summary>
     /// As <see cref="ReportFault(string, string)"/>, but ignored unless <paramref name="generation"/>
     /// is still the plugin's current load (see <see cref="GetGeneration"/>).
     /// </summary>
-    public void ReportFault(string pluginId, string description, long generation) => ReportFaultCore(pluginId, description, generation);
+    public void ReportFault(string pluginId, string description, long generation) => ReportFaultCore(pluginId, description, generation, 0);
 
-    private void ReportFaultCore(string pluginId, string description, long? generation)
+    private void ReportFaultCore(string pluginId, string description, long? generation, long attach)
     {
         var quarantine = false;
         try
@@ -309,6 +389,11 @@ public sealed class PluginSupervisor : IDisposable
                 // Only a running or loading plugin can be faulted: late reports from an
                 // unloaded one (or from the copy a reload is replacing) are noise.
                 if (!e.Accepting || (generation is { } g && g != e.Generation))
+                    return;
+                // A report stamped with a bridge session (attach > 0) counts only if that session is
+                // the plugin's current one: a copy that outlived a reload must not be charged to its
+                // replacement. Until the replacement has attached no stamped report can be its own.
+                if (attach > 0 && e.AttachTracked && (e.AwaitingAttach || attach != e.Attach))
                     return;
                 var now = _monotonic();
                 e.TotalFaults++;
@@ -398,6 +483,9 @@ public sealed class PluginSupervisor : IDisposable
             e.Generation++;
             e.State = PluginState.Loading;
             e.Accepting = true;
+            // The old copy's session number no longer applies; the new one is not known until it attaches.
+            e.AwaitingAttach = e.AttachTracked;
+            e.Attach = 0;
             e.QuarantinePending = false;
             e.Window.Clear();
             e.TotalFaults = 0;

@@ -192,7 +192,7 @@ What the consent screen has to say, per capability:
 | `events` | Every journal event, as it happens or is replayed, **including the commander's name and credit balance** (`LoadGame`, `Commander`, `Statistics`) and everything else the game logs (location, ship, cargo, materials, missions). Data-equivalent to `state`. |
 | `state` | The commander's **in-game name and credit balance**, current system, body, station, ship, cargo and materials, as of the last completed event. There is no narrower grant for the name or the balance. |
 | `network` | Not enforceable in-process. It is a declaration that the plugin phones home; **with `events` or `state` it can send all of the above off the machine.** Say so when the two are requested together. |
-| `storage` | Lets the plugin save its own key/value data in `<plugins root>/<id>/data/` (see below). Implemented in the bridge, but the host does not yet configure a plugins root for it (`PluginBridgeOptions.PluginsRoot`), so until that is wired every storage call is refused. |
+| `storage` | Lets the plugin save its own key/value data in `<plugins root>/<id>/data/` (see below). Live in the app and the CLI harness: `PluginRuntime` hands the bridge the same plugins root the host scans (`PluginBridgeOptions.PluginsRoot`). A bridge built without a root still refuses every storage call. |
 | `ui.dashboard`, `ui.overlay` | Reserved: the bridge has no UI contribution points yet, so they currently refuse every call (`PluginBridgeSession.Ui`). |
 
 **Storage contract** (`IPluginStorage`). Keys are 1-100 characters from `A-Z a-z 0-9 . _ -` and are
@@ -248,3 +248,46 @@ using var host = new PluginHost(PluginPaths.Resolve(), appVersion,
 
 Implement `IPluginSessionControl` on the context (a bridge session already does): without it the
 host cannot tell that a handler is still running at unload.
+
+### Use `PluginRuntime` rather than wiring by hand
+
+The snippet above is what `PluginRuntime.Create` does for you, and the app and the CLI harness both
+use it. It is the single owner of the plugins root (the same string goes to `PluginHost` and to
+`PluginBridgeOptions.PluginsRoot`, which is what makes storage work), builds the host, the bridge and
+a `PluginSupervisor` together, binds `PluginBridgeOptions.HandlerError` to
+`PluginSupervisor.ReportHandlerError`, and builds each plugin's context (`PluginContext`) from a
+bridge session. A bridge is bound to one engine's bus, so build a new runtime when the engine is
+rebuilt. `Start`, `Uninstalled`, `Dispose` and the supervisor's lifecycle calls run plugin code and
+write `settings.json`: call them off the UI thread.
+
+**Which load a fault belongs to.** Every `PluginBridge.Attach` takes the next session number
+(`PluginBridgeSession.Generation`), and every `PluginHandlerError` carries the number of the session
+it came from. The runtime tells the supervisor each new session's number
+(`PluginSupervisor.RecordAttach`), so a copy of a plugin that was reloaded but is still running (stuck
+in a handler) cannot have its late faults charged to, and quarantine, the copy that replaced it.
+
+**Uninstalling.** There is no uninstall command yet; whoever removes a plugin folder calls
+`PluginRuntime.Uninstalled(id)`, which unloads the plugin, drops the supervisor's entry for it
+(`PluginSupervisor.Forget`), clears its persisted disable flag and revokes its consent.
+
+### Consent in the desktop app
+
+The app denies by default. `PluginConsent.FromGrants` allows a plugin only if the grant store holds a
+grant for its id that was made for the **exact contents of the `plugin.json` now on disk**
+(`PluginManifestFingerprint`, a SHA-256 over every manifest field), and then only with the
+capabilities granted. Grants are persisted in `settings.json` under `Plugins.Grants`
+(`{ "<id>": { "ManifestHash": "...", "Capabilities": [...] } }`) through `AppSettingsPluginGrantStore`;
+`IPluginGrantStore.Grant(manifest, capabilities)` is what the management UI (#61) will call after it
+has shown the consent text above. Until a UI does, no plugin runs in the desktop app (the CLI
+harness is different: it grants everything declared, and says so).
+
+Consent is applied in one place, `PluginHost`, on every load, **including a reload**: the host
+re-reads `plugin.json` from disk, then asks the consent callback about that manifest before any plugin
+code loads. A reload therefore never reuses an approval for different files: change the version,
+the capabilities or any other manifest field and the plugin comes back `Denied` until it is approved
+again. The fingerprint covers the manifest only; a DLL swapped on disk without touching `plugin.json`
+is not detected by it, so keep updating plugins through the installer, which bumps the version.
+
+In the app, plugins load once the engine has finished replaying the journal, on a background thread,
+so they do not receive the startup replay (read `context.State` for what the replay established);
+they receive every event after it. A failing plugin never delays or stops the app.

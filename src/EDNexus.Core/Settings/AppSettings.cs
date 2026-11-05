@@ -104,6 +104,50 @@ public sealed class PluginSettings
         get => _disabledIds;
         set => _disabledIds = value is null ? new(StringComparer.Ordinal) : new(value, StringComparer.Ordinal);
     }
+
+    private Dictionary<string, PluginGrantSettings> _grants = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// What the commander has allowed each plugin to do, by plugin id. A plugin with no entry, or
+    /// whose entry no longer matches its manifest, is not run: the default is deny. Treat the
+    /// dictionary as immutable and replace it to change it (copy-on-write), as with
+    /// <see cref="DisabledIds"/>. A <c>null</c> in settings.json becomes an empty dictionary, and
+    /// a <c>null</c> entry is dropped (so a hand-edited file can only ever deny, never crash a save).
+    /// </summary>
+    public Dictionary<string, PluginGrantSettings> Grants
+    {
+        get => _grants;
+        set
+        {
+            _grants = new(StringComparer.Ordinal);
+            if (value is null) return;
+            foreach (var (id, grant) in value)
+            {
+                if (id is not null && grant is not null)
+                    _grants[id] = grant;
+            }
+        }
+    }
+}
+
+/// <summary>
+/// The commander's persisted consent for one plugin: the capabilities granted and the fingerprint
+/// of the manifest they were granted for. The grant only applies while the manifest on disk still
+/// has that fingerprint, so an updated or edited plugin must be approved again.
+/// </summary>
+public sealed class PluginGrantSettings
+{
+    private List<string> _capabilities = [];
+
+    /// <summary>Fingerprint of the manifest contents that were approved (see <c>PluginManifestFingerprint</c>).</summary>
+    public string ManifestHash { get; set; } = "";
+
+    /// <summary>The capabilities granted. Anything the manifest does not declare is ignored at load time.</summary>
+    public List<string> Capabilities
+    {
+        get => _capabilities;
+        set => _capabilities = value is null ? [] : [.. value.Where(c => c is not null)];
+    }
 }
 
 /// <summary>
