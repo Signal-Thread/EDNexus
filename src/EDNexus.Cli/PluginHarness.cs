@@ -272,7 +272,7 @@ internal sealed class PluginHarness : IDisposable
                     lock (_problems) _problems.Add($"{SanitizeText(u.Id)}: unload: {SanitizeText(e)}");
                 }
                 if (u.Stuck)
-                    lock (_problems) _problems.Add($"{SanitizeText(u.Id)}: handler stuck at unload");
+                    lock (_problems) _problems.Add($"{SanitizeText(u.Id)}: Shutdown or a handler stuck at unload");
             }
         }
         catch (Exception ex)

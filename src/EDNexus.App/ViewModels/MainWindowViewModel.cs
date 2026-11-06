@@ -729,6 +729,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// The longest an engine rebuild waits for the plugins to detach. A well-behaved plugin takes
+    /// milliseconds; one stuck in <c>Shutdown</c> costs the host's shutdown timeout and one stuck in
+    /// a handler its unload timeout (5 s each by default), so this covers a single such plugin with
+    /// room to spare while still bounding the "Loading journal…" state if several are.
+    /// </summary>
+    private static readonly TimeSpan PluginDetachTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Replace the engine host. Disposing the old one waits on its watcher and flushes its reporters
     /// (seconds, in the worst case) and starting the new one replays the journal, so both run off the
     /// UI thread; the cards sit out the swap rather than reading a disposed engine. Rebuilds are
@@ -753,9 +761,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             // Plugins first: their bridge reads the engine that is about to be disposed.
+            // Bounded: a plugin that will not stop must not hold the rebuild forever. If the wait
+            // expires the old engine is disposed anyway (logged); see PluginService.Detach(TimeSpan).
             await Task.Run(() =>
             {
-                _boot.Plugins.Detach();
+                _boot.Plugins.Detach(PluginDetachTimeout);
                 old.Dispose();
             });
         }

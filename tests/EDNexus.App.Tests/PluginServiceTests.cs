@@ -4,6 +4,8 @@ using EDNexus.Core.Settings;
 using EDNexus.Core.State;
 using EDNexus.Plugins.Abstractions;
 using EDNexus.Plugins.Hosting;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace EDNexus.App.Tests;
 
@@ -309,6 +311,96 @@ public sealed class PluginServiceTests : IDisposable
 
         Assert.Null(service.Runtime);
         Assert.True(service.ShutdownForExit(Wait));
+    }
+
+    [Fact]
+    public async Task Detach_WithABound_ReturnsWhenAPluginsShutdownNeverReturns()
+    {
+        const string id = "com.test.app.stuckshutdown";
+        InstallBlockedInShutdown(id);
+        var service = Service(consent: manifest => manifest.Capabilities);
+        var (bus, state) = Engine();
+        service.Attach(bus, state);
+        await service.StartAsync();
+        var plugin = Assert.Single(service.Runtime!.Host.Loaded);
+        var type = plugin.Instance!.GetType();
+        var entered = (ManualResetEventSlim)type.GetField("Entered")!.GetValue(null)!;
+        var gate = (ManualResetEventSlim)type.GetField("Gate")!.GetValue(null)!;
+        var returned = (ManualResetEventSlim)type.GetField("Returned")!.GetValue(null)!;
+
+        try
+        {
+            // The only wait that matters is the bound; the 30 s ceiling is reached only if Detach hangs.
+            var detach = Task.Run(() => service.Detach(TimeSpan.FromMilliseconds(100)));
+            bool finishedInTime;
+            try { finishedInTime = await detach.WaitAsync(TimeSpan.FromSeconds(30)); }
+            catch (TimeoutException) { throw new Xunit.Sdk.XunitException("Detach(timeout) hung on a plugin whose Shutdown never returns"); }
+
+            Assert.True(entered.Wait(Wait));        // the plugin really is inside Shutdown
+            Assert.False(returned.IsSet);
+            Assert.False(finishedInTime);           // it gave up waiting and said so
+            Assert.Null(service.Runtime);           // and the runtime is detached either way
+            Assert.Empty(_errors);
+        }
+        finally
+        {
+            gate.Set();
+        }
+        // Releasing it afterwards must be harmless.
+        Assert.True(returned.Wait(Wait));
+        Assert.True(service.ShutdownForExit(Wait));
+    }
+
+    [Fact]
+    public void Detach_WithABound_WithNothingAttached_ReturnsTrue()
+    {
+        var service = Service();
+
+        Assert.True(service.Detach(TimeSpan.FromSeconds(30)));
+    }
+
+    /// <summary>Installs a real plugin whose <c>Shutdown</c> blocks on a latch; returns the plugin folder.</summary>
+    private string InstallBlockedInShutdown(string id)
+    {
+        const string source = """
+            using EDNexus.Plugins.Abstractions;
+            namespace AppStuckShutdown;
+            public sealed class Plugin : IEDNexusPlugin
+            {
+                public static readonly System.Threading.ManualResetEventSlim Entered = new(false), Gate = new(false), Returned = new(false);
+                public void Initialize(IPluginContext context) { }
+                public void Shutdown() { Entered.Set(); Gate.Wait(); Returned.Set(); }
+            }
+            """;
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(p => Path.GetFileName(p) is var name && (name.StartsWith("System.", StringComparison.OrdinalIgnoreCase) || name is "netstandard.dll" or "mscorlib.dll"))
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
+            .Append(MetadataReference.CreateFromFile(typeof(IEDNexusPlugin).Assembly.Location));
+        var compilation = CSharpCompilation.Create(
+            "AppStuckShutdown",
+            [CSharpSyntaxTree.ParseText(source)],
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
+        using var stream = new MemoryStream();
+        var emitted = compilation.Emit(stream);
+        Assert.True(emitted.Success, string.Join("\n", emitted.Diagnostics));
+
+        var dir = Path.Combine(_root, id);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, PluginManifestParser.FileName), $$"""
+            {
+              "id": "{{id}}",
+              "name": "Test {{id}}",
+              "version": "1.0.0",
+              "sdkVersion": "{{PluginSdk.CurrentVersionString}}",
+              "entryAssembly": "AppStuckShutdown.dll",
+              "entryType": "AppStuckShutdown.Plugin",
+              "capabilities": ["events"]
+            }
+            """);
+        File.WriteAllBytes(Path.Combine(dir, "AppStuckShutdown.dll"), stream.ToArray());
+        return dir;
     }
 
     [Fact]

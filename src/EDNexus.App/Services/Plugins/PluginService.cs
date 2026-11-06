@@ -219,6 +219,30 @@ public sealed class PluginService : IDisposable
     }
 
     /// <summary>
+    /// <see cref="Detach"/> with a bound, for an engine rebuild: runs it on a worker and gives up
+    /// waiting after <paramref name="timeout"/>, so a plugin that will not stop can never hold the
+    /// rebuild (and with it the dashboard) forever. Returns whether it finished in time; when it did
+    /// not it is logged and the caller carries on, so the old engine may be disposed while a stuck
+    /// plugin is still unwinding against it. That trade-off is intended: the alternative is an
+    /// engine that can never be rebuilt. Never throws.
+    /// </summary>
+    public bool Detach(TimeSpan timeout)
+    {
+        try
+        {
+            if (Task.Run(Detach).Wait(timeout))
+                return true;
+            Trace.TraceWarning($"Plugins: still shutting down after {timeout.TotalSeconds:0.##}s; continuing without waiting for them.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"Plugins: could not shut the plugin host down: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
     /// <see cref="Detach"/> with a bound, for app exit: gives up waiting after
     /// <paramref name="timeout"/> (the process is ending anyway). Returns whether it finished in time.
     /// </summary>
