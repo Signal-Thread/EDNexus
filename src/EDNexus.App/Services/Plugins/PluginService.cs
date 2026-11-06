@@ -146,7 +146,8 @@ public sealed class PluginService : IDisposable
                 GrantStore = Grants,
                 IsSimulated = _isSimulated,
                 HandlerErrorObserver = error => Trace.TraceWarning(
-                    $"Plugin {error.PluginId}: handler for '{error.EventName}' threw {error.ExceptionType}: {error.Message}"),
+                    $"Plugin {PluginLogText.Sanitise(error.PluginId, 200)}: handler for '{PluginLogText.Sanitise(error.EventName, 100)}' threw "
+                    + $"{PluginLogText.Sanitise(error.ExceptionType, 200)}: {PluginLogText.Sanitise(error.Message)}"),
             });
             if (runtime is null)
             {
@@ -200,11 +201,13 @@ public sealed class PluginService : IDisposable
             try
             {
                 var report = runtime.Start();
+                // Folder names, install-recovery messages and load reasons come from the plugins folder
+                // (a Linux folder name may hold a newline) or from plugin code: never log them raw.
                 foreach (var error in report.Errors)
-                    Trace.TraceWarning($"Plugins: {error}");
+                    Trace.TraceWarning($"Plugins: {PluginLogText.Sanitise(error)}");
                 foreach (var result in report.Plugins)
-                    Trace.TraceInformation($"Plugins: {result.Manifest?.Id ?? result.FolderName}: {result.Status}"
-                        + (result.Status == PluginLoadStatus.Loaded ? "" : $" ({result.ReasonSummary})"));
+                    Trace.TraceInformation($"Plugins: {PluginLogText.Sanitise(result.Manifest?.Id ?? result.FolderName, 200)}: {result.Status}"
+                        + (result.Status == PluginLoadStatus.Loaded ? "" : $" ({PluginLogText.Sanitise(result.ReasonSummary)})"));
                 // After the load pass, which first repairs an interrupted install: an id whose only
                 // copy is still in a .replaced-* backup has not been uninstalled.
                 PluginChoicePruner.Prune(_settings, runtime.PluginsRoot, Grants, Enablement);
@@ -246,7 +249,7 @@ public sealed class PluginService : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.TraceWarning($"Plugins: revoking a plugin failed: {ex.Message}");
+            Trace.TraceWarning($"Plugins: revoking a plugin failed: {PluginLogText.Sanitise(ex.Message)}");
             return default;
         }
     }
@@ -368,8 +371,8 @@ public sealed class PluginService : IDisposable
 
     private void OnStatusChanged(PluginStatus status)
     {
-        Trace.TraceInformation($"Plugins: {status.Id} is now {status.State}"
-            + (string.IsNullOrEmpty(status.LastError) ? "" : $" ({status.LastError})"));
+        Trace.TraceInformation($"Plugins: {PluginLogText.Sanitise(status.Id, 200)} is now {status.State}"
+            + (string.IsNullOrEmpty(status.LastError) ? "" : $" ({PluginLogText.Sanitise(status.LastError)})"));
         StatusChanged?.Invoke(status);
     }
 

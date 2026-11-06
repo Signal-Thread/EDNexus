@@ -303,9 +303,61 @@ public sealed class PluginContext(PluginManifest manifest, PluginBridgeSession s
     public bool WaitForExit(TimeSpan timeout) => session.WaitForExit(timeout);
 }
 
-/// <summary>Writes a plugin's log lines to <see cref="Trace"/> (the app's log file), tagged with its id and sanitised.</summary>
-internal sealed class TracePluginLog(string pluginId) : IPluginLog
+/// <summary>
+/// Writes a plugin's log lines to <see cref="Trace"/> (the app's log file), tagged with its id and
+/// sanitised, within a per-plugin budget so that a plugin logging in a loop cannot grow the
+/// per-launch log file without bound.
+/// </summary>
+/// <remarks>
+/// <b>Budget.</b> A token bucket: <see cref="BurstLines"/> lines may be written at once, refilled at
+/// <see cref="RefillLinesPerSecond"/>; a line that finds the bucket empty is dropped and counted.
+/// The count is reported as one "N lines suppressed" notice, either on the next line let through
+/// once the bucket has recovered to <see cref="RecoveredLines"/>, or, while the plugin keeps
+/// flooding, every <see cref="NoticeInterval"/> at most. Lines still pending when a plugin goes quiet
+/// are reported at its next line (there is no timer). A single line is cut to
+/// <see cref="MaxLineLength"/> characters. So one plugin's sustained output is at most about
+/// <see cref="RefillLinesPerSecond"/> lines a second of <see cref="MaxLineLength"/> characters each.
+/// The budget is per instance, which is per plugin load.
+/// </remarks>
+internal sealed class TracePluginLog : IPluginLog
 {
+    /// <summary>Lines a plugin may write at once (the bucket's capacity).</summary>
+    public const int BurstLines = 30;
+
+    /// <summary>Lines per second the bucket refills at: the sustained rate a plugin can log.</summary>
+    public const double RefillLinesPerSecond = 1;
+
+    /// <summary>Tokens the bucket must hold again for a pending "suppressed" notice to be flushed on a line that is let through.</summary>
+    public const int RecoveredLines = BurstLines / 2;
+
+    /// <summary>The longest a line may be, in characters, before the cut marker (the whole line: id, level and message).</summary>
+    public const int MaxLineLength = 1024;
+
+    /// <summary>At most one "suppressed" notice per this long while a plugin keeps flooding.</summary>
+    public static readonly TimeSpan NoticeInterval = TimeSpan.FromSeconds(30);
+
+    private readonly string _pluginId;
+    private readonly Func<TimeSpan> _clock;
+    private readonly Action<string> _sink;
+
+    private readonly object _gate = new();
+    private double _tokens = BurstLines;
+    private TimeSpan _lastRefill;
+    private long _suppressed;
+    private TimeSpan _noticeDue;
+
+    /// <param name="pluginId">The plugin's manifest id, tagged on every line.</param>
+    /// <param name="clock">Monotonic time for the budget (default: a <see cref="Stopwatch"/>); injectable so tests need no sleeps.</param>
+    /// <param name="sink">Where a finished line goes (default: <see cref="Trace.WriteLine(string)"/>).</param>
+    public TracePluginLog(string pluginId, Func<TimeSpan>? clock = null, Action<string>? sink = null)
+    {
+        _pluginId = pluginId;
+        var origin = Stopwatch.GetTimestamp();
+        _clock = clock ?? (() => Stopwatch.GetElapsedTime(origin));
+        _sink = sink ?? (static line => Trace.WriteLine(line));
+        _lastRefill = _clock();
+    }
+
     public void Debug(string message) => Write("debug", message, null);
     public void Info(string message) => Write("info", message, null);
     public void Warn(string message) => Write("warn", message, null);
@@ -315,16 +367,63 @@ internal sealed class TracePluginLog(string pluginId) : IPluginLog
     {
         try
         {
+            var notice = Admit(out var admitted);
+            if (notice is not null)
+                _sink($"Plugin {TextRules.ForDisplay(_pluginId, 150)} [warn]: {notice}");
+            if (!admitted)
+                return;
             // Text only: a plugin's message and exception are plugin-controlled (control characters,
             // overridden Message), and holding the exception would pin its load context.
-            var text = $"Plugin {TextRules.ForDisplay(pluginId, 150)} [{level}]: {TextRules.ForDisplay(message)}";
+            var text = $"Plugin {TextRules.ForDisplay(_pluginId, 150)} [{level}]: {TextRules.ForDisplay(message, MaxLineLength)}";
             if (exception is not null)
             {
                 var (typeName, exceptionMessage) = PluginHost.Summarise(exception);
                 text += $" ({typeName}: {exceptionMessage})";
             }
-            Trace.WriteLine(text);
+            _sink(TextRules.ForDisplay(text, MaxLineLength));
         }
         catch { /* logging must not throw into the plugin */ }
+    }
+
+    /// <summary>Takes a token if there is one; returns a "suppressed" notice that is due, if any.</summary>
+    private string? Admit(out bool admitted)
+    {
+        lock (_gate)
+        {
+            var now = _clock();
+            var elapsed = now - _lastRefill;
+            if (elapsed > TimeSpan.Zero)
+            {
+                _tokens = Math.Min(BurstLines, _tokens + elapsed.TotalSeconds * RefillLinesPerSecond);
+                _lastRefill = now;
+            }
+
+            admitted = _tokens >= 1;
+            string? notice = null;
+            if (admitted)
+            {
+                // Flush the count once the bucket has genuinely recovered (or the notice is overdue).
+                if (_suppressed > 0 && (_tokens >= RecoveredLines || now >= _noticeDue))
+                    notice = TakeNotice(now);
+                _tokens -= 1;
+            }
+            else
+            {
+                if (_suppressed == 0)
+                    _noticeDue = now + NoticeInterval;
+                _suppressed++;
+                if (now >= _noticeDue)
+                    notice = TakeNotice(now);
+            }
+            return notice;
+        }
+    }
+
+    private string TakeNotice(TimeSpan now)
+    {
+        var count = _suppressed;
+        _suppressed = 0;
+        _noticeDue = now + NoticeInterval;
+        return $"{count} log line{(count == 1 ? "" : "s")} suppressed (this plugin logs faster than {RefillLinesPerSecond:0.##} line per second after a burst of {BurstLines})";
     }
 }
