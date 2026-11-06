@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="10.1.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\EDNexus.Plugins.Hosting\EDNexus.Plugins.Hosting.csproj" />
+    <!--
+      Built for its side effect only: the sample's post-build step assembles the plugin folder
+      (samples/HelloCommander/out/<id>/) that these tests then load through the real host. The
+      sample's assembly is deliberately NOT referenced, so the test sees exactly what a user would.
+    -->
+    <ProjectReference Include="..\..\samples\HelloCommander\HelloCommander.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

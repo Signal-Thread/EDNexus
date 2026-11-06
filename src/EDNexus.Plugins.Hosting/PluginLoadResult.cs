@@ -135,9 +135,10 @@ public sealed class PluginUnloadResult
     public IReadOnlyList<string> Errors { get; }
 
     /// <summary>
-    /// True when a plugin event handler was still running when the unload wait expired
-    /// (<see cref="PluginHost.UnloadTimeout"/>). The plugin's code is still executing, so its load
-    /// context stays alive (and its assemblies locked) until that handler returns; the app should
+    /// True when <see cref="IEDNexusPlugin.Shutdown"/> had not returned within
+    /// <see cref="PluginHost.ShutdownTimeout"/>, or a plugin event handler was still running when
+    /// the unload wait expired (<see cref="PluginHost.UnloadTimeout"/>). The plugin's code is still
+    /// executing, so its load context stays alive (and its assemblies locked) until that call returns; the app should
     /// treat the plugin as <b>not</b> cleanly unloaded, e.g. refuse to replace its files. Also
     /// described in <see cref="Errors"/>.
     /// </summary>

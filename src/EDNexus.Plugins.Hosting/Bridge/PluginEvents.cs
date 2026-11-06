@@ -40,6 +40,7 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
 {
     private readonly JournalEventBus _bus;
     private readonly string _pluginId;
+    private readonly long _generation;
     private readonly bool _withholdSimulated;
     private readonly Func<bool> _isSimulated;
     private readonly Action<PluginHandlerError> _onError;
@@ -61,6 +62,7 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
     public PluginEvents(
         JournalEventBus bus,
         string pluginId,
+        long generation,
         bool withholdSimulated,
         Func<bool> isSimulated,
         Action<PluginHandlerError> onError,
@@ -69,6 +71,7 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
     {
         _bus = bus;
         _pluginId = pluginId;
+        _generation = generation;
         _withholdSimulated = withholdSimulated;
         _isSimulated = isSimulated;
         _onError = onError;
@@ -214,7 +217,7 @@ internal sealed class PluginEvents : IPluginEvents, IDisposable
             // Text only: the exception object belongs to the plugin, and a sink that kept it would
             // pin the plugin's load context.
             var (typeName, message) = PluginHost.Summarise(exception);
-            _onError(new PluginHandlerError(_pluginId, journalEvent.Event, typeName, message));
+            _onError(new PluginHandlerError(_pluginId, journalEvent.Event, typeName, message, _generation));
         }
         catch { /* a faulty error sink must not kill the plugin's pump */ }
     }

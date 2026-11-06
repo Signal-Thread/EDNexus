@@ -44,9 +44,10 @@ public sealed class PluginHost : IDisposable
 
     private readonly object _gate = new();
     private readonly Dictionary<string, LoadedPlugin> _loaded = new(StringComparer.Ordinal);
-    private readonly Func<PluginManifest, IReadOnlyCollection<string>?> _consent;
+    private readonly Func<PluginConsentRequest, IReadOnlyCollection<string>?> _consent;
     private readonly Func<PluginManifest, IReadOnlySet<string>, IPluginContext> _contextFactory;
     private TimeSpan _unloadTimeout = TimeSpan.FromSeconds(5);
+    private TimeSpan _shutdownTimeout = TimeSpan.FromSeconds(5);
     private bool _disposed;
     private bool _loading;
     private volatile PluginRecoveryResult? _recovery;
@@ -57,7 +58,10 @@ public sealed class PluginHost : IDisposable
     /// <param name="appVersion">The running EDNexus version, for <see cref="PluginManifest.MinAppVersion"/>.</param>
     /// <param name="consent">
     /// Required. Decides, for each plugin that passed the static checks and is about to be loaded,
-    /// whether it may run and which of its declared capabilities it is granted. Return
+    /// whether it may run and which of its declared capabilities it is granted. It receives a
+    /// <see cref="PluginConsentRequest"/>: the manifest plus SHA-256 hashes of the exact entry
+    /// assembly bytes the host is about to load and of the plugin folder's other files, so an
+    /// approval can be bound to the code and not only to <c>plugin.json</c>. Return
     /// <see langword="null"/> to deny: the plugin is reported as <see cref="PluginLoadStatus.Denied"/>
     /// and none of its code runs. Return a collection (possibly empty) to allow it with exactly those
     /// capabilities; anything the manifest does not declare is dropped. A callback that throws also
@@ -78,7 +82,7 @@ public sealed class PluginHost : IDisposable
     public PluginHost(
         string pluginsRoot,
         SemanticVersion appVersion,
-        Func<PluginManifest, IReadOnlyCollection<string>?> consent,
+        Func<PluginConsentRequest, IReadOnlyCollection<string>?> consent,
         Func<PluginManifest, IReadOnlySet<string>, IPluginContext> contextFactory)
     {
         ArgumentNullException.ThrowIfNull(pluginsRoot);
@@ -112,6 +116,28 @@ public sealed class PluginHost : IDisposable
         {
             ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero);
             _unloadTimeout = value;
+        }
+    }
+
+    /// <summary>
+    /// How long unloading a plugin waits for its <see cref="IEDNexusPlugin.Shutdown"/> to return
+    /// before giving up on it. <c>Shutdown</c> runs on a worker thread of its own, never the
+    /// caller's. If it has not returned in time the plugin is reported as stuck
+    /// (<see cref="PluginUnloadResult.Stuck"/>) and the unload carries on without it: the context is
+    /// still disposed and everything else released, but the plugin's code is still executing so its
+    /// load context cannot finish unloading until <c>Shutdown</c> returns (a late return, or a late
+    /// exception, is discarded). Independent of <see cref="UnloadTimeout"/>, which only bounds the
+    /// wait for event handlers after the context is disposed, so a plugin stuck in both can take
+    /// up to the sum of the two. Default 5 seconds; zero does not wait at all.
+    /// </summary>
+    public TimeSpan ShutdownTimeout
+    {
+        get => _shutdownTimeout;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(value, TimeSpan.FromMilliseconds(int.MaxValue));
+            _shutdownTimeout = value;
         }
     }
 
@@ -251,7 +277,7 @@ public sealed class PluginHost : IDisposable
             }
             // Disposed mid-pass (e.g. app shutdown): don't leave this one running.
             if (disposed)
-                plugin.Unload(UnloadTimeout);
+                plugin.Unload(ShutdownTimeout, UnloadTimeout);
         }
         return result;
     }
@@ -351,7 +377,7 @@ public sealed class PluginHost : IDisposable
             if (!_loaded.Remove(id, out plugin))
                 return null;
         }
-        return plugin.Unload(UnloadTimeout);
+        return plugin.Unload(ShutdownTimeout, UnloadTimeout);
     }
 
     /// <summary>
@@ -368,7 +394,7 @@ public sealed class PluginHost : IDisposable
         }
         var results = new List<PluginUnloadResult>(plugins.Count);
         foreach (var plugin in plugins)
-            results.Add(plugin.Unload(UnloadTimeout)); // LoadedPlugin.Unload never throws
+            results.Add(plugin.Unload(ShutdownTimeout, UnloadTimeout)); // LoadedPlugin.Unload never throws
         return results;
     }
 
@@ -478,11 +504,21 @@ public sealed class PluginHost : IDisposable
             && PluginCompatibility.CheckBuiltAgainst(built, HostSdkVersion) is { } builtAgainst)
             return Result(PluginLoadStatus.Incompatible, builtAgainst);
 
+        // Bind the approval to the code. The entry assembly hash is of `image`, the very bytes loaded
+        // below, so it cannot be raced. The other files (dependencies, native libraries, deps.json)
+        // are loaded lazily by path after this point, so their hash only guards against a package
+        // being swapped or updated between approvals, not against a local actor with write access
+        // racing the load (who can already run code as the user). See PluginContentHash.
+        var entryHash = PluginContentHash.OfAssembly(image);
+        var files = PluginContentHash.OfFolder(dir, entryPath);
+        if (files.Hash is null)
+            return Result(files.Unreadable ? PluginLoadStatus.Failed : PluginLoadStatus.Rejected, files.Problem ?? "the plugin folder could not be hashed");
+
         // Last gate before any plugin code is loaded.
         IReadOnlySet<string> granted;
         try
         {
-            var decision = _consent(manifest);
+            var decision = _consent(new PluginConsentRequest(manifest, entryHash, files.Hash));
             if (decision is null)
                 return Result(PluginLoadStatus.Denied, "the user has not allowed this plugin to run");
             granted = new HashSet<string>(manifest.Capabilities.Where(c => decision.Contains(c, StringComparer.Ordinal)), StringComparer.Ordinal);
@@ -547,7 +583,7 @@ public sealed class PluginHost : IDisposable
                 // Initialize may have started work before throwing; give the plugin its one
                 // chance to stop it before its context goes away.
                 if (initializing is not null)
-                    TryShutdown(initializing, reasons);
+                    TryShutdown(initializing, ShutdownTimeout, reasons);
             }
             finally
             {
@@ -656,17 +692,58 @@ public sealed class PluginHost : IDisposable
         }
     }
 
-    /// <summary>Calls <see cref="IEDNexusPlugin.Shutdown"/>, recording (never throwing) a failure.</summary>
-    internal static void TryShutdown(IEDNexusPlugin instance, List<string> errors)
+    /// <summary>
+    /// Calls <see cref="IEDNexusPlugin.Shutdown"/> on a dedicated worker thread and waits up to
+    /// <paramref name="timeout"/> for it, recording (never throwing) a failure. Returns
+    /// <see langword="true"/> (and records why) when it had not returned in time: the plugin's code is
+    /// then still executing. The worker is a background thread that owns a private result holder, so
+    /// a late return or exception can neither fault unobserved nor touch <paramref name="errors"/> or
+    /// any other host state that has moved on.
+    /// </summary>
+    internal static bool TryShutdown(IEDNexusPlugin instance, TimeSpan timeout, List<string> errors)
     {
+        var call = new ShutdownCall();
+        var worker = new Thread(() =>
+        {
+            try
+            {
+                instance.Shutdown();
+            }
+            catch (Exception ex)
+            {
+                call.Error = Describe("Shutdown threw", ex);   // text only: never hold the exception
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "EDNexus plugin Shutdown",
+        };
         try
         {
-            instance.Shutdown();
+            worker.Start();
         }
         catch (Exception ex)
         {
-            errors.Add(Describe("Shutdown threw", ex));
+            errors.Add(Describe("Shutdown could not be started", ex));
+            return false;
         }
+
+        if (worker.Join(timeout))
+        {
+            // Join returning true makes the worker's write to Error visible here.
+            if (call.Error is { } error)
+                errors.Add(error);
+            return false;
+        }
+        errors.Add($"stuck shutdown: Shutdown did not return within {timeout.TotalSeconds:0.##}s, "
+            + "so the plugin's code is still executing and its load context cannot be fully unloaded until it returns");
+        return true;
+    }
+
+    /// <summary>What a <see cref="TryShutdown"/> worker reports; only read after the worker was joined.</summary>
+    private sealed class ShutdownCall
+    {
+        public string? Error;
     }
 
     /// <summary>

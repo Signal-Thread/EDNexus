@@ -94,21 +94,46 @@ public sealed class PluginHarnessTests : IDisposable
     }
 
     [Fact]
-    public void Capabilities_are_granted_as_declared_and_storage_is_a_labelled_stub()
+    public void Capabilities_are_granted_as_declared_and_storage_is_the_real_sandboxed_backend()
     {
         Install(_root, "com.example.granted", "GrantedPlugin", "\"events\",\"storage\"",
-            initBody: "context.Storage.SetString(\"k\", \"v\"); context.Storage.Remove(\"k\");");
+            initBody: "context.Storage.SetString(\"k\", \"v\"); context.Storage.SetString(\"gone\", \"x\"); context.Storage.Remove(\"gone\");");
         // Declares only events: touching storage must be refused, so the plugin fails to initialise.
         Install(_root, "com.example.denied", "DeniedPlugin", "\"events\"",
             initBody: "context.Storage.SetString(\"k\", \"v\");");
+        // The real backend's key rules apply (the old in-memory stub would have accepted this key).
+        Install(_root, "com.example.badkey", "BadKeyPlugin", "\"events\",\"storage\"",
+            initBody: "context.Storage.SetString(\"not a valid key!\", \"v\");");
         using var harness = Harness(_root);
         var report = harness.Load()!;
 
         Assert.Equal(PluginLoadStatus.Loaded, report.Plugins.Single(p => p.FolderName == "com.example.granted").Status);
         Assert.Equal(PluginLoadStatus.Failed, report.Plugins.Single(p => p.FolderName == "com.example.denied").Status);
+        Assert.Equal(PluginLoadStatus.Failed, report.Plugins.Single(p => p.FolderName == "com.example.badkey").Status);
         var text = Summary(harness);
-        Assert.Contains("1 write(s), 1 remove(s) (in-memory stub", text);
+        Assert.Contains("2 write(s), 1 remove(s) (real sandboxed storage", text);
+        Assert.DoesNotContain("in-memory stub", text);
         Assert.Contains(harness.Problems, p => p.Contains("com.example.denied"));
+        // The value really reached the plugin's data folder under the plugins root.
+        var data = Path.Combine(_root, "com.example.granted", "data");
+        Assert.True(Directory.Exists(data));
+        Assert.NotEmpty(Directory.GetFiles(data, "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public void Single_plugin_storage_goes_to_the_scratch_copy_and_never_to_the_source_folder()
+    {
+        Install(_root, "com.example.solo", "SoloPlugin", "\"events\",\"storage\"",
+            initBody: "context.Storage.SetString(\"k\", \"v\");");
+        var harness = Harness(single: Path.Combine(_root, "com.example.solo"));
+        var scratch = harness.ScratchRoot!;
+        harness.Load();
+
+        Assert.True(Directory.Exists(Path.Combine(scratch, "com.example.solo", "data")));
+        Assert.False(Directory.Exists(Path.Combine(_root, "com.example.solo", "data")));
+        Assert.Contains("scratch copy, removed on exit", Summary(harness));
+        harness.Dispose();
+        Assert.False(Directory.Exists(scratch));
     }
 
     [Fact]

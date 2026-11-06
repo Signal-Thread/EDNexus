@@ -352,6 +352,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         // The dev-mode radio simulation listens on this host's bus, where the 🎲 publishes.
         _radio.AttachSimulation(host.Bus);
+
+        // One plugin runtime per engine (a bridge is bound to one bus). Built here, before the engine
+        // starts publishing, but nothing is loaded until the journal replay has finished (see
+        // StartHostAsync). Never throws: a plugin problem must not stop the engine being built.
+        _boot.Plugins.Attach(host.Bus, host.State);
         return host;
     }
 
@@ -392,6 +397,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            // Plugins go before the engine they read from. Bounded: a plugin stuck in a handler
+            // must not hold up closing, and the process is ending anyway.
+            if (!_boot.Plugins.ShutdownForExit(TimeSpan.FromSeconds(3)))
+                Trace.TraceWarning("Plugins: still shutting down at exit; abandoning them.");
+
             // App exit only (a host rebuild goes through RebuildHost): the card must not stay public
             // after the app has gone. Bounded, so an unreachable EBS cannot hold up closing; whatever
             // does not finish is in the cleanup queue and is retried on the next launch.
@@ -434,6 +444,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         UpdateJournalStatus();
         Refresh();
+
+        // Plugins load last and off the UI thread, on every engine start, so nothing a plugin does can
+        // delay the dashboard. The task never faults; a failing plugin is contained and traced.
+        _boot.Plugins.StartAsync().Forget("Plugins: start");
     }
 
     private void UpdateJournalStatus()
@@ -715,6 +729,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// The longest an engine rebuild waits for the plugins to detach. A well-behaved plugin takes
+    /// milliseconds; one stuck in <c>Shutdown</c> costs the host's shutdown timeout and one stuck in
+    /// a handler its unload timeout (5 s each by default), so this covers a single such plugin with
+    /// room to spare while still bounding the "Loading journal…" state if several are.
+    /// </summary>
+    private static readonly TimeSpan PluginDetachTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Replace the engine host. Disposing the old one waits on its watcher and flushes its reporters
     /// (seconds, in the worst case) and starting the new one replays the journal, so both run off the
     /// UI thread; the cards sit out the swap rather than reading a disposed engine. Rebuilds are
@@ -738,7 +760,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         var old = _host;
         try
         {
-            await Task.Run(old.Dispose);
+            // Plugins first: their bridge reads the engine that is about to be disposed.
+            // Bounded: a plugin that will not stop must not hold the rebuild forever. If the wait
+            // expires the old engine is disposed anyway (logged); see PluginService.Detach(TimeSpan).
+            await Task.Run(() =>
+            {
+                _boot.Plugins.Detach(PluginDetachTimeout);
+                old.Dispose();
+            });
         }
         catch (Exception ex)
         {

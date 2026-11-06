@@ -55,12 +55,16 @@ public class PluginHostSafetyTests
     [Fact]
     public void LoadAll_ConsentDenied_RunsNoPluginCodeAndBuildsNoContext()
     {
+        // A plugin id no other test uses: the last assertion looks for the load context by name across
+        // the whole process, and test classes run in parallel, so a shared id (com.test.alpha) would
+        // see another class's perfectly legitimate load of it.
+        const string Id = "com.test.consentdenied";
         using var dir = new TempDir();
-        WriteStandard(dir.Path, "com.test.alpha", "Alpha");
+        WriteStandard(dir.Path, Id, "ConsentDenied");
         var contexts = new RecordingContexts();
         using var host = contexts.Host(dir.Path, consent: Consent.DenyAll);
 
-        var result = Single(host.LoadAll(), "com.test.alpha");
+        var result = Single(host.LoadAll(), Id);
 
         Assert.Equal(PluginLoadStatus.Denied, result.Status);
         Assert.Contains("not allowed", result.ReasonSummary);
@@ -68,7 +72,7 @@ public class PluginHostSafetyTests
         Assert.Empty(host.Loaded);
         Assert.Empty(contexts.Lines);       // Initialize never ran
         Assert.Empty(contexts.Granted);     // the factory was never asked for a context
-        Assert.DoesNotContain(AssemblyLoadContext.All, c => c.Name == "EDNexus plugin com.test.alpha"); // not even loaded
+        Assert.DoesNotContain(AssemblyLoadContext.All, c => c.Name == "EDNexus plugin " + Id); // not even loaded
     }
 
     [Fact]
@@ -81,10 +85,10 @@ public class PluginHostSafetyTests
         WriteFolder(dir.Path, "com.test.broken", "{ not json");
         var asked = new List<string>();
         var contexts = new RecordingContexts();
-        using var host = contexts.Host(dir.Path, consent: manifest =>
+        using var host = contexts.Host(dir.Path, consent: request =>
         {
-            asked.Add(manifest.Id);
-            return manifest.Id == "com.test.alpha" ? manifest.Capabilities : null;
+            asked.Add(request.Manifest.Id);
+            return request.Manifest.Id == "com.test.alpha" ? request.Manifest.Capabilities : null;
         });
 
         var report = host.LoadAll();
@@ -105,12 +109,12 @@ public class PluginHostSafetyTests
         WriteStandard(dir.Path, "com.test.beta", "Beta", capabilities: "\"events\"");
         WriteStandard(dir.Path, "com.test.gamma", "Gamma", capabilities: "\"events\", \"network\"");
         var contexts = new RecordingContexts();
-        using var host = contexts.Host(dir.Path, consent: manifest => manifest.Id switch
+        using var host = contexts.Host(dir.Path, consent: request => request.Manifest.Id switch
         {
             // The user switched storage off, and the callback also names things the manifest never declared.
             "com.test.alpha" => ["events", "state", "network", "ui.overlay", "bogus"],
             "com.test.beta" => [],                       // allowed to run, granted nothing
-            _ => manifest.Capabilities,
+            _ => request.Manifest.Capabilities,
         });
 
         host.LoadAll();
@@ -128,8 +132,8 @@ public class PluginHostSafetyTests
         WriteStandard(dir.Path, "com.test.alpha", "Alpha");
         WriteStandard(dir.Path, "com.test.zulu", "Zulu");
         var contexts = new RecordingContexts();
-        using var host = contexts.Host(dir.Path, consent: manifest =>
-            manifest.Id == "com.test.alpha" ? throw new InvalidOperationException("consent store unreadable") : manifest.Capabilities);
+        using var host = contexts.Host(dir.Path, consent: request =>
+            request.Manifest.Id == "com.test.alpha" ? throw new InvalidOperationException("consent store unreadable") : request.Manifest.Capabilities);
 
         var report = host.LoadAll();
 

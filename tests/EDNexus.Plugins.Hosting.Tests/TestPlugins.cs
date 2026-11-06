@@ -143,10 +143,10 @@ internal static class TestPlugins
 internal static class Consent
 {
     /// <summary>Grants every capability a plugin declares.</summary>
-    public static readonly Func<PluginManifest, IReadOnlyCollection<string>?> AllowAll = manifest => manifest.Capabilities;
+    public static readonly Func<PluginConsentRequest, IReadOnlyCollection<string>?> AllowAll = request => request.Manifest.Capabilities;
 
     /// <summary>Refuses every plugin.</summary>
-    public static readonly Func<PluginManifest, IReadOnlyCollection<string>?> DenyAll = _ => null;
+    public static readonly Func<PluginConsentRequest, IReadOnlyCollection<string>?> DenyAll = _ => null;
 }
 
 /// <summary>A context factory that records every log line (per plugin id), every dispose and each grant.</summary>
@@ -165,7 +165,7 @@ internal sealed class RecordingContexts
         return new Context(manifest, this);
     };
 
-    public PluginHost Host(string root, string appVersion = "1.0.0", Func<PluginManifest, IReadOnlyCollection<string>?>? consent = null)
+    public PluginHost Host(string root, string appVersion = "1.0.0", Func<PluginConsentRequest, IReadOnlyCollection<string>?>? consent = null)
         => new(root, SemanticVersion.Parse(appVersion), consent ?? Consent.AllowAll, Factory);
 
     private sealed class Context(PluginManifest manifest, RecordingContexts owner) : IPluginContext, IDisposable

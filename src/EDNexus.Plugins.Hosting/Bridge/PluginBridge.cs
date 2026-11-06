@@ -59,6 +59,7 @@ public sealed class PluginBridge : IDisposable
     private readonly CommanderStatePublisher _snapshots;
     private readonly PluginBridgeOptions _options;
     private readonly Func<bool> _isSimulated;
+    private long _attachCount;
 
     /// <param name="bus">The engine bus to observe. The bridge only ever subscribes to it.</param>
     /// <param name="state">
@@ -120,8 +121,12 @@ public sealed class PluginBridge : IDisposable
         // this session is disposed (e.g. the app tears the dev-mode host down first).
         var onError = _options.HandlerError ?? (static _ => { });
 
+        // Numbered per bridge, never reused: errors from this session carry it, so a sink can tell
+        // them from the errors of an earlier session of the same plugin (see PluginHandlerError).
+        var generation = Interlocked.Increment(ref _attachCount);
+
         var events = granted.Contains(PluginCapabilities.Events)
-            ? new PluginEvents(_bus, manifest.Id, networked, _isSimulated, onError, _options.QueueCapacity, _options.QueueByteCapacity)
+            ? new PluginEvents(_bus, manifest.Id, generation, networked, _isSimulated, onError, _options.QueueCapacity, _options.QueueByteCapacity)
             : null;
 
         var view = granted.Contains(PluginCapabilities.State)
@@ -130,6 +135,7 @@ public sealed class PluginBridge : IDisposable
 
         return new PluginBridgeSession(
             manifest.Id,
+            generation,
             events,
             events ?? (IPluginEvents)new DeniedPluginEvents(manifest.Id),
             view,
@@ -182,9 +188,10 @@ public sealed class PluginBridgeOptions
     public string? PluginsRoot { get; init; }
 
     /// <summary>
-    /// Receives every exception a plugin handler throws, tagged with the plugin's id, so the host
-    /// can log it and quarantine a repeat offender. Called on the plugin's dispatch thread.
-    /// Exceptions it throws are swallowed.
+    /// Receives every exception a plugin handler throws, tagged with the plugin's id and the
+    /// <see cref="PluginHandlerError.Generation"/> of the session it came from, so the host can log
+    /// it and quarantine a repeat offender. Called on the plugin's dispatch thread. Exceptions it
+    /// throws are swallowed.
     /// </summary>
     public Action<PluginHandlerError>? HandlerError { get; init; }
 
@@ -215,7 +222,13 @@ public sealed class PluginBridgeOptions
 /// <param name="EventName">The journal event being delivered.</param>
 /// <param name="ExceptionType">The full name of the exception type the handler threw.</param>
 /// <param name="Message">The exception's message, sanitised for display; never throws, even if the plugin's exception does.</param>
-public sealed record PluginHandlerError(string PluginId, string EventName, string ExceptionType, string Message);
+/// <param name="Generation">
+/// Which <see cref="PluginBridge.Attach"/> produced the failing handler: the same value as
+/// <see cref="PluginBridgeSession.Generation"/>. A plugin that is reloaded gets a new session with
+/// a higher number, so a sink can drop a report from an old copy that is still running (stuck in a
+/// handler) rather than charge it to the new one. 0 means "not stamped" (an error built by hand).
+/// </param>
+public sealed record PluginHandlerError(string PluginId, string EventName, string ExceptionType, string Message, long Generation = 0);
 
 /// <summary>
 /// One plugin's attachment to a <see cref="PluginBridge"/>: the <see cref="IPluginEvents"/> and
@@ -234,6 +247,7 @@ public sealed class PluginBridgeSession : IDisposable, IPluginSessionControl
 
     internal PluginBridgeSession(
         string pluginId,
+        long generation,
         PluginEvents? dispatcher,
         IPluginEvents events,
         CommanderStateView? view,
@@ -242,6 +256,7 @@ public sealed class PluginBridgeSession : IDisposable, IPluginSessionControl
         IUiRegistry ui)
     {
         PluginId = pluginId;
+        Generation = generation;
         _dispatcher = dispatcher;
         _view = view;
         Events = events;
@@ -252,6 +267,13 @@ public sealed class PluginBridgeSession : IDisposable, IPluginSessionControl
 
     /// <summary>The plugin this session belongs to.</summary>
     public string PluginId { get; }
+
+    /// <summary>
+    /// This session's number within its bridge (1, 2, ...): every <see cref="PluginBridge.Attach"/>
+    /// takes the next one, so a reloaded plugin's new session always outranks the old. Stamped on
+    /// each <see cref="PluginHandlerError"/> the session reports.
+    /// </summary>
+    public long Generation { get; }
 
     /// <summary>The plugin's event feed, for <see cref="IPluginContext.Events"/>.</summary>
     public IPluginEvents Events { get; }

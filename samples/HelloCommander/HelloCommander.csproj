@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A plugin is an ordinary class library that references ONLY the SDK contract
+    (EDNexus.Plugins.Abstractions). Never reference EDNexus.Core, EDNexus.Plugins.Hosting or any other
+    EDNexus.* / EliteDangerous.* assembly: the host does not let a plugin bind to those, so such a
+    plugin fails to load. Do not lean on the host's third-party libraries (Avalonia, say) either: the
+    host does not block them, but they are not a contract and can change on any host update, so ship
+    your own copy of any third-party library you use.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>HelloCommander</AssemblyName>
+    <RootNamespace>HelloCommander</RootNamespace>
+    <!-- Must match "id" in plugin.json: the install folder is named after it. -->
+    <PluginId>com.ednexus.samples.hellocommander</PluginId>
+    <!-- Where the ready-to-run plugin folder is assembled (git-ignored by the repo's out/ rule). -->
+    <PluginOutputDir>$(MSBuildProjectDirectory)/out/$(PluginId)/</PluginOutputDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Inside this repo we reference the SDK project. Outside it, reference the built
+      EDNexus.Plugins.Abstractions.dll instead (see docs/PLUGINS.md):
+        <Reference Include="EDNexus.Plugins.Abstractions">
+          <HintPath>path/to/EDNexus.Plugins.Abstractions.dll</HintPath>
+          <Private>false</Private>
+        </Reference>
+      Private=false keeps the SDK out of the plugin folder: the host always binds the plugin to ITS
+      copy of the SDK, so a bundled one is dead weight.
+    -->
+    <ProjectReference Include="..\..\src\EDNexus.Plugins.Abstractions\EDNexus.Plugins.Abstractions.csproj">
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+
+  <!-- After every build, lay the plugin out exactly as the host expects: <id>/plugin.json + <id>/HelloCommander.dll. -->
+  <Target Name="AssemblePluginFolder" AfterTargets="Build">
+    <MakeDir Directories="$(PluginOutputDir)" />
+    <Copy SourceFiles="$(TargetPath);$(MSBuildProjectDirectory)/plugin.json" DestinationFolder="$(PluginOutputDir)" />
+    <Message Importance="high" Text="Hello Commander plugin folder: $(PluginOutputDir)" />
+  </Target>
+
+</Project>

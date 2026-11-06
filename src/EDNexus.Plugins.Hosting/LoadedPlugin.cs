@@ -63,15 +63,18 @@ public sealed class LoadedPlugin
     }
 
     /// <summary>
-    /// Calls <see cref="IEDNexusPlugin.Shutdown"/> (contained), disposes the plugin's context when
-    /// it is <see cref="IDisposable"/>, drops every reference to plugin code and unloads the load
+    /// Calls <see cref="IEDNexusPlugin.Shutdown"/> (contained, on a worker, waiting at most
+    /// <paramref name="shutdownTimeout"/>), disposes the plugin's context when it is
+    /// <see cref="IDisposable"/>, drops every reference to plugin code and unloads the load
     /// context. Idempotent, and never throws for plugin misbehaviour: problems are returned in
     /// <see cref="PluginUnloadResult.Errors"/>. When the context is an
     /// <see cref="IPluginSessionControl"/>, waits up to <paramref name="handlerExitTimeout"/> after
-    /// disposing it for in-flight handlers, and reports a stuck one instead of claiming a clean unload.
+    /// disposing it for in-flight handlers. A <c>Shutdown</c> that does not return in time, or a
+    /// handler that does not exit, is reported as stuck instead of claiming a clean unload; the
+    /// context is disposed and the load context released either way.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    internal PluginUnloadResult Unload(TimeSpan handlerExitTimeout)
+    internal PluginUnloadResult Unload(TimeSpan shutdownTimeout, TimeSpan handlerExitTimeout)
     {
         IEDNexusPlugin? instance;
         IPluginContext? context;
@@ -92,7 +95,7 @@ public sealed class LoadedPlugin
         try
         {
             if (instance is not null)
-                PluginHost.TryShutdown(instance, errors);
+                stuck = PluginHost.TryShutdown(instance, shutdownTimeout, errors);
         }
         catch (Exception ex)
         {
@@ -103,7 +106,7 @@ public sealed class LoadedPlugin
             // Whatever Shutdown did, the context and load context are always released.
             try
             {
-                stuck = PluginHost.DisposeContext(context, handlerExitTimeout, errors);
+                stuck |= PluginHost.DisposeContext(context, handlerExitTimeout, errors);
             }
             catch (Exception ex)
             {

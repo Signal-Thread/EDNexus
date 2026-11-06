@@ -282,6 +282,33 @@ public sealed class PluginBridgeTests : IDisposable
     }
 
     [Fact]
+    public void EachAttach_GetsAHigherGeneration_AndItsHandlerErrorsCarryIt()
+    {
+        var errors = new BlockingCollection<PluginHandlerError>();
+        var bridge = Bridge(new PluginBridgeOptions { HandlerError = errors.Add });
+        // The same plugin attached twice, as a reload does: two sessions, told apart only by generation.
+        var first = Attach(bridge, "gen.plugin", PluginCapabilities.Events);
+        var second = Attach(bridge, "gen.plugin", PluginCapabilities.Events);
+        var other = Attach(bridge, "gen.other", PluginCapabilities.Events);
+
+        Assert.True(first.Generation > 0);
+        Assert.True(second.Generation > first.Generation);
+        Assert.True(other.Generation > second.Generation);
+
+        first.Events.SubscribeAny(_ => throw new InvalidOperationException("old"));
+        Publish(Jump);
+        Assert.True(errors.TryTake(out var fromFirst, Wait));
+        Assert.Equal(first.Generation, fromFirst.Generation);
+
+        second.Events.SubscribeAny(_ => throw new InvalidOperationException("new"));
+        first.Dispose();
+        Publish(Jump);
+        Assert.True(errors.TryTake(out var fromSecond, Wait));
+        Assert.Equal("new", fromSecond.Message);
+        Assert.Equal(second.Generation, fromSecond.Generation);
+    }
+
+    [Fact]
     public void ThrowingHandler_IsReportedAndIsolated_FromItsSiblingsAndOtherPlugins()
     {
         var errors = new BlockingCollection<PluginHandlerError>();
