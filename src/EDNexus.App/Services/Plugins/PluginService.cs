@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using EDNexus.Core.Dev;
 using EDNexus.Core.Journal;
 using EDNexus.Core.Settings;
 using EDNexus.Core.State;
@@ -45,6 +46,7 @@ public sealed class PluginService : IDisposable
     private readonly Func<bool> _isSimulated;
     private readonly SemanticVersion _appVersion;
     private readonly string? _pluginsRoot;
+    private readonly bool _noPluginsRoot;
     private readonly Func<PluginConsentRequest, IReadOnlyCollection<string>?> _consent;
     private readonly Action<Exception> _onError;
     private readonly AppSettings _settings;
@@ -61,8 +63,10 @@ public sealed class PluginService : IDisposable
     /// <param name="isSimulated">True while developer mode feeds the engine fabricated events.</param>
     /// <param name="onError">Receives host faults (never a plugin's own misbehaviour); default: ignore.</param>
     /// <param name="appVersion">The running app version; default read from the entry assembly.</param>
-    /// <param name="pluginsRoot">The plugins root; default <see cref="PluginPaths.Resolve()"/>. Tests only.</param>
+    /// <param name="pluginsRoot">The plugins root. Default: the per-user folder (<see cref="PluginPaths.DefaultRoot"/>); the <c>EDNEXUS_PLUGINS_DIR</c> override is honoured only when developer tools are available (<see cref="ResolvePluginsRoot"/>). Tests only.</param>
     /// <param name="consent">Replaces the default deny-unless-granted policy. The future consent UI plugs in here or through <see cref="Grants"/>.</param>
+    /// <param name="developerTools">Whether developer tools are available; default <see cref="FeatureFlags.DeveloperTools"/>. Tests only.</param>
+    /// <param name="getEnvironmentVariable">Environment lookup for the plugins-root override; default the process environment. Tests only.</param>
     public PluginService(
         AppSettings settings,
         Action<AppSettings> save,
@@ -71,7 +75,9 @@ public sealed class PluginService : IDisposable
         Action<Exception>? onError = null,
         SemanticVersion? appVersion = null,
         string? pluginsRoot = null,
-        Func<PluginConsentRequest, IReadOnlyCollection<string>?>? consent = null)
+        Func<PluginConsentRequest, IReadOnlyCollection<string>?>? consent = null,
+        bool? developerTools = null,
+        Func<string, string?>? getEnvironmentVariable = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(save);
@@ -84,7 +90,10 @@ public sealed class PluginService : IDisposable
         _isSimulated = isSimulated;
         _onError = onError ?? (static _ => { });
         _appVersion = appVersion ?? ResolveAppVersion();
-        _pluginsRoot = pluginsRoot;
+        // Resolved here, never left to PluginRuntime: with a null root it would consult the
+        // EDNEXUS_PLUGINS_DIR override itself, whatever the flag says.
+        _pluginsRoot = pluginsRoot ?? ResolvePluginsRoot(developerTools ?? FeatureFlags.DeveloperTools, getEnvironmentVariable ?? Environment.GetEnvironmentVariable);
+        _noPluginsRoot = _pluginsRoot is null;
         _consent = consent ?? PluginConsent.FromGrants(Grants);
     }
 
@@ -137,6 +146,11 @@ public sealed class PluginService : IDisposable
         try
         {
             Detach();   // one runtime per engine; a leftover one is bound to a bus that is going away
+            if (_noPluginsRoot)
+            {
+                Trace.TraceInformation("Plugins: no per-user plugins folder could be determined; plugins are off.");
+                return false;
+            }
             var runtime = PluginRuntime.Create(bus, state, new PluginRuntimeOptions
             {
                 PluginsRoot = _pluginsRoot,
@@ -381,6 +395,17 @@ public sealed class PluginService : IDisposable
         try { _onError(ex); }
         catch { /* reporting a fault must not become one */ }
     }
+
+    /// <summary>
+    /// The plugins root the app uses: the per-user folder, or, only when <paramref name="developerTools"/>
+    /// is true (<see cref="FeatureFlags.DeveloperTools"/>), the <c>EDNEXUS_PLUGINS_DIR</c> override
+    /// (<see cref="PluginPaths.Resolve(Func{string, string?})"/>). A shipped build, where developer
+    /// tools are stripped, must not let an environment variable (set by anything that launches it,
+    /// and possibly a UNC share on Windows) redirect where plugin code is loaded from. Null when no
+    /// per-user data folder exists: the app then runs with no plugins.
+    /// </summary>
+    internal static string? ResolvePluginsRoot(bool developerTools, Func<string, string?> getEnvironmentVariable)
+        => developerTools ? PluginPaths.Resolve(getEnvironmentVariable) : PluginPaths.DefaultRoot();
 
     /// <summary>The app's version for plugin <c>minAppVersion</c> gating: the entry assembly's informational version minus any <c>+build</c> suffix.</summary>
     internal static SemanticVersion ResolveAppVersion()

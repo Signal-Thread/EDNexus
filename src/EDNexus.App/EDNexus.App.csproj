@@ -24,7 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- CrashReporting's drop-plugin-crashes decision is tested without a Sentry round trip. -->
+    <!-- Internal seams the App tests drive: CrashReporting (drop-plugin-crashes decision, no Sentry round trip) and PluginService.ResolvePluginsRoot. -->
     <InternalsVisibleTo Include="EDNexus.App.Tests" />
   </ItemGroup>
 
