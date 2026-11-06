@@ -318,7 +318,7 @@ public sealed class PluginServiceTests : IDisposable
     {
         const string id = "com.test.app.stuckshutdown";
         InstallBlockedInShutdown(id);
-        var service = Service(consent: manifest => manifest.Capabilities);
+        var service = Service(consent: request => request.Manifest.Capabilities);
         var (bus, state) = Engine();
         service.Attach(bus, state);
         await service.StartAsync();
