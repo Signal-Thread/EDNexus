@@ -98,6 +98,8 @@ public sealed class PluginSupervisor : IDisposable
         public long Attach;
         /// <summary>Whether <see cref="RecordAttach"/> has ever been called for this plugin; only then are session numbers enforced.</summary>
         public bool AttachTracked;
+        /// <summary>Whether the latest unload of this plugin reported <see cref="PluginUnloadResult.Stuck"/> (its code may still be executing); reset by every unload.</summary>
+        public bool UnloadStuck;
     }
 
     /// <summary>
@@ -144,6 +146,18 @@ public sealed class PluginSupervisor : IDisposable
     {
         lock (_gate)
             return _entries.TryGetValue(id, out var e) ? Snapshot(id, e) : null;
+    }
+
+    /// <summary>
+    /// Whether the plugin's latest unload (disable, reload, quarantine or removal) left its code
+    /// possibly still executing (<see cref="PluginUnloadResult.Stuck"/>: a <c>Shutdown</c> or an event
+    /// handler had not returned within its bound). False if the id is unknown or the plugin was never
+    /// unloaded. Each unload overwrites it, so it describes the most recent one only.
+    /// </summary>
+    public bool LastUnloadStuck(string id)
+    {
+        lock (_gate)
+            return _entries.TryGetValue(id, out var e) && e.UnloadStuck;
     }
 
     /// <summary>
@@ -521,6 +535,7 @@ public sealed class PluginSupervisor : IDisposable
     private string? UnloadQuietly(string id)
     {
         var unloaded = _host.Unload(id);
+        Mutate(id, e => e.UnloadStuck = unloaded?.Stuck ?? false);
         return unloaded is { Errors.Count: > 0 }
             ? TextRules.ForDisplay("while unloading: " + string.Join("; ", unloaded.Errors), 500)
             : null;

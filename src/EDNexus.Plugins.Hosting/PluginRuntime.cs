@@ -45,6 +45,9 @@ public sealed class PluginRuntimeOptions
     /// <summary>How long an unload waits for a stuck handler; default 5 seconds.</summary>
     public TimeSpan? UnloadTimeout { get; init; }
 
+    /// <summary>How long an unload waits for a plugin's <c>Shutdown</c> to return; default 5 seconds (<see cref="PluginHost.ShutdownTimeout"/>).</summary>
+    public TimeSpan? ShutdownTimeout { get; init; }
+
     /// <summary>
     /// Called with every handler error, on the plugin's dispatch thread, before it is passed to the
     /// supervisor (exceptions swallowed). For logging and tooling.
@@ -111,6 +114,7 @@ public sealed class PluginRuntime : IDisposable
             Host = new PluginHost(root, options.AppVersion, options.Consent, BuildContext)
             {
                 UnloadTimeout = options.UnloadTimeout ?? TimeSpan.FromSeconds(5),
+                ShutdownTimeout = options.ShutdownTimeout ?? TimeSpan.FromSeconds(5),
             };
             Supervisor = new PluginSupervisor(Host, options.EnablementStore, options.FaultPolicy);
         }
@@ -184,7 +188,9 @@ public sealed class PluginRuntime : IDisposable
     /// Revoking is not disabling: no disable flag is persisted, so a later grant lets the plugin run
     /// again without an <see cref="PluginSupervisor.Enable"/>. An unknown id, a plugin that is not
     /// running, or a repeat call is a no-op for that part. Never throws (a grant store or unload
-    /// failure is absorbed; check <see cref="PluginRevocation.StillRunning"/>). Runs plugin code
+    /// failure is absorbed; check <see cref="PluginRevocation.StillRunning"/>, which is also true when
+    /// the old copy's <c>Shutdown</c> or a handler did not return within its bound, see
+    /// <see cref="PluginUnloadResult.Stuck"/>). Runs plugin code
     /// (<c>Shutdown</c>) and writes <c>settings.json</c>: call it off the UI thread, like the
     /// other lifecycle calls. It stops the plugin only for a consent policy that reads the grant
     /// store, as <see cref="PluginConsent.FromGrants"/> (the app's) does.
@@ -205,12 +211,13 @@ public sealed class PluginRuntime : IDisposable
             if (Supervisor.GetStatus(id) is not { State: PluginState.Enabled or PluginState.Loading })
                 return new PluginRevocation(removed, false);
             var reloaded = Supervisor.Reload(id);
-            return new PluginRevocation(removed, reloaded?.Status == PluginLoadStatus.Loaded);
+            return new PluginRevocation(removed, reloaded?.Status == PluginLoadStatus.Loaded || Supervisor.LastUnloadStuck(id));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Reload throwing (disposed mid-call, ...): report what the host says is still loaded.
-            try { return new PluginRevocation(removed, Host.Loaded.Any(p => string.Equals(p.Id, id, StringComparison.Ordinal))); }
+            // Reload throwing (disposed mid-call, ...): report what the host says is still loaded, or
+            // what an unload left executing.
+            try { return new PluginRevocation(removed, Host.Loaded.Any(p => string.Equals(p.Id, id, StringComparison.Ordinal)) || Supervisor.LastUnloadStuck(id)); }
             catch { return new PluginRevocation(removed, false); }
         }
     }
@@ -265,8 +272,11 @@ public sealed class PluginRuntime : IDisposable
 /// <summary>What <see cref="PluginRuntime.Revoke"/> did.</summary>
 /// <param name="GrantRemoved">Whether a persisted grant existed and was removed.</param>
 /// <param name="StillRunning">
-/// Whether the plugin is still running afterwards: true only when the consent policy allowed it again
-/// despite the removed grant (a policy that does not read the grant store), or the unload failed.
+/// Whether the plugin may still be running afterwards: true when the consent policy allowed it again
+/// despite the removed grant (a policy that does not read the grant store), the unload failed, or
+/// the old copy was unloaded but is stuck (<see cref="PluginUnloadResult.Stuck"/>: its <c>Shutdown</c>
+/// or a handler had not returned within the bound, so its code may still be executing even though the
+/// host no longer lists it).
 /// </param>
 public readonly record struct PluginRevocation(bool GrantRemoved, bool StillRunning);
 
