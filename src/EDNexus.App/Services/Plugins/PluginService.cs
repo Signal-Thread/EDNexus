@@ -51,7 +51,9 @@ public sealed class PluginService : IDisposable
 
     private readonly object _gate = new();
     private PluginRuntime? _runtime;
-    private Task _starting = Task.CompletedTask;
+    private Task _starting = Task.CompletedTask;   // completes when every StartAsync pass has finished; replaced under _gate before the pass can run
+    private Task? _teardown;                       // the Detach that is unloading the runtime now, if any; later callers join it
+    private bool _closed;                          // ShutdownForExit / Dispose: nothing is attached or loaded any more
 
     /// <param name="settings">The app settings, where enable / disable and consent are persisted.</param>
     /// <param name="save">Writes the settings file (e.g. <c>SettingsStore.TrySave</c>).</param>
@@ -86,6 +88,20 @@ public sealed class PluginService : IDisposable
         _consent = consent ?? PluginConsent.FromGrants(Grants);
     }
 
+    /// <summary>
+    /// How long <see cref="Detach()"/> waits for a load pass that is still running (a plugin mid-
+    /// <c>Initialize</c> is not yet loaded, so unloading cannot stop it) before it releases the
+    /// bridge anyway. Default 10 seconds.
+    /// </summary>
+    public TimeSpan StartWaitTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How long a <see cref="Detach()"/> that finds another one already unloading waits for it.
+    /// Default 30 seconds; that teardown is itself bounded, this only stops the second caller
+    /// depending on that.
+    /// </summary>
+    public TimeSpan TeardownJoinTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
     /// <summary>Where the commander's enable / disable choice is persisted.</summary>
     public IPluginEnablementStore Enablement { get; }
 
@@ -114,6 +130,10 @@ public sealed class PluginService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(bus);
         ArgumentNullException.ThrowIfNull(state);
+        lock (_gate)
+        {
+            if (_closed) return false;   // the app is exiting: no new runtime
+        }
         try
         {
             Detach();   // one runtime per engine; a leftover one is bound to a bus that is going away
@@ -134,7 +154,18 @@ public sealed class PluginService : IDisposable
                 return false;
             }
             runtime.Supervisor.StatusChanged += OnStatusChanged;
-            lock (_gate) _runtime = runtime;
+            bool closed;
+            lock (_gate)
+            {
+                closed = _closed;   // exit began while the runtime was being built
+                if (!closed) _runtime = runtime;
+            }
+            if (closed)
+            {
+                runtime.Supervisor.StatusChanged -= OnStatusChanged;
+                runtime.Dispose();
+                return false;
+            }
             return true;
         }
         catch (Exception ex)
@@ -153,11 +184,18 @@ public sealed class PluginService : IDisposable
     /// </summary>
     public Task StartAsync()
     {
-        PluginRuntime? runtime;
-        lock (_gate) runtime = _runtime;
-        if (runtime is null) return Task.CompletedTask;
+        PluginRuntime runtime;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_gate)
+        {
+            if (_closed || _runtime is not { } current) return Task.CompletedTask;
+            runtime = current;
+            // Published before the work can run, in the same critical section that read _runtime, so
+            // a Detach can never see this runtime without also seeing the pass that is about to use it.
+            _starting = Task.WhenAll(_starting, done.Task);
+        }
 
-        var task = Task.Run(() =>
+        _ = Task.Run(() =>
         {
             try
             {
@@ -180,41 +218,74 @@ public sealed class PluginService : IDisposable
                 Trace.TraceError($"Plugins: loading failed: {ex}");
                 Report(ex);
             }
+            finally
+            {
+                done.TrySetResult();
+            }
         });
-        lock (_gate) _starting = task;
-        return task;
+        return done.Task;
     }
 
     /// <summary>
     /// Unloads every plugin and disposes the current runtime (a no-op when there is none). May take
     /// up to the unload timeout per plugin stuck in a handler: run it on a worker. Never throws.
+    /// A call that finds another one still unloading waits for it (up to
+    /// <see cref="TeardownJoinTimeout"/>) instead of returning at once, so "returned" always means
+    /// the plugins are gone, or the wait gave up.
     /// </summary>
     public void Detach()
     {
-        PluginRuntime? runtime;
+        PluginRuntime runtime;
         Task starting;
+        Task? running;
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_gate)
         {
-            runtime = _runtime;
-            _runtime = null;
-            starting = _starting;
-            _starting = Task.CompletedTask;
+            running = _teardown;
+            if (running is null)
+            {
+                if (_runtime is not { } current) return;
+                runtime = current;
+                _runtime = null;
+                starting = _starting;
+                _starting = Task.CompletedTask;
+                _teardown = finished.Task;
+            }
+            else
+            {
+                runtime = null!;
+                starting = null!;
+            }
         }
-        if (runtime is null) return;
+
+        if (running is not null)
+        {
+            try { running.Wait(TeardownJoinTimeout); }
+            catch (AggregateException) { /* the first caller reports its own failure */ }
+            return;
+        }
 
         try
         {
             runtime.Supervisor.StatusChanged -= OnStatusChanged;
-            runtime.Dispose();
-            // Dispose stops further loading; let a load that was mid-plugin finish unwinding so its
-            // plugin is not left running against the bridge that was just released.
-            try { starting.Wait(TimeSpan.FromSeconds(10)); }
+            // Stop loading first (no further plugin is started and everything loaded is unloaded),
+            // then let a load pass that is mid-plugin finish: that plugin is in no list yet, so only
+            // the end of the pass tells us its session is gone. Only then release the bridge it reads.
+            runtime.Supervisor.Dispose();
+            runtime.Host.Dispose();
+            try { starting.Wait(StartWaitTimeout); }
             catch (AggregateException) { /* StartAsync observes its own failures */ }
+            runtime.Dispose();
         }
         catch (Exception ex)
         {
             Trace.TraceError($"Plugins: shutting down the plugin host failed: {ex}");
             Report(ex);
+        }
+        finally
+        {
+            lock (_gate) _teardown = null;
+            finished.TrySetResult();
         }
     }
 
@@ -244,10 +315,14 @@ public sealed class PluginService : IDisposable
 
     /// <summary>
     /// <see cref="Detach"/> with a bound, for app exit: gives up waiting after
-    /// <paramref name="timeout"/> (the process is ending anyway). Returns whether it finished in time.
+    /// <paramref name="timeout"/> (the process is ending anyway). Returns whether it finished in time,
+    /// including when another detach was already in progress and has now finished. From here on
+    /// <see cref="Attach"/> and <see cref="StartAsync"/> do nothing, so an engine rebuild that is
+    /// still under way cannot bring plugins back after the exit began.
     /// </summary>
     public bool ShutdownForExit(TimeSpan timeout)
     {
+        lock (_gate) _closed = true;   // a rebuild racing the exit must not attach or load again
         try
         {
             return Task.Run(Detach).Wait(timeout);
@@ -259,8 +334,12 @@ public sealed class PluginService : IDisposable
         }
     }
 
-    /// <summary>Equivalent to <see cref="Detach"/>.</summary>
-    public void Dispose() => Detach();
+    /// <summary>Equivalent to <see cref="Detach"/>, and nothing is attached or loaded afterwards.</summary>
+    public void Dispose()
+    {
+        lock (_gate) _closed = true;
+        Detach();
+    }
 
     private void OnStatusChanged(PluginStatus status)
     {

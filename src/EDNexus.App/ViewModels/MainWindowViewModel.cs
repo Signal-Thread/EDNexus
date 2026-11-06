@@ -447,7 +447,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         // Plugins load last and off the UI thread, on every engine start, so nothing a plugin does can
         // delay the dashboard. The task never faults; a failing plugin is contained and traced.
-        _boot.Plugins.StartAsync().Forget("Plugins: start");
+        // (PluginService also refuses once the app is exiting; this just skips the call.)
+        if (_disposed == 0)
+            _boot.Plugins.StartAsync().Forget("Plugins: start");
     }
 
     private void UpdateJournalStatus()
@@ -773,6 +775,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         {
             Trace.TraceWarning($"Engine: disposing the previous host failed: {ex.Message}");
         }
+
+        // The window closed while the old engine was being torn down: Dispose has already run, so a
+        // new engine (and its plugin runtime) built now would never be disposed.
+        if (_disposed != 0) return;
 
         EngineHost host;
         try
