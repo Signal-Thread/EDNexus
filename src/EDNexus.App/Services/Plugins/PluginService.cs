@@ -227,6 +227,31 @@ public sealed class PluginService : IDisposable
     }
 
     /// <summary>
+    /// Withdraws consent for a plugin and stops it if it is running (see <see cref="PluginRuntime.Revoke"/>);
+    /// the entry point the management UI uses to revoke, because removing the grant from
+    /// <see cref="Grants"/> alone would leave the loaded plugin running with its capabilities.
+    /// Without a runtime only the persisted grant is removed. Not a disable: nothing is persisted
+    /// beyond the grant removal. Safe off the UI thread (run it on a worker: it unloads plugin code),
+    /// idempotent, never throws.
+    /// </summary>
+    public PluginRevocation Revoke(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return default;
+        PluginRuntime? runtime;
+        lock (_gate) runtime = _runtime;
+        try
+        {
+            if (runtime is not null) return runtime.Revoke(id);
+            return new PluginRevocation(Grants.Remove(id), false);
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"Plugins: revoking a plugin failed: {ex.Message}");
+            return default;
+        }
+    }
+
+    /// <summary>
     /// Unloads every plugin and disposes the current runtime (a no-op when there is none). May take
     /// up to the unload timeout per plugin stuck in a handler: run it on a worker. Never throws.
     /// A call that finds another one still unloading waits for it (up to

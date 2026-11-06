@@ -172,6 +172,50 @@ public sealed class PluginRuntime : IDisposable
     }
 
     /// <summary>
+    /// Withdraws the commander's consent for <paramref name="id"/> and stops it now: the one entry
+    /// point a UI should use to revoke. Consent is only evaluated when a plugin loads, so removing a
+    /// grant from the <see cref="PluginRuntimeOptions.GrantStore"/> alone leaves a running plugin
+    /// holding its capabilities (<c>network</c> included) until it is next unloaded; this removes the
+    /// grant and then reloads the plugin, which re-runs <see cref="PluginRuntimeOptions.Consent"/>
+    /// against the now-empty grant, so the old copy is unloaded (its session, handlers and storage cut
+    /// off) and the plugin ends up <see cref="PluginLoadStatus.Denied"/> (<see cref="PluginState.Failed"/>).
+    /// </summary>
+    /// <remarks>
+    /// Revoking is not disabling: no disable flag is persisted, so a later grant lets the plugin run
+    /// again without an <see cref="PluginSupervisor.Enable"/>. An unknown id, a plugin that is not
+    /// running, or a repeat call is a no-op for that part. Never throws (a grant store or unload
+    /// failure is absorbed; check <see cref="PluginRevocation.StillRunning"/>). Runs plugin code
+    /// (<c>Shutdown</c>) and writes <c>settings.json</c>: call it off the UI thread, like the
+    /// other lifecycle calls. It stops the plugin only for a consent policy that reads the grant
+    /// store, as <see cref="PluginConsent.FromGrants"/> (the app's) does.
+    /// </remarks>
+    /// <param name="id">The plugin's manifest id.</param>
+    public PluginRevocation Revoke(string id)
+    {
+        var removed = false;
+        try
+        {
+            if (string.IsNullOrEmpty(id)) return default;
+            try { removed = _options.GrantStore?.Remove(id) ?? false; }
+            catch { /* still stop it: the reload below is what matters, and a failed removal shows in GrantRemoved */ }
+
+            if (Volatile.Read(ref _disposed) != 0) return new PluginRevocation(removed, false);
+            // Only a running (or loading) plugin has anything to stop; reloading a stopped one would
+            // just churn its status.
+            if (Supervisor.GetStatus(id) is not { State: PluginState.Enabled or PluginState.Loading })
+                return new PluginRevocation(removed, false);
+            var reloaded = Supervisor.Reload(id);
+            return new PluginRevocation(removed, reloaded?.Status == PluginLoadStatus.Loaded);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Reload throwing (disposed mid-call, ...): report what the host says is still loaded.
+            try { return new PluginRevocation(removed, Host.Loaded.Any(p => string.Equals(p.Id, id, StringComparison.Ordinal))); }
+            catch { return new PluginRevocation(removed, false); }
+        }
+    }
+
+    /// <summary>
     /// Unloads every plugin and releases the bridge. Idempotent. May take up to
     /// <see cref="PluginHost.UnloadTimeout"/> per plugin with a stuck handler: run it off the UI
     /// thread, or bound the wait.
@@ -217,6 +261,14 @@ public sealed class PluginRuntime : IDisposable
         }
     }
 }
+
+/// <summary>What <see cref="PluginRuntime.Revoke"/> did.</summary>
+/// <param name="GrantRemoved">Whether a persisted grant existed and was removed.</param>
+/// <param name="StillRunning">
+/// Whether the plugin is still running afterwards: true only when the consent policy allowed it again
+/// despite the removed grant (a policy that does not read the grant store), or the unload failed.
+/// </param>
+public readonly record struct PluginRevocation(bool GrantRemoved, bool StillRunning);
 
 /// <summary>
 /// The <see cref="IPluginContext"/> the app hands a plugin: the bridge session's state, events,
