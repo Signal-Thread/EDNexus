@@ -132,7 +132,7 @@ public sealed class HelloCommanderTests : IDisposable
                 HandlerError = e => _errors.Enqueue($"{e.EventName}: {e.ExceptionType}: {e.Message}"),
             });
             Host = new PluginHost(root, SemanticVersion.Parse("1.0.0"),
-                m => grant ?? (IReadOnlyCollection<string>)m.Capabilities,
+                request => grant ?? (IReadOnlyCollection<string>)request.Manifest.Capabilities,
                 (manifest, granted) => new Context(manifest, _bridge.Attach(manifest, granted), new Log(_lines)));
         }
 

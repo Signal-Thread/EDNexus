@@ -44,7 +44,7 @@ public sealed class PluginHost : IDisposable
 
     private readonly object _gate = new();
     private readonly Dictionary<string, LoadedPlugin> _loaded = new(StringComparer.Ordinal);
-    private readonly Func<PluginManifest, IReadOnlyCollection<string>?> _consent;
+    private readonly Func<PluginConsentRequest, IReadOnlyCollection<string>?> _consent;
     private readonly Func<PluginManifest, IReadOnlySet<string>, IPluginContext> _contextFactory;
     private TimeSpan _unloadTimeout = TimeSpan.FromSeconds(5);
     private bool _disposed;
@@ -57,7 +57,10 @@ public sealed class PluginHost : IDisposable
     /// <param name="appVersion">The running EDNexus version, for <see cref="PluginManifest.MinAppVersion"/>.</param>
     /// <param name="consent">
     /// Required. Decides, for each plugin that passed the static checks and is about to be loaded,
-    /// whether it may run and which of its declared capabilities it is granted. Return
+    /// whether it may run and which of its declared capabilities it is granted. It receives a
+    /// <see cref="PluginConsentRequest"/>: the manifest plus SHA-256 hashes of the exact entry
+    /// assembly bytes the host is about to load and of the plugin folder's other files, so an
+    /// approval can be bound to the code and not only to <c>plugin.json</c>. Return
     /// <see langword="null"/> to deny: the plugin is reported as <see cref="PluginLoadStatus.Denied"/>
     /// and none of its code runs. Return a collection (possibly empty) to allow it with exactly those
     /// capabilities; anything the manifest does not declare is dropped. A callback that throws also
@@ -78,7 +81,7 @@ public sealed class PluginHost : IDisposable
     public PluginHost(
         string pluginsRoot,
         SemanticVersion appVersion,
-        Func<PluginManifest, IReadOnlyCollection<string>?> consent,
+        Func<PluginConsentRequest, IReadOnlyCollection<string>?> consent,
         Func<PluginManifest, IReadOnlySet<string>, IPluginContext> contextFactory)
     {
         ArgumentNullException.ThrowIfNull(pluginsRoot);
@@ -478,11 +481,21 @@ public sealed class PluginHost : IDisposable
             && PluginCompatibility.CheckBuiltAgainst(built, HostSdkVersion) is { } builtAgainst)
             return Result(PluginLoadStatus.Incompatible, builtAgainst);
 
+        // Bind the approval to the code. The entry assembly hash is of `image`, the very bytes loaded
+        // below, so it cannot be raced. The other files (dependencies, native libraries, deps.json)
+        // are loaded lazily by path after this point, so their hash only guards against a package
+        // being swapped or updated between approvals, not against a local actor with write access
+        // racing the load (who can already run code as the user). See PluginContentHash.
+        var entryHash = PluginContentHash.OfAssembly(image);
+        var files = PluginContentHash.OfFolder(dir, entryPath);
+        if (files.Hash is null)
+            return Result(files.Unreadable ? PluginLoadStatus.Failed : PluginLoadStatus.Rejected, files.Problem ?? "the plugin folder could not be hashed");
+
         // Last gate before any plugin code is loaded.
         IReadOnlySet<string> granted;
         try
         {
-            var decision = _consent(manifest);
+            var decision = _consent(new PluginConsentRequest(manifest, entryHash, files.Hash));
             if (decision is null)
                 return Result(PluginLoadStatus.Denied, "the user has not allowed this plugin to run");
             granted = new HashSet<string>(manifest.Capabilities.Where(c => decision.Contains(c, StringComparer.Ordinal)), StringComparer.Ordinal);

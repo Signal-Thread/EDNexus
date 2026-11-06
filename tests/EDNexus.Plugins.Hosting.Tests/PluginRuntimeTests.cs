@@ -35,7 +35,7 @@ public sealed class PluginRuntimeTests : IDisposable
     }
 
     private PluginRuntime Runtime(
-        Func<PluginManifest, IReadOnlyCollection<string>?>? consent = null,
+        Func<PluginConsentRequest, IReadOnlyCollection<string>?>? consent = null,
         IPluginEnablementStore? store = null,
         IPluginGrantStore? grants = null,
         int threshold = 3,
@@ -198,7 +198,7 @@ public sealed class PluginRuntimeTests : IDisposable
         Install(id, "RtAwaiting", "context.Events.SubscribeAny(e => { });");
         PluginRuntime? runtime = null;
         var duringConsent = -1L;
-        runtime = Runtime(consent: manifest =>
+        runtime = Runtime(consent: request =>
         {
             if (_sessions.Count == 1)   // the reload's consent check: the first copy is attached, the second is not
             {
@@ -206,7 +206,7 @@ public sealed class PluginRuntimeTests : IDisposable
                 runtime!.Supervisor.ReportHandlerError(new PluginHandlerError(id, "E", "T", "late", oldGen));
                 duringConsent = runtime.Supervisor.GetStatus(id)!.TotalFaults;
             }
-            return manifest.Capabilities;
+            return request.Manifest.Capabilities;
         });
         runtime.Start();
 
@@ -267,8 +267,8 @@ public sealed class PluginRuntimeTests : IDisposable
         Install(kept, "RtKept", "context.Events.SubscribeAny(e => { });");
         var store = new InMemoryPluginEnablementStore();
         var grants = new InMemoryPluginGrantStore();
-        grants.Set(id, new PluginGrant("hash", []));
-        grants.Set(kept, new PluginGrant("hash", []));
+        grants.Set(id, new PluginGrant("hash", "entry", "files", []));
+        grants.Set(kept, new PluginGrant("hash", "entry", "files", []));
         var runtime = Runtime(store: store, grants: grants);
         runtime.Start();
         Assert.Equal(2, runtime.Supervisor.Statuses.Count);
@@ -350,8 +350,8 @@ public sealed class PluginRuntimeTests : IDisposable
 
         Assert.Equal(PluginLoadStatus.Denied, Assert.Single(runtime.Start().Plugins).Status);
 
-        var manifest = PluginManifestParser.ParseFile(Path.Combine(_dir.Path, id, PluginManifestParser.FileName)).Manifest!;
-        grants.Grant(manifest, [PluginCapabilities.Events]);   // events only: storage is declared but not granted
+        var folder = Path.Combine(_dir.Path, id);
+        grants.Grant(folder, [PluginCapabilities.Events]);   // events only: storage is declared but not granted
         var result = runtime.Supervisor.Reload(id);   // re-reads the manifest and asks consent again
 
         Assert.Equal(PluginLoadStatus.Loaded, result!.Status);
@@ -365,8 +365,7 @@ public sealed class PluginRuntimeTests : IDisposable
         const string id = "com.test.rt.reconsent";
         Install(id, "RtReconsent", "context.Events.SubscribeAny(e => { });");
         var grants = new InMemoryPluginGrantStore();
-        var manifestPath = Path.Combine(_dir.Path, id, PluginManifestParser.FileName);
-        grants.Grant(PluginManifestParser.ParseFile(manifestPath).Manifest!, [PluginCapabilities.Events]);
+        grants.Grant(Path.Combine(_dir.Path, id), [PluginCapabilities.Events]);
         var runtime = Runtime(consent: PluginConsent.FromGrants(grants));
         Assert.Equal(PluginLoadStatus.Loaded, Assert.Single(runtime.Start().Plugins).Status);
 
@@ -382,7 +381,7 @@ public sealed class PluginRuntimeTests : IDisposable
         Assert.Empty(runtime.Host.Loaded);
 
         // Approving the new contents lets it load again.
-        grants.Grant(PluginManifestParser.ParseFile(manifestPath).Manifest!, [PluginCapabilities.Events]);
+        grants.Grant(Path.Combine(_dir.Path, id), [PluginCapabilities.Events]);
         Assert.Equal(PluginLoadStatus.Loaded, runtime.Supervisor.Reload(id)!.Status);
     }
 
@@ -467,23 +466,80 @@ public sealed class PluginConsentTests
         Assert.NotEqual(PluginManifestFingerprint.Compute(withNull), PluginManifestFingerprint.Compute(withEmpty));
     }
 
+    private static PluginConsentRequest Request(PluginManifest manifest, string entry = "e1", string files = "f1")
+        => new(manifest, entry, files);
+
     [Fact]
     public void FromGrants_DeniesWithNoGrant_AWrongHash_OrAThrowingStore()
     {
         var manifest = Sample("1.0.0", "events");
+        var request = Request(manifest);
+        var fingerprint = PluginManifestFingerprint.Compute(manifest);
         var store = new InMemoryPluginGrantStore();
         var consent = PluginConsent.FromGrants(store);
 
-        Assert.Null(consent(manifest));
+        Assert.Null(consent(request));
 
-        store.Set(manifest.Id, new PluginGrant("not-the-hash", ["events"]));
-        Assert.Null(consent(manifest));
+        store.Set(manifest.Id, new PluginGrant("not-the-hash", "e1", "f1", ["events"]));
+        Assert.Null(consent(request));
 
-        store.Set(manifest.Id, new PluginGrant("", ["events"]));
-        Assert.Null(consent(manifest));
+        store.Set(manifest.Id, new PluginGrant("", "e1", "f1", ["events"]));
+        Assert.Null(consent(request));
 
-        Assert.Null(PluginConsent.FromGrants(new ThrowingStore())(manifest));
-        Assert.Null(PluginConsent.DenyAll(manifest));
+        // The positive control for the cases below: this exact grant is accepted.
+        store.Set(manifest.Id, new PluginGrant(fingerprint, "e1", "f1", ["events"]));
+        Assert.Equal(["events"], consent(request)!.ToArray());
+
+        Assert.Null(PluginConsent.FromGrants(new ThrowingStore())(request));
+        Assert.Null(PluginConsent.DenyAll(request));
+    }
+
+    [Fact]
+    public void FromGrants_IsFailClosed_ForAnyMissingEmptyOrMismatchedContentHash()
+    {
+        var manifest = Sample("1.0.0", "events");
+        var fingerprint = PluginManifestFingerprint.Compute(manifest);
+        var store = new InMemoryPluginGrantStore();
+        var consent = PluginConsent.FromGrants(store);
+
+        // A grant written before content hashes existed (both empty), or with only one of them.
+        store.Set(manifest.Id, new PluginGrant(fingerprint, "", "", ["events"]));
+        Assert.Null(consent(Request(manifest)));
+        store.Set(manifest.Id, new PluginGrant(fingerprint, "e1", "", ["events"]));
+        Assert.Null(consent(Request(manifest)));
+        store.Set(manifest.Id, new PluginGrant(fingerprint, "", "f1", ["events"]));
+        Assert.Null(consent(Request(manifest)));
+        store.Set(manifest.Id, new PluginGrant(fingerprint, null!, null!, ["events"]));
+        Assert.Null(consent(Request(manifest)));
+
+        // A request with no hashes can never match, not even an (invalid) grant that is also empty.
+        store.Set(manifest.Id, new PluginGrant(fingerprint, "", "", ["events"]));
+        Assert.Null(consent(Request(manifest, entry: "", files: "")));
+        Assert.Null(consent(null!));
+
+        // Either hash differing is enough.
+        store.Set(manifest.Id, new PluginGrant(fingerprint, "e1", "f1", ["events"]));
+        Assert.NotNull(consent(Request(manifest)));
+        Assert.Null(consent(Request(manifest, entry: "e2")));
+        Assert.Null(consent(Request(manifest, files: "f2")));
+        Assert.Null(consent(Request(manifest, entry: "E1")));   // exact comparison, no case folding
+    }
+
+    [Fact]
+    public void FromGrants_AGrantForOneIdNeverAppliesToAnother()
+    {
+        var x = Sample("1.0.0", "events");
+        var y = x with { Id = "com.test.consent.other" };
+        var store = new InMemoryPluginGrantStore();
+        store.Set(x.Id, new PluginGrant(PluginManifestFingerprint.Compute(x), "e1", "f1", ["events"]));
+        var consent = PluginConsent.FromGrants(store);
+
+        Assert.NotNull(consent(Request(x)));
+        Assert.Null(consent(Request(y)));   // same hashes everywhere else, different id
+
+        // Even a grant stored under Y's id but made for X's manifest does not match Y.
+        store.Set(y.Id, store.Get(x.Id)!);
+        Assert.Null(consent(Request(y)));
     }
 
     [Fact]
@@ -491,12 +547,35 @@ public sealed class PluginConsentTests
     {
         var manifest = Sample("1.0.0", "events", "state");
         var store = new InMemoryPluginGrantStore();
-        store.Grant(manifest, ["events", "network"]);   // network is not declared: dropped
+        store.Grant(Request(manifest), ["events", "network"]);   // network is not declared: dropped
         var consent = PluginConsent.FromGrants(store);
 
-        Assert.Equal(["events"], consent(manifest)!.ToArray());
-        Assert.Null(consent(manifest with { Version = "1.0.1" }));
-        Assert.Null(consent(manifest with { Capabilities = ["events", "state", "network"] }));
+        Assert.Equal(["events"], consent(Request(manifest))!.ToArray());
+        Assert.Null(consent(Request(manifest with { Version = "1.0.1" })));
+        Assert.Null(consent(Request(manifest with { Capabilities = ["events", "state", "network"] })));
+        Assert.Null(consent(Request(manifest, entry: "other")));
+        Assert.Null(consent(Request(manifest, files: "other")));
+    }
+
+    [Fact]
+    public void Grant_RefusesARequestWithoutContentHashes()
+    {
+        var manifest = Sample("1.0.0", "events");
+        var store = new InMemoryPluginGrantStore();
+
+        Assert.Throws<ArgumentException>(() => store.Grant(Request(manifest, entry: ""), ["events"]));
+        Assert.Throws<ArgumentException>(() => store.Grant(Request(manifest, files: ""), ["events"]));
+        Assert.Null(store.Get(manifest.Id));
+    }
+
+    [Fact]
+    public void Grant_FromAFolder_ThatCannotBeRead_Throws()
+    {
+        using var dir = new TempDir();
+        var store = new InMemoryPluginGrantStore();
+
+        Assert.Throws<InvalidOperationException>(() => store.Grant(Path.Combine(dir.Path, "nothing-here"), ["events"]));
+        Assert.Empty(Directory.GetFileSystemEntries(dir.Path));
     }
 
     [Fact]
@@ -510,15 +589,30 @@ public sealed class PluginConsentTests
         var store = new AppSettingsPluginGrantStore(settings, s => { saves++; Assert.True(settingsStore.TrySave(s)); });
         var manifest = Sample("1.0.0", "events", "storage");
 
+        var request = Request(manifest, entry: new string('a', 64), files: new string('b', 64));
+
         Assert.Null(store.Get(manifest.Id));
-        store.Grant(manifest, ["events"]);
+        store.Grant(request, ["events"]);
         Assert.Equal(1, saves);
 
         var reloaded = new AppSettingsPluginGrantStore(new SettingsStore(path).Load(), _ => { });
         var grant = reloaded.Get(manifest.Id)!;
         Assert.Equal(PluginManifestFingerprint.Compute(manifest), grant.ManifestHash);
+        Assert.Equal(request.EntryAssemblyHash, grant.EntryHash);
+        Assert.Equal(request.FilesHash, grant.FilesHash);
         Assert.Equal(["events"], grant.Capabilities);
-        Assert.Equal(["events"], PluginConsent.FromGrants(reloaded)(manifest)!.ToArray());
+        Assert.Equal(["events"], PluginConsent.FromGrants(reloaded)(request)!.ToArray());
+        Assert.Null(PluginConsent.FromGrants(reloaded)(request with { EntryAssemblyHash = new string('c', 64) }));
+
+        // The exact on-disk property names.
+        using (var json = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path)))
+        {
+            var onDisk = json.RootElement.GetProperty("Plugins").GetProperty("Grants").GetProperty(manifest.Id);
+            Assert.Equal(["Capabilities", "EntryHash", "FilesHash", "ManifestHash"],
+                onDisk.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+            Assert.Equal(request.EntryAssemblyHash, onDisk.GetProperty("EntryHash").GetString());
+            Assert.Equal(request.FilesHash, onDisk.GetProperty("FilesHash").GetString());
+        }
 
         Assert.True(store.Remove(manifest.Id));
         Assert.False(store.Remove(manifest.Id));
@@ -537,8 +631,48 @@ public sealed class PluginConsentTests
         var store = new AppSettingsPluginGrantStore(settings, _ => { });
 
         Assert.Null(store.Get("a"));
-        store.Set("a", new PluginGrant("h", ["events"]));
+        store.Set("a", new PluginGrant("h", "e", "f", ["events"]));
         Assert.Equal("h", store.Get("a")!.ManifestHash);
+        Assert.Equal("e", store.Get("a")!.EntryHash);
+        Assert.Equal("f", store.Get("a")!.FilesHash);
+    }
+
+    [Fact]
+    public void Settings_FromAnOldFormatFile_OrWithNulls_LoadAsGrantsThatAreNeverHonoured()
+    {
+        using var dir = new TempDir();
+        var path = Path.Combine(dir.Path, "settings.json");
+        var manifest = Sample("1.0.0", "events");
+        var fingerprint = PluginManifestFingerprint.Compute(manifest);
+        // "old": written before content hashes existed (ManifestHash + Capabilities only).
+        // "nulls": hand-edited / corrupted, with explicit nulls. "partial": only one of the two hashes.
+        File.WriteAllText(path, $$"""
+            {
+              "Plugins": {
+                "Grants": {
+                  "com.test.consent": { "ManifestHash": "{{fingerprint}}", "Capabilities": ["events"] },
+                  "com.test.nulls": { "ManifestHash": null, "EntryHash": null, "FilesHash": null, "Capabilities": null },
+                  "com.test.partial": { "ManifestHash": "{{PluginManifestFingerprint.Compute(manifest with { Id = "com.test.partial" })}}", "EntryHash": "e1", "Capabilities": ["events"] }
+                }
+              }
+            }
+            """);
+        var store = new AppSettingsPluginGrantStore(new SettingsStore(path).Load(), _ => { });
+        var consent = PluginConsent.FromGrants(store);
+
+        var old = store.Get("com.test.consent")!;
+        Assert.Equal(fingerprint, old.ManifestHash);
+        Assert.Equal("", old.EntryHash);
+        Assert.Equal("", old.FilesHash);
+        Assert.Equal(["events"], old.Capabilities);
+        Assert.Null(consent(Request(manifest)));   // would have matched before the fix; now it is no grant
+
+        var nulls = store.Get("com.test.nulls")!;
+        Assert.Equal(("", "", ""), (nulls.ManifestHash, nulls.EntryHash, nulls.FilesHash));
+        Assert.Empty(nulls.Capabilities);
+        Assert.Null(consent(Request(manifest with { Id = "com.test.nulls" })));
+
+        Assert.Null(consent(Request(manifest with { Id = "com.test.partial" })));
     }
 
     private sealed class ThrowingStore : IPluginGrantStore

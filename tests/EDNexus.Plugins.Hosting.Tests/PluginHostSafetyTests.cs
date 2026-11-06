@@ -85,10 +85,10 @@ public class PluginHostSafetyTests
         WriteFolder(dir.Path, "com.test.broken", "{ not json");
         var asked = new List<string>();
         var contexts = new RecordingContexts();
-        using var host = contexts.Host(dir.Path, consent: manifest =>
+        using var host = contexts.Host(dir.Path, consent: request =>
         {
-            asked.Add(manifest.Id);
-            return manifest.Id == "com.test.alpha" ? manifest.Capabilities : null;
+            asked.Add(request.Manifest.Id);
+            return request.Manifest.Id == "com.test.alpha" ? request.Manifest.Capabilities : null;
         });
 
         var report = host.LoadAll();
@@ -109,12 +109,12 @@ public class PluginHostSafetyTests
         WriteStandard(dir.Path, "com.test.beta", "Beta", capabilities: "\"events\"");
         WriteStandard(dir.Path, "com.test.gamma", "Gamma", capabilities: "\"events\", \"network\"");
         var contexts = new RecordingContexts();
-        using var host = contexts.Host(dir.Path, consent: manifest => manifest.Id switch
+        using var host = contexts.Host(dir.Path, consent: request => request.Manifest.Id switch
         {
             // The user switched storage off, and the callback also names things the manifest never declared.
             "com.test.alpha" => ["events", "state", "network", "ui.overlay", "bogus"],
             "com.test.beta" => [],                       // allowed to run, granted nothing
-            _ => manifest.Capabilities,
+            _ => request.Manifest.Capabilities,
         });
 
         host.LoadAll();
@@ -132,8 +132,8 @@ public class PluginHostSafetyTests
         WriteStandard(dir.Path, "com.test.alpha", "Alpha");
         WriteStandard(dir.Path, "com.test.zulu", "Zulu");
         var contexts = new RecordingContexts();
-        using var host = contexts.Host(dir.Path, consent: manifest =>
-            manifest.Id == "com.test.alpha" ? throw new InvalidOperationException("consent store unreadable") : manifest.Capabilities);
+        using var host = contexts.Host(dir.Path, consent: request =>
+            request.Manifest.Id == "com.test.alpha" ? throw new InvalidOperationException("consent store unreadable") : request.Manifest.Capabilities);
 
         var report = host.LoadAll();
 

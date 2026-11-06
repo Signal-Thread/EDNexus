@@ -30,7 +30,7 @@ public sealed class PluginServiceTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
-    private PluginService Service(Func<PluginManifest, IReadOnlyCollection<string>?>? consent = null, bool simulated = false)
+    private PluginService Service(Func<PluginConsentRequest, IReadOnlyCollection<string>?>? consent = null, bool simulated = false)
     {
         var service = new PluginService(
             _settings,
@@ -90,14 +90,13 @@ public sealed class PluginServiceTests : IDisposable
         const string id = "com.test.app.granted";
         var dir = InstallUnloadable(id);
         var service = Service();
-        var manifest = PluginManifestParser.ParseFile(Path.Combine(dir, PluginManifestParser.FileName)).Manifest!;
-        service.Grants.Grant(manifest, [PluginCapabilities.Events]);
+        service.Grants.Grant(dir, [PluginCapabilities.Events]);
         var asked = new List<string>();
         var (bus, state) = Engine();
         // Same store, but observe what the host asks consent for.
         var observing = Service(m =>
         {
-            asked.Add(m.Id + "@" + m.Version);
+            asked.Add(m.Manifest.Id + "@" + m.Manifest.Version);
             return PluginConsent.FromGrants(service.Grants)(m);
         });
 
@@ -114,11 +113,144 @@ public sealed class PluginServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task AGrant_DoesNotSurviveReplacedCode_UnderAnUnchangedManifest()
+    {
+        const string id = "com.test.app.replaced";
+        var dir = InstallUnloadable(id);
+        var service = Service();
+        service.Grants.Grant(dir, [PluginCapabilities.Events]);
+        var (bus, state) = Engine();
+        service.Attach(bus, state);
+        await service.StartAsync();
+        // Past consent the placeholder DLL is not a real assembly, so loading fails: it was allowed to try.
+        Assert.DoesNotContain(nameof(PluginLoadStatus.Denied), service.Runtime!.Supervisor.GetStatus(id)!.LastError);
+
+        File.WriteAllBytes(Path.Combine(dir, "Plugin.dll"), [0x4D, 0x5A, 0x90, 0x00, 0xFF]);   // other code, same plugin.json
+
+        Assert.Equal(PluginLoadStatus.Denied, service.Runtime.Supervisor.Reload(id)!.Status);
+    }
+
+    // ---- pruning saved choices of uninstalled plugins -----------------------------------------------
+
+    private void SeedChoices(PluginService service, params string[] ids)
+    {
+        foreach (var id in ids)
+        {
+            service.Grants.Set(id, new PluginGrant("m", "e", "f", [PluginCapabilities.Events]));
+            service.Enablement.SetDisabled(id, true);
+        }
+    }
+
+    private bool HasChoices(string id) => _settings.Plugins.Grants.ContainsKey(id) || _settings.Plugins.DisabledIds.Contains(id);
+
+    [Fact]
+    public async Task StartAsync_ForgetsTheChoicesOfPluginsWithNoFolder_AndKeepsTheOthers()
+    {
+        InstallUnloadable("com.test.app.prune.kept");
+        var service = Service();
+        SeedChoices(service, "com.test.app.prune.kept", "com.test.app.prune.gone");
+        var (bus, state) = Engine();
+        service.Attach(bus, state);
+
+        await service.StartAsync();
+
+        Assert.False(HasChoices("com.test.app.prune.gone"));
+        Assert.True(_settings.Plugins.Grants.ContainsKey("com.test.app.prune.kept"));
+        Assert.Contains("com.test.app.prune.kept", _settings.Plugins.DisabledIds);
+        Assert.Empty(_errors);
+    }
+
+    [Fact]
+    public async Task Pruning_RunsAfterInstallRecovery_SoAPluginWhoseOnlyCopyIsABackupKeepsItsChoices()
+    {
+        const string id = "com.test.app.prune.backup";
+        // A replace that was interrupted: the folder is missing and the previous version sits in a backup.
+        var live = InstallUnloadable(id);
+        Directory.Move(live, Path.Combine(_root, $".replaced-{id}.{Guid.NewGuid():N}"));
+        var service = Service();
+        SeedChoices(service, id);
+        var (bus, state) = Engine();
+        service.Attach(bus, state);
+
+        await service.StartAsync();
+
+        Assert.True(Directory.Exists(Path.Combine(_root, id)));   // recovery put it back
+        Assert.True(HasChoices(id));
+    }
+
+    [Fact]
+    public async Task Pruning_DoesNothing_WhenThePluginsRootIsMissing()
+    {
+        var service = Service();
+        SeedChoices(service, "com.test.app.prune.a", "com.test.app.prune.b");
+        Directory.Delete(_root, recursive: true);   // e.g. an unplugged drive
+        var (bus, state) = Engine();
+        service.Attach(bus, state);
+
+        await service.StartAsync();
+
+        Assert.True(HasChoices("com.test.app.prune.a"));
+        Assert.True(HasChoices("com.test.app.prune.b"));
+    }
+
+    [Fact]
+    public async Task Pruning_DoesNothing_WhenThePluginsRootIsEmpty_BecauseThatLooksLikeAnUnmountedShare()
+    {
+        var service = Service();
+        SeedChoices(service, "com.test.app.prune.a");
+        Directory.CreateDirectory(Path.Combine(_root, ".staging-leftover"));   // hidden work folders are not plugins
+        var (bus, state) = Engine();
+        service.Attach(bus, state);
+
+        await service.StartAsync();
+
+        Assert.True(HasChoices("com.test.app.prune.a"));
+    }
+
+    [Fact]
+    public void Pruning_DoesNothing_WhenTheRootCannotBeEnumerated_AndNeverThrows()
+    {
+        InstallUnloadable("com.test.app.prune.other");
+        var service = Service();
+        SeedChoices(service, "com.test.app.prune.a");
+        var denied = new Func<string, IEnumerable<string>>(_ => throw new UnauthorizedAccessException("access denied"));
+        var io = new Func<string, IEnumerable<string>>(_ => throw new IOException("network share went away"));
+        IEnumerable<string> HalfWay(string path)
+        {
+            yield return Path.Combine(path, "com.test.app.prune.other");
+            throw new IOException("dropped mid-listing");
+        }
+
+        Assert.Empty(PluginChoicePruner.Prune(_settings, _root, service.Grants, service.Enablement, denied));
+        Assert.Empty(PluginChoicePruner.Prune(_settings, _root, service.Grants, service.Enablement, io));
+        Assert.Empty(PluginChoicePruner.Prune(_settings, _root, service.Grants, service.Enablement, HalfWay));
+
+        Assert.True(HasChoices("com.test.app.prune.a"));
+        // And the positive control: the real enumerator does prune it.
+        Assert.Equal(["com.test.app.prune.a"], PluginChoicePruner.Prune(_settings, _root, service.Grants, service.Enablement));
+        Assert.False(HasChoices("com.test.app.prune.a"));
+    }
+
+    [Fact]
+    public void Pruning_NeverTouchesAnIdFromSettingsAsAPath()
+    {
+        InstallUnloadable("com.test.app.prune.other");
+        var service = Service();
+        // A hand-edited settings.json can hold anything as an id; it is only ever compared to folder names.
+        SeedChoices(service, "../escape", "a/b", "");
+
+        var pruned = PluginChoicePruner.Prune(_settings, _root, service.Grants, service.Enablement);
+
+        Assert.Equal(3, pruned.Count);
+        Assert.Empty(_settings.Plugins.Grants);
+    }
+
+    [Fact]
     public void Grants_AreSavedThroughTheUiThread_NotOnTheCallersThread()
     {
         var service = Service();
 
-        service.Grants.Set("com.test.app.save", new PluginGrant("hash", [PluginCapabilities.Events]));
+        service.Grants.Set("com.test.app.save", new PluginGrant("hash", "entry", "files", [PluginCapabilities.Events]));
         service.Enablement.SetDisabled("com.test.app.save", true);
 
         Assert.Equal(0, _saves);   // posted, not run

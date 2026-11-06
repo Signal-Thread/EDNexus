@@ -98,7 +98,7 @@ internal sealed class PluginHarness : IDisposable
                     PluginsRoot = root,
                     AppVersion = appVersion ?? ResolveAppVersion(),
                     // No UI to ask: every declared capability is granted (see the class remarks).
-                    Consent = m => m.Capabilities.ToList(),
+                    Consent = request => request.Manifest.Capabilities.ToList(),
                     EnablementStore = new InMemoryPluginEnablementStore(),
                     HandlerErrorObserver = err => _stats.GetOrAdd(err.PluginId, _ => new PluginStats())
                         .AddError($"{err.EventName}: {err.ExceptionType}: {err.Message}"),

@@ -109,7 +109,8 @@ file's CRC-32 is verified. The manifest must be named exactly `plugin.json`, be 
    or when the entry assembly's own `EDNexus.Plugins.Abstractions` reference (read from its metadata
    without loading it) is for a newer minor or a different major than the host provides.
 5. `entryAssembly` is resolved inside the plugin folder with the same (lexical) path rules as
-   extraction and must exist. The host's **consent callback** is then asked whether the plugin may
+   extraction and must exist. The host reads the assembly once and hashes it and the folder's other
+   files (a folder containing a link, or over the size limits, is **Rejected**). The host's **consent callback** is then asked, with those hashes, whether the plugin may
    run, and with which capabilities; if not, the plugin is **Denied** and none of its code is
    loaded (see [Consent and capabilities](#consent-and-capabilities)). The plugin gets its own **collectible `AssemblyLoadContext`**: its
    private dependencies resolve from its folder via `AssemblyDependencyResolver` (its `.deps.json`,
@@ -158,7 +159,7 @@ If the host is disposed during a load pass (app shutdown), the pass stops: plugi
 constructed are not constructed, and the report says so in `Errors`.
 
 **Limits.** A load context isolates dependency *versions*; it is **not a security boundary** —
-plugin code runs in-process with the host's full trust (wiring the consent UI is #66). "Failed" and
+plugin code runs in-process with the host's full trust (the consent UI is #61; the trust and signing model is #66). "Failed" and
 "unloaded" mean the host has released everything it holds; they do not guarantee plugin code has
 stopped. Threads or timers the plugin started, or references held outside the host (for example
 a handler the plugin added to a static event such as `AppDomain.ProcessExit`), keep running and
@@ -171,9 +172,10 @@ pass that called it (timeouts belong to the threading contract, #62). `LoadAll()
 ## Consent and capabilities
 
 **The host never decides on its own that a plugin may run.** `PluginHost`'s constructor takes a
-required `consent` callback (`Func<PluginManifest, IReadOnlyCollection<string>?>`), and there is
-no allow-all default. It is called once per plugin that passed the static checks, before any plugin
-code loads:
+required `consent` callback (`Func<PluginConsentRequest, IReadOnlyCollection<string>?>`; the request
+carries the manifest and SHA-256 hashes of the entry assembly and the other files, see
+[Consent in the desktop app](#consent-in-the-desktop-app)), and there is no allow-all default. It is
+called once per plugin that passed the static checks, before any plugin code loads:
 
 - return `null` to deny: the plugin is `PluginLoadStatus.Denied` and nothing of it runs;
 - return a collection to allow it with exactly those capabilities (an empty collection is allowed
@@ -237,7 +239,7 @@ var bridge = new PluginBridge(engine.Bus, engine.State,
     new PluginBridgeOptions { IsSimulated = () => devMode, HandlerError = log.Plugin });
 
 using var host = new PluginHost(PluginPaths.Resolve(), appVersion,
-    consent: manifest => userConsentStore.Granted(manifest),      // null = not allowed to run
+    consent: PluginConsent.FromGrants(userGrantStore),            // null = not allowed to run
     contextFactory: (manifest, granted) =>
         new AppPluginContext(manifest, bridge.Attach(manifest, granted)));
 
@@ -272,21 +274,60 @@ in a handler) cannot have its late faults charged to, and quarantine, the copy t
 
 ### Consent in the desktop app
 
-The app denies by default. `PluginConsent.FromGrants` allows a plugin only if the grant store holds a
-grant for its id that was made for the **exact contents of the `plugin.json` now on disk**
-(`PluginManifestFingerprint`, a SHA-256 over every manifest field), and then only with the
-capabilities granted. Grants are persisted in `settings.json` under `Plugins.Grants`
-(`{ "<id>": { "ManifestHash": "...", "Capabilities": [...] } }`) through `AppSettingsPluginGrantStore`;
-`IPluginGrantStore.Grant(manifest, capabilities)` is what the management UI (#61) will call after it
-has shown the consent text above. Until a UI does, no plugin runs in the desktop app (the CLI
-harness is different: it grants everything declared, and says so).
+The app denies by default. The consent callback receives a `PluginConsentRequest`: the parsed
+manifest plus two content hashes. `PluginConsent.FromGrants` allows a plugin only if the grant store
+holds a grant for its id whose **three** hashes all equal the request's, and then only with the
+capabilities granted:
+
+| Hash | What it covers |
+|---|---|
+| `ManifestHash` | `PluginManifestFingerprint`: SHA-256 over every manifest field (capabilities order-insensitively). A manifest is public, so this alone proves nothing about the code. |
+| `EntryHash` | Plain SHA-256 (lowercase hex; reproducible with `sha256sum`) of the exact bytes of the entry assembly. The host reads the assembly into memory once, hashes that `byte[]` and loads those same bytes (`LoadFromStream`), so there is **no time-of-check/time-of-use gap** on the entry assembly: what was approved is what runs. |
+| `FilesHash` | `PluginContentHash.OfFolder`: SHA-256 over every *other* file in the plugin folder (dependency DLLs, native libraries, `.deps.json`, resources). Format: tag `EDNexus.PluginFiles.v1`, file count, then per file in ordinal order of its `/`-separated relative path: length-prefixed UTF-8 path, 64-bit content length, SHA-256 of the content (integers little-endian, files streamed). Excluded: the entry assembly and `plugin.json` (bound by the two hashes above) and the top-level `data/` folder (the plugin's own storage, which changes at run time; a `data` folder nested deeper is hashed like anything else). |
+
+**Fail closed.** No grant, a missing or empty hash of any kind (so every grant written before the
+content hashes existed counts as no grant and must be approved again), any mismatch, or a store that
+throws, all deny. A grant for one id never applies to another.
+
+**Links.** The folder hash never reads through a symbolic link, junction or other reparse point: a
+plugin whose folder contains one (outside `data/`, which is not entered) is `Rejected` before
+consent is even asked, because the loader would follow the link to content that no hash of the
+folder can vouch for. The package installer already refuses links. **Bounds.** The folder hash
+refuses (`Rejected`) a folder over the `PluginPackageLimits` defaults (2,000 files and folders, 128 MiB
+per file, 256 MiB in total) or nested deeper than `PluginPathRules.MaxDepth`, so anything the
+installer accepts can be hashed.
+
+**What this does not protect.** The entry assembly's hash is race-free, but a plugin's *other*
+files are still loaded **by path**, lazily, after the check (`AssemblyDependencyResolver`). `FilesHash`
+therefore protects against a package being swapped or updated between approvals (uninstall by hand,
+unzip a trojanised package with a copy of the manifest; replace a dependency under an unchanged
+manifest) but not against a local actor with write access to the plugin folder who races the load.
+That actor can already run code as the user, so this crosses no trust boundary. Nothing here defends
+against a plugin that is approved and then misbehaves: consent is not a sandbox.
+
+Grants are persisted in `settings.json` under `Plugins.Grants`:
+`{ "<id>": { "ManifestHash": "...", "EntryHash": "...", "FilesHash": "...", "Capabilities": [...] } }`
+through `AppSettingsPluginGrantStore`. A missing or `null` hash reads as empty (denied). The management
+UI (#61) records consent with `IPluginGrantStore.Grant(request, capabilities)` using the
+`PluginConsentRequest` it showed (`PluginConsentRequest.TryRead(folder, ...)` builds the same request
+the host would; `Grant(folder, capabilities)` does both steps). There is deliberately no overload
+that takes only a manifest. Until a UI does, no plugin runs in the desktop app (the CLI harness is
+different: it grants everything declared, and says so). The trust and signing model is #66.
 
 Consent is applied in one place, `PluginHost`, on every load, **including a reload**: the host
-re-reads `plugin.json` from disk, then asks the consent callback about that manifest before any plugin
-code loads. A reload therefore never reuses an approval for different files: change the version,
-the capabilities or any other manifest field and the plugin comes back `Denied` until it is approved
-again. The fingerprint covers the manifest only; a DLL swapped on disk without touching `plugin.json`
-is not detected by it, so keep updating plugins through the installer, which bumps the version.
+re-reads `plugin.json`, the entry assembly and the folder from disk, then asks the consent callback
+about them before any plugin code loads. A reload therefore never reuses an approval for different
+files: change the version, a capability, the DLL or any other file outside `data/` and the plugin
+comes back `Denied` until it is approved again. This includes an update through `PluginInstaller`
+(same id, new content): the installer itself knows nothing about grants, and this check is what makes
+the update need a fresh approval.
+
+**Stale grants.** Nothing in the app calls `PluginRuntime.Uninstalled` when a folder is removed by hand,
+so after each load pass the app (`PluginChoicePruner`) forgets the grants and disable flags of ids
+that have no folder under the plugins root. It does nothing when the root is missing, cannot be
+listed, or holds no plugin folder at all (all indistinguishable from an unplugged drive or unmounted
+share); a stale entry is harmless (it can no longer match different code) and is removed on a later
+run.
 
 In the app, plugins load once the engine has finished replaying the journal, on a background thread,
 so they do not receive the startup replay (read `context.State` for what the replay established);

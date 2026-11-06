@@ -23,9 +23,9 @@ public sealed class PluginRuntimeOptions
     /// Decides, for each plugin about to load, whether it may run and with which capabilities (see
     /// <see cref="PluginHost"/>). Required, with no allow-all default; <see cref="PluginConsent"/>
     /// has the production policy. Evaluated on every load, including a reload, against the manifest
-    /// as read from disk then.
+    /// and the content hashes of the entry assembly and plugin files as read from disk then.
     /// </summary>
-    public required Func<PluginManifest, IReadOnlyCollection<string>?> Consent { get; init; }
+    public required Func<PluginConsentRequest, IReadOnlyCollection<string>?> Consent { get; init; }
 
     /// <summary>Where the commander's enable / disable choice lives.</summary>
     public required IPluginEnablementStore EnablementStore { get; init; }

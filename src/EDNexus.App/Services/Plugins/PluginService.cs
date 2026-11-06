@@ -19,8 +19,9 @@ namespace EDNexus.App.Services.Plugins;
 /// <para>
 /// <b>Consent.</b> There is no consent UI yet (the management UI is #61), so the default is
 /// <b>deny</b>: a plugin runs only if <see cref="Grants"/> holds a grant for its id made for the
-/// exact contents of the <c>plugin.json</c> now on disk (<see cref="PluginManifestFingerprint"/>), and
-/// then only with the capabilities granted. With an empty store, which is every fresh install, no
+/// exact manifest, entry assembly and plugin files now on disk (<see cref="PluginConsentRequest"/>),
+/// and then only with the capabilities granted. Grants and disable flags of plugins whose folder is
+/// gone are pruned after the load pass (<see cref="PluginChoicePruner"/>). With an empty store, which is every fresh install, no
 /// plugin code is loaded at all. The consent callback can be replaced through the constructor and
 /// <see cref="Grants"/> is the store the future UI writes to. The decision is taken by
 /// <see cref="PluginHost"/> on every load, a reload included, from the manifest it reads then, so
@@ -44,8 +45,9 @@ public sealed class PluginService : IDisposable
     private readonly Func<bool> _isSimulated;
     private readonly SemanticVersion _appVersion;
     private readonly string? _pluginsRoot;
-    private readonly Func<PluginManifest, IReadOnlyCollection<string>?> _consent;
+    private readonly Func<PluginConsentRequest, IReadOnlyCollection<string>?> _consent;
     private readonly Action<Exception> _onError;
+    private readonly AppSettings _settings;
 
     private readonly object _gate = new();
     private PluginRuntime? _runtime;
@@ -67,12 +69,13 @@ public sealed class PluginService : IDisposable
         Action<Exception>? onError = null,
         SemanticVersion? appVersion = null,
         string? pluginsRoot = null,
-        Func<PluginManifest, IReadOnlyCollection<string>?>? consent = null)
+        Func<PluginConsentRequest, IReadOnlyCollection<string>?>? consent = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(save);
         ArgumentNullException.ThrowIfNull(postToUi);
         ArgumentNullException.ThrowIfNull(isSimulated);
+        _settings = settings;
         void SaveOnUi(AppSettings s) => postToUi(() => save(s));
         Enablement = new AppSettingsPluginEnablementStore(settings, SaveOnUi);
         Grants = new AppSettingsPluginGrantStore(settings, SaveOnUi);
@@ -164,6 +167,9 @@ public sealed class PluginService : IDisposable
                 foreach (var result in report.Plugins)
                     Trace.TraceInformation($"Plugins: {result.Manifest?.Id ?? result.FolderName}: {result.Status}"
                         + (result.Status == PluginLoadStatus.Loaded ? "" : $" ({result.ReasonSummary})"));
+                // After the load pass, which first repairs an interrupted install: an id whose only
+                // copy is still in a .replaced-* backup has not been uninstalled.
+                PluginChoicePruner.Prune(_settings, runtime.PluginsRoot, Grants, Enablement);
             }
             catch (ObjectDisposedException)
             {

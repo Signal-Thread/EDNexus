@@ -109,7 +109,7 @@ public sealed class PluginSettings
 
     /// <summary>
     /// What the commander has allowed each plugin to do, by plugin id. A plugin with no entry, or
-    /// whose entry no longer matches its manifest, is not run: the default is deny. Treat the
+    /// whose entry no longer matches its manifest and code, is not run: the default is deny. Treat the
     /// dictionary as immutable and replace it to change it (copy-on-write), as with
     /// <see cref="DisabledIds"/>. A <c>null</c> in settings.json becomes an empty dictionary, and
     /// a <c>null</c> entry is dropped (so a hand-edited file can only ever deny, never crash a save).
@@ -131,16 +131,43 @@ public sealed class PluginSettings
 }
 
 /// <summary>
-/// The commander's persisted consent for one plugin: the capabilities granted and the fingerprint
-/// of the manifest they were granted for. The grant only applies while the manifest on disk still
-/// has that fingerprint, so an updated or edited plugin must be approved again.
+/// The commander's persisted consent for one plugin: the capabilities granted and the hashes of
+/// what they were granted for (the manifest, the entry assembly, and the plugin's other files).
+/// The grant only applies while <em>all three</em> still match what is on disk, so an updated,
+/// edited or replaced plugin must be approved again. A grant that lacks <see cref="EntryHash"/> or
+/// <see cref="FilesHash"/> (written before they existed, or hand-edited) never applies.
 /// </summary>
+/// <remarks>
+/// On disk: <c>Plugins.Grants.&lt;id&gt;.{ManifestHash, EntryHash, FilesHash, Capabilities}</c>. A
+/// missing or <c>null</c> hash reads as empty, which denies.
+/// </remarks>
 public sealed class PluginGrantSettings
 {
     private List<string> _capabilities = [];
+    private string _manifestHash = "";
+    private string _entryHash = "";
+    private string _filesHash = "";
 
     /// <summary>Fingerprint of the manifest contents that were approved (see <c>PluginManifestFingerprint</c>).</summary>
-    public string ManifestHash { get; set; } = "";
+    public string ManifestHash
+    {
+        get => _manifestHash;
+        set => _manifestHash = value ?? "";
+    }
+
+    /// <summary>SHA-256 (lowercase hex) of the entry assembly that was approved (see <c>PluginContentHash.OfAssembly</c>).</summary>
+    public string EntryHash
+    {
+        get => _entryHash;
+        set => _entryHash = value ?? "";
+    }
+
+    /// <summary>SHA-256 (lowercase hex) of the plugin folder's other files that were approved (see <c>PluginContentHash.OfFolder</c>).</summary>
+    public string FilesHash
+    {
+        get => _filesHash;
+        set => _filesHash = value ?? "";
+    }
 
     /// <summary>The capabilities granted. Anything the manifest does not declare is ignored at load time.</summary>
     public List<string> Capabilities
