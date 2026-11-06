@@ -54,7 +54,7 @@ public sealed class PluginService : IDisposable
     private readonly object _gate = new();
     private PluginRuntime? _runtime;
     private Task _starting = Task.CompletedTask;   // completes when every StartAsync pass has finished; replaced under _gate before the pass can run
-    private Task? _teardown;                       // the Detach that is unloading the runtime now, if any; later callers join it
+    private readonly List<Task> _teardowns = [];  // one per runtime being unloaded right now (under _gate); each is removed when its teardown finishes
     private bool _closed;                          // ShutdownForExit / Dispose: nothing is attached or loaded any more
 
     /// <param name="settings">The app settings, where enable / disable and consent are persisted.</param>
@@ -105,9 +105,9 @@ public sealed class PluginService : IDisposable
     public TimeSpan StartWaitTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// How long a <see cref="Detach()"/> that finds another one already unloading waits for it.
-    /// Default 30 seconds; that teardown is itself bounded, this only stops the second caller
-    /// depending on that.
+    /// How long a <see cref="Detach()"/> waits for teardowns of earlier runtimes that are still
+    /// unloading (a second concurrent detach, or one a bounded detach gave up on). Default 30
+    /// seconds; those teardowns are themselves bounded, this only stops the caller depending on that.
     /// </summary>
     public TimeSpan TeardownJoinTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
@@ -145,7 +145,9 @@ public sealed class PluginService : IDisposable
         }
         try
         {
-            Detach();   // one runtime per engine; a leftover one is bound to a bus that is going away
+            // One runtime per engine; a leftover one is bound to a bus that is going away. Never joins
+            // an earlier runtime's teardown (this runs on the UI thread and that one may be stuck).
+            TearDownCurrent();
             if (_noPluginsRoot)
             {
                 Trace.TraceInformation("Plugins: no per-user plugins folder could be determined; plugins are off.");
@@ -271,40 +273,96 @@ public sealed class PluginService : IDisposable
     /// <summary>
     /// Unloads every plugin and disposes the current runtime (a no-op when there is none). May take
     /// up to the unload timeout per plugin stuck in a handler: run it on a worker. Never throws.
-    /// A call that finds another one still unloading waits for it (up to
-    /// <see cref="TeardownJoinTimeout"/>) instead of returning at once, so "returned" always means
-    /// the plugins are gone, or the wait gave up.
+    /// Teardowns of earlier runtimes that are still unloading (another <see cref="Detach()"/> in
+    /// progress, or one a bounded detach gave up on) are waited for too, up to
+    /// <see cref="TeardownJoinTimeout"/>, so "returned" always means the plugins are gone, or the
+    /// wait gave up. A runtime attached while an older teardown is still running is torn down
+    /// regardless of it.
     /// </summary>
-    public void Detach()
+    public void Detach() => DetachCore(TeardownJoinTimeout);
+
+    /// <summary>
+    /// <see cref="Detach()"/> with a bound, for an engine rebuild: runs it on a worker and gives up
+    /// waiting after <paramref name="timeout"/>, so a plugin that will not stop can never hold the
+    /// rebuild (and with it the dashboard) forever. Returns whether it finished in time; when it did
+    /// not it is logged and the caller carries on, so the old engine may be disposed while a stuck
+    /// plugin is still unwinding against it. That trade-off is intended: the alternative is an
+    /// engine that can never be rebuilt. Never throws.
+    /// </summary>
+    public bool Detach(TimeSpan timeout)
+    {
+        try
+        {
+            var work = Task.Run(() => DetachCore(timeout));
+            if (work.Wait(timeout) && work.Result)
+                return true;
+            Trace.TraceWarning($"Plugins: still shutting down after {timeout.TotalSeconds:0.##}s; continuing without waiting for them.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"Plugins: could not shut the plugin host down: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Detach()"/> with a bound, for app exit: gives up waiting after
+    /// <paramref name="timeout"/> (the process is ending anyway). Returns whether it finished in time,
+    /// including when another detach was already in progress and has now finished. From here on
+    /// <see cref="Attach"/> and <see cref="StartAsync"/> do nothing, so an engine rebuild that is
+    /// still under way cannot bring plugins back after the exit began.
+    /// </summary>
+    public bool ShutdownForExit(TimeSpan timeout)
+    {
+        lock (_gate) _closed = true;   // a rebuild racing the exit must not attach or load again
+        try
+        {
+            var work = Task.Run(() => DetachCore(timeout));
+            return work.Wait(timeout) && work.Result;
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"Plugins: could not shut the plugin host down on exit: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Tears the current runtime down (if any), then waits up to <paramref name="joinTimeout"/> for
+    /// the teardowns of earlier runtimes that were already running. Returns false if that wait gave up.
+    /// </summary>
+    private bool DetachCore(TimeSpan joinTimeout)
+    {
+        var clock = Stopwatch.StartNew();
+        var older = TearDownCurrent();
+        if (older.Length == 0) return true;
+        var left = joinTimeout == Timeout.InfiniteTimeSpan ? joinTimeout : (joinTimeout > clock.Elapsed ? joinTimeout - clock.Elapsed : TimeSpan.Zero);
+        // These tasks only ever complete normally (TrySetResult), so waiting cannot surface a fault.
+        return Task.WaitAll(older, left);
+    }
+
+    /// <summary>
+    /// Unloads and disposes the current runtime on the calling thread, if there is one, and returns
+    /// the teardowns of other runtimes that were already in flight (never waited for here). Each
+    /// teardown is tracked on its own, so a runtime attached while an older one is still unloading
+    /// is torn down by the next call instead of being mistaken for that older one's work.
+    /// </summary>
+    private Task[] TearDownCurrent()
     {
         PluginRuntime runtime;
         Task starting;
-        Task? running;
+        Task[] older;
         var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_gate)
         {
-            running = _teardown;
-            if (running is null)
-            {
-                if (_runtime is not { } current) return;
-                runtime = current;
-                _runtime = null;
-                starting = _starting;
-                _starting = Task.CompletedTask;
-                _teardown = finished.Task;
-            }
-            else
-            {
-                runtime = null!;
-                starting = null!;
-            }
-        }
-
-        if (running is not null)
-        {
-            try { running.Wait(TeardownJoinTimeout); }
-            catch (AggregateException) { /* the first caller reports its own failure */ }
-            return;
+            older = [.. _teardowns];
+            if (_runtime is not { } current) return older;
+            runtime = current;
+            _runtime = null;
+            starting = _starting;
+            _starting = Task.CompletedTask;
+            _teardowns.Add(finished.Task);
         }
 
         try
@@ -326,54 +384,10 @@ public sealed class PluginService : IDisposable
         }
         finally
         {
-            lock (_gate) _teardown = null;
+            lock (_gate) _teardowns.Remove(finished.Task);
             finished.TrySetResult();
         }
-    }
-
-    /// <summary>
-    /// <see cref="Detach"/> with a bound, for an engine rebuild: runs it on a worker and gives up
-    /// waiting after <paramref name="timeout"/>, so a plugin that will not stop can never hold the
-    /// rebuild (and with it the dashboard) forever. Returns whether it finished in time; when it did
-    /// not it is logged and the caller carries on, so the old engine may be disposed while a stuck
-    /// plugin is still unwinding against it. That trade-off is intended: the alternative is an
-    /// engine that can never be rebuilt. Never throws.
-    /// </summary>
-    public bool Detach(TimeSpan timeout)
-    {
-        try
-        {
-            if (Task.Run(Detach).Wait(timeout))
-                return true;
-            Trace.TraceWarning($"Plugins: still shutting down after {timeout.TotalSeconds:0.##}s; continuing without waiting for them.");
-            return false;
-        }
-        catch (Exception ex)
-        {
-            Trace.TraceWarning($"Plugins: could not shut the plugin host down: {ex.Message}");
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// <see cref="Detach"/> with a bound, for app exit: gives up waiting after
-    /// <paramref name="timeout"/> (the process is ending anyway). Returns whether it finished in time,
-    /// including when another detach was already in progress and has now finished. From here on
-    /// <see cref="Attach"/> and <see cref="StartAsync"/> do nothing, so an engine rebuild that is
-    /// still under way cannot bring plugins back after the exit began.
-    /// </summary>
-    public bool ShutdownForExit(TimeSpan timeout)
-    {
-        lock (_gate) _closed = true;   // a rebuild racing the exit must not attach or load again
-        try
-        {
-            return Task.Run(Detach).Wait(timeout);
-        }
-        catch (Exception ex)
-        {
-            Trace.TraceWarning($"Plugins: could not shut the plugin host down on exit: {ex.Message}");
-            return false;
-        }
+        return older;
     }
 
     /// <summary>Equivalent to <see cref="Detach"/>, and nothing is attached or loaded afterwards.</summary>
