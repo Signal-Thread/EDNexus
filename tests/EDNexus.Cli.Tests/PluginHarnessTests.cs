@@ -125,7 +125,9 @@ public sealed class PluginHarnessTests : IDisposable
     {
         Install(_root, "com.example.solo", "SoloPlugin", "\"events\",\"storage\"",
             initBody: "context.Storage.SetString(\"k\", \"v\");");
-        var harness = Harness(single: Path.Combine(_root, "com.example.solo"));
+        // `using`, so a failing assertion below cannot leak the scratch copy; Dispose is idempotent,
+        // so the explicit one is how the removal itself is asserted.
+        using var harness = Harness(single: Path.Combine(_root, "com.example.solo"));
         var scratch = harness.ScratchRoot!;
         harness.Load();
 
