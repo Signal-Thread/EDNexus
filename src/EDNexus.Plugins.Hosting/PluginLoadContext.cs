@@ -23,12 +23,26 @@ internal sealed class PluginLoadContext : AssemblyLoadContext
 
     private readonly AssemblyDependencyResolver _resolver;
 
-    /// <param name="id">The plugin id (used in the context name for diagnostics).</param>
-    /// <param name="entryAssemblyPath">Full path of the plugin's entry assembly (must exist).</param>
-    public PluginLoadContext(string id, string entryAssemblyPath)
+    private PluginLoadContext(string id, string entryAssemblyPath)
         : base("EDNexus plugin " + id, isCollectible: true)
     {
         _resolver = new AssemblyDependencyResolver(entryAssemblyPath);
+    }
+
+    /// <summary>
+    /// Creates the context, or returns <see langword="null"/> with a <paramref name="problem"/> when the
+    /// plugin's <c>.deps.json</c> is not safe to hand to <see cref="AssemblyDependencyResolver"/>.
+    /// This is the only way to make a context, so the resolver never sees an unvetted file: it parses
+    /// that file in native code, where a malformed (but well-formed JSON) document aborts the whole
+    /// host process instead of throwing. See <see cref="PluginDepsJson"/>.
+    /// </summary>
+    /// <param name="id">The plugin id (used in the context name for diagnostics).</param>
+    /// <param name="entryAssemblyPath">Full path of the plugin's entry assembly (must exist).</param>
+    /// <param name="problem">Why no context was made.</param>
+    public static PluginLoadContext? Create(string id, string entryAssemblyPath, out string? problem)
+    {
+        problem = PluginDepsJson.CheckFor(entryAssemblyPath);
+        return problem is null ? new PluginLoadContext(id, entryAssemblyPath) : null;
     }
 
     /// <summary>Whether <paramref name="name"/> must come from the host rather than the plugin folder.</summary>

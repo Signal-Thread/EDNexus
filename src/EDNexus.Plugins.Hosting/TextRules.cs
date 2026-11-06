@@ -41,8 +41,11 @@ internal static class TextRules
 
     /// <summary>
     /// Makes untrusted text (a folder name, or an exception message raised by plugin code) safe to
-    /// echo in a log line or the UI: control characters, invisible formatting characters and
-    /// unpaired surrogates become <c>?</c>, and the result is cut to <paramref name="maxLength"/>.
+    /// echo in a log line or the UI: control characters (which include <c>\n</c>, <c>\r</c> and the
+    /// C1 next-line U+0085), invisible formatting characters, the Unicode line and paragraph
+    /// separators (U+2028, U+2029, which are neither control nor format characters but still break a
+    /// line in many viewers) and unpaired surrogates become <c>?</c>, and the result is cut to
+    /// <paramref name="maxLength"/>.
     /// </summary>
     public static string ForDisplay(string? text, int maxLength = 500)
     {
@@ -62,7 +65,7 @@ internal static class TextRules
                 i++;
                 continue;
             }
-            builder.Append(char.IsSurrogate(ch) || char.IsControl(ch) || CharUnicodeInfo.GetUnicodeCategory(ch) == UnicodeCategory.Format
+            builder.Append(char.IsSurrogate(ch) || char.IsControl(ch) || IsInvisibleOrLineBreaking(CharUnicodeInfo.GetUnicodeCategory(ch))
                 ? '?'
                 : ch);
         }
@@ -70,4 +73,21 @@ internal static class TextRules
             builder.Append('…');
         return builder.ToString();
     }
+
+    private static bool IsInvisibleOrLineBreaking(UnicodeCategory category)
+        => category is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;
+}
+
+/// <summary>
+/// Makes untrusted text safe to write to a one-line-per-entry log. For callers outside this
+/// assembly (the app's plugin log lines); see <see cref="TextRules.ForDisplay"/> for what is replaced.
+/// </summary>
+public static class PluginLogText
+{
+    /// <summary>
+    /// <paramref name="text"/> with control, invisible-format, line- and paragraph-separator
+    /// characters and unpaired surrogates replaced by <c>?</c>, cut to <paramref name="maxLength"/>
+    /// characters. <see langword="null"/> becomes the empty string. Never throws.
+    /// </summary>
+    public static string Sanitise(string? text, int maxLength = 500) => TextRules.ForDisplay(text, maxLength);
 }

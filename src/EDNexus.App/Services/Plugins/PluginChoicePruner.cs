@@ -70,7 +70,7 @@ public static class PluginChoicePruner
                 }
                 catch (Exception ex)
                 {
-                    Trace.TraceWarning($"Plugins: could not forget the choices for uninstalled plugin '{id}': {ex.Message}");
+                    Trace.TraceWarning($"Plugins: could not forget the choices for uninstalled plugin '{PluginLogText.Sanitise(id, 200)}': {PluginLogText.Sanitise(ex.Message)}");
                 }
             }
             if (pruned.Count > 0)
@@ -78,7 +78,7 @@ public static class PluginChoicePruner
         }
         catch (Exception ex)
         {
-            Trace.TraceWarning($"Plugins: pruning saved plugin choices failed: {ex.Message}");
+            Trace.TraceWarning($"Plugins: pruning saved plugin choices failed: {PluginLogText.Sanitise(ex.Message)}");
         }
         return pruned;
     }
@@ -90,7 +90,7 @@ public static class PluginChoicePruner
         {
             if (!Directory.Exists(pluginsRoot))
             {
-                Trace.TraceInformation($"Plugins: '{pluginsRoot}' does not exist; saved plugin choices were left alone.");
+                Trace.TraceInformation($"Plugins: '{PluginLogText.Sanitise(pluginsRoot)}' does not exist; saved plugin choices were left alone.");
                 return false;
             }
             foreach (var dir in enumerateDirectories(pluginsRoot))
@@ -102,12 +102,12 @@ public static class PluginChoicePruner
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            Trace.TraceWarning($"Plugins: '{pluginsRoot}' could not be listed ({ex.Message}); saved plugin choices were left alone.");
+            Trace.TraceWarning($"Plugins: '{PluginLogText.Sanitise(pluginsRoot)}' could not be listed ({PluginLogText.Sanitise(ex.Message)}); saved plugin choices were left alone.");
             return false;
         }
         if (installed.Count == 0)
         {
-            Trace.TraceInformation($"Plugins: '{pluginsRoot}' holds no plugin folders; saved plugin choices were left alone (it may be an unmounted drive).");
+            Trace.TraceInformation($"Plugins: '{PluginLogText.Sanitise(pluginsRoot)}' holds no plugin folders; saved plugin choices were left alone (it may be an unmounted drive).");
             return false;
         }
         return true;

@@ -94,12 +94,12 @@ public sealed class PluginSupervisor : IDisposable
         public long Generation;
         /// <summary>Whether fault reports count: false while the old copy unloads and once the plugin is not running.</summary>
         public bool Accepting;
-        /// <summary>The bridge session number of the plugin's current copy, once <see cref="RecordAttach"/> has said (0: not yet).</summary>
+        /// <summary>The bridge session number of the plugin's current copy, once <see cref="RecordAttach"/> has said (0: not yet, so no stamped report matches it).</summary>
         public long Attach;
         /// <summary>Whether <see cref="RecordAttach"/> has ever been called for this plugin; only then are session numbers enforced.</summary>
         public bool AttachTracked;
-        /// <summary>A new load began and its session has not attached yet: no session-stamped report can be from it.</summary>
-        public bool AwaitingAttach;
+        /// <summary>Whether the latest unload of this plugin reported <see cref="PluginUnloadResult.Stuck"/> (its code may still be executing); reset by every unload.</summary>
+        public bool UnloadStuck;
     }
 
     /// <summary>
@@ -149,6 +149,18 @@ public sealed class PluginSupervisor : IDisposable
     }
 
     /// <summary>
+    /// Whether the plugin's latest unload (disable, reload, quarantine or removal) left its code
+    /// possibly still executing (<see cref="PluginUnloadResult.Stuck"/>: a <c>Shutdown</c> or an event
+    /// handler had not returned within its bound). False if the id is unknown or the plugin was never
+    /// unloaded. Each unload overwrites it, so it describes the most recent one only.
+    /// </summary>
+    public bool LastUnloadStuck(string id)
+    {
+        lock (_gate)
+            return _entries.TryGetValue(id, out var e) && e.UnloadStuck;
+    }
+
+    /// <summary>
     /// The number of the plugin's current (or latest) load, or 0 if unknown. Pass it to
     /// <see cref="ReportFault(string, string, long)"/> to have a report ignored if the plugin has
     /// been reloaded since.
@@ -182,7 +194,6 @@ public sealed class PluginSupervisor : IDisposable
                 }
                 e.Attach = attachGeneration;
                 e.AttachTracked = true;
-                e.AwaitingAttach = false;
             }
         }
         catch { /* the context factory must not fail because of bookkeeping */ }
@@ -264,10 +275,14 @@ public sealed class PluginSupervisor : IDisposable
         ThrowIfDisposed();
         if (!Known(id)) return false;
         _store.SetDisabled(id, true);   // may write the settings file: outside every supervisor lock
+        var forgotten = false;
         try
         {
             lock (_lifecycle)
             {
+                // Uninstalled (Forget) between the check above and now: it has already cleared the
+                // persisted choice, so ours must not outlive the plugin and disable a reinstall.
+                if (!Known(id)) { forgotten = true; return false; }
                 // A concurrent Enable that persisted after us wins: the store is the truth.
                 if (!_store.IsDisabled(id)) return true;
                 Mutate(id, e => { e.Accepting = false; e.QuarantinePending = false; e.State = PluginState.Loading; });
@@ -282,6 +297,8 @@ public sealed class PluginSupervisor : IDisposable
         }
         finally
         {
+            if (forgotten)
+                _store.SetDisabled(id, false);   // outside the lifecycle lock, like every store write
             Raise(id);
         }
         return true;
@@ -290,7 +307,9 @@ public sealed class PluginSupervisor : IDisposable
     /// <summary>
     /// Clears the persisted disable (and any quarantine) and loads the plugin from disk. Returns the
     /// load result, or null if the id is unknown, the plugin is already running, or a concurrent
-    /// <see cref="Disable"/> superseded this call. See the threading note on the class.
+    /// <see cref="Disable"/> superseded this call. An id the supervisor has no entry for (an
+    /// uninstall, <see cref="Forget"/>, dropped it) is adopted again when its folder is on disk and
+    /// <see cref="Start"/> has run; consent applies as for any load. See the threading note on the class.
     /// </summary>
     /// <exception cref="InvalidOperationException">A load pass is already running (see <see cref="PluginHost.LoadPlugin"/>); the plugin is then marked failed.</exception>
     /// <exception cref="ObjectDisposedException">The supervisor or its host is disposed.</exception>
@@ -298,14 +317,20 @@ public sealed class PluginSupervisor : IDisposable
     {
         ArgumentNullException.ThrowIfNull(id);
         ThrowIfDisposed();
-        if (!Known(id)) return null;
+        if (!Known(id) && !Adoptable(id)) return null;
         _store.SetDisabled(id, false);   // may write the settings file: outside every supervisor lock
         try
         {
             lock (_lifecycle)
             {
                 if (_store.IsDisabled(id)) return null;
-                if (GetStatus(id)!.State == PluginState.Enabled)
+                // Forgotten (uninstalled) since the check above: adopt it again if it is back on disk.
+                if (GetStatus(id) is { } status)
+                {
+                    if (status.State == PluginState.Enabled)
+                        return null;
+                }
+                else if (!TryAdopt(id))
                     return null;
                 return LoadFresh(id, carriedError: null);
             }
@@ -319,8 +344,9 @@ public sealed class PluginSupervisor : IDisposable
     /// <summary>
     /// Unloads the plugin (if running) and loads whatever is on disk now, resetting its fault count
     /// and last error; this is how a rebuilt assembly is picked up and how a quarantined plugin is
-    /// retried. A plugin the commander disabled stays disabled (returns null), as does an unknown
-    /// id. See the threading note on the class.
+    /// retried. A plugin the commander disabled stays disabled (returns null), as does an id that is
+    /// neither known nor installed; one that is installed but unknown (reinstalled after
+    /// <see cref="Forget"/>) is adopted, as in <see cref="Enable"/>. See the threading note on the class.
     /// </summary>
     /// <exception cref="InvalidOperationException">A load pass is already running (see <see cref="PluginHost.LoadPlugin"/>); the plugin is then marked failed.</exception>
     /// <exception cref="ObjectDisposedException">The supervisor or its host is disposed.</exception>
@@ -332,7 +358,7 @@ public sealed class PluginSupervisor : IDisposable
         {
             lock (_lifecycle)
             {
-                if (!Known(id) || _store.IsDisabled(id)) return null;
+                if (_store.IsDisabled(id) || (!Known(id) && !TryAdopt(id))) return null;
                 // Pending before the unload: reports from the old copy stop counting now.
                 Mutate(id, e => { e.Accepting = false; e.QuarantinePending = false; e.State = PluginState.Loading; });
                 var unloadError = UnloadQuietly(id);
@@ -392,8 +418,9 @@ public sealed class PluginSupervisor : IDisposable
                     return;
                 // A report stamped with a bridge session (attach > 0) counts only if that session is
                 // the plugin's current one: a copy that outlived a reload must not be charged to its
-                // replacement. Until the replacement has attached no stamped report can be its own.
-                if (attach > 0 && e.AttachTracked && (e.AwaitingAttach || attach != e.Attach))
+                // replacement. Until the replacement has attached Attach is 0, which no stamped report
+                // (attach > 0) matches, so none can be charged to it.
+                if (attach > 0 && e.AttachTracked && attach != e.Attach)
                     return;
                 var now = _monotonic();
                 e.TotalFaults++;
@@ -445,12 +472,18 @@ public sealed class PluginSupervisor : IDisposable
         catch { /* runs on the pool: nothing may escape */ }
     }
 
-    /// <summary>Stops the supervisor: later lifecycle calls throw and fault reports are ignored. The host is not disposed.</summary>
+    /// <summary>
+    /// Stops the supervisor: later lifecycle calls throw and fault reports are ignored. The host is
+    /// not disposed, but its <see cref="PluginHost.LoadFilter"/> now refuses every plugin, so a load
+    /// pass still running cannot start one.
+    /// </summary>
     public void Dispose()
     {
         lock (_gate)
             _disposed = true;
-        _host.LoadFilter = null;
+        // Refuse, never "allow all" (a null filter): a load pass already running on another thread
+        // must not load a plugin the commander disabled just because the supervisor was disposed.
+        _host.LoadFilter = static _ => false;
     }
 
     // ---- internals ------------------------------------------------------------------------
@@ -466,10 +499,43 @@ public sealed class PluginSupervisor : IDisposable
         lock (_gate) return _entries.ContainsKey(id);
     }
 
+    /// <summary>
+    /// Whether <paramref name="id"/> is an installed plugin folder the supervisor has no entry for
+    /// and may take on: only once <see cref="Start"/> has run (a single-plugin load before it would
+    /// make the load pass throw), and only for a plain folder name that exists with exactly that case.
+    /// </summary>
+    private bool Adoptable(string id)
+    {
+        if (_host.LastReport is null) return false;
+        if (id.Length == 0 || id.StartsWith('.') || id != Path.GetFileName(id)) return false;
+        try
+        {
+            return Directory.EnumerateDirectories(_host.PluginsRoot)
+                .Any(dir => string.Equals(Path.GetFileName(dir), id, StringComparison.Ordinal));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Gives an installed, unknown plugin an entry so it can be loaded. Caller holds the lifecycle lock.</summary>
+    private bool TryAdopt(string id)
+    {
+        if (!Adoptable(id)) return false;
+        lock (_gate)
+        {
+            if (_disposed) return false;
+            _entries.TryAdd(id, new Entry { State = PluginState.Loading });   // Generation 0: LoadFresh makes it 1
+        }
+        return true;
+    }
+
     /// <summary>Unloads the plugin; returns an error description if that reported problems.</summary>
     private string? UnloadQuietly(string id)
     {
         var unloaded = _host.Unload(id);
+        Mutate(id, e => e.UnloadStuck = unloaded?.Stuck ?? false);
         return unloaded is { Errors.Count: > 0 }
             ? TextRules.ForDisplay("while unloading: " + string.Join("; ", unloaded.Errors), 500)
             : null;
@@ -484,7 +550,6 @@ public sealed class PluginSupervisor : IDisposable
             e.State = PluginState.Loading;
             e.Accepting = true;
             // The old copy's session number no longer applies; the new one is not known until it attaches.
-            e.AwaitingAttach = e.AttachTracked;
             e.Attach = 0;
             e.QuarantinePending = false;
             e.Window.Clear();

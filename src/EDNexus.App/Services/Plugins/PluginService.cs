@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using EDNexus.Core.Dev;
 using EDNexus.Core.Journal;
 using EDNexus.Core.Settings;
 using EDNexus.Core.State;
@@ -45,13 +46,16 @@ public sealed class PluginService : IDisposable
     private readonly Func<bool> _isSimulated;
     private readonly SemanticVersion _appVersion;
     private readonly string? _pluginsRoot;
+    private readonly bool _noPluginsRoot;
     private readonly Func<PluginConsentRequest, IReadOnlyCollection<string>?> _consent;
     private readonly Action<Exception> _onError;
     private readonly AppSettings _settings;
 
     private readonly object _gate = new();
     private PluginRuntime? _runtime;
-    private Task _starting = Task.CompletedTask;
+    private Task _starting = Task.CompletedTask;   // completes when every StartAsync pass has finished; replaced under _gate before the pass can run
+    private readonly List<Task> _teardowns = [];  // one per runtime being unloaded right now (under _gate); each is removed when its teardown finishes
+    private bool _closed;                          // ShutdownForExit / Dispose: nothing is attached or loaded any more
 
     /// <param name="settings">The app settings, where enable / disable and consent are persisted.</param>
     /// <param name="save">Writes the settings file (e.g. <c>SettingsStore.TrySave</c>).</param>
@@ -59,8 +63,10 @@ public sealed class PluginService : IDisposable
     /// <param name="isSimulated">True while developer mode feeds the engine fabricated events.</param>
     /// <param name="onError">Receives host faults (never a plugin's own misbehaviour); default: ignore.</param>
     /// <param name="appVersion">The running app version; default read from the entry assembly.</param>
-    /// <param name="pluginsRoot">The plugins root; default <see cref="PluginPaths.Resolve()"/>. Tests only.</param>
+    /// <param name="pluginsRoot">The plugins root. Default: the per-user folder (<see cref="PluginPaths.DefaultRoot"/>); the <c>EDNEXUS_PLUGINS_DIR</c> override is honoured only when developer tools are available (<see cref="ResolvePluginsRoot"/>). Tests only.</param>
     /// <param name="consent">Replaces the default deny-unless-granted policy. The future consent UI plugs in here or through <see cref="Grants"/>.</param>
+    /// <param name="developerTools">Whether developer tools are available; default <see cref="FeatureFlags.DeveloperTools"/>. Tests only.</param>
+    /// <param name="getEnvironmentVariable">Environment lookup for the plugins-root override; default the process environment. Tests only.</param>
     public PluginService(
         AppSettings settings,
         Action<AppSettings> save,
@@ -69,7 +75,9 @@ public sealed class PluginService : IDisposable
         Action<Exception>? onError = null,
         SemanticVersion? appVersion = null,
         string? pluginsRoot = null,
-        Func<PluginConsentRequest, IReadOnlyCollection<string>?>? consent = null)
+        Func<PluginConsentRequest, IReadOnlyCollection<string>?>? consent = null,
+        bool? developerTools = null,
+        Func<string, string?>? getEnvironmentVariable = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(save);
@@ -82,9 +90,26 @@ public sealed class PluginService : IDisposable
         _isSimulated = isSimulated;
         _onError = onError ?? (static _ => { });
         _appVersion = appVersion ?? ResolveAppVersion();
-        _pluginsRoot = pluginsRoot;
+        // Resolved here, never left to PluginRuntime: with a null root it would consult the
+        // EDNEXUS_PLUGINS_DIR override itself, whatever the flag says.
+        _pluginsRoot = pluginsRoot ?? ResolvePluginsRoot(developerTools ?? FeatureFlags.DeveloperTools, getEnvironmentVariable ?? Environment.GetEnvironmentVariable);
+        _noPluginsRoot = _pluginsRoot is null;
         _consent = consent ?? PluginConsent.FromGrants(Grants);
     }
+
+    /// <summary>
+    /// How long <see cref="Detach()"/> waits for a load pass that is still running (a plugin mid-
+    /// <c>Initialize</c> is not yet loaded, so unloading cannot stop it) before it releases the
+    /// bridge anyway. Default 10 seconds.
+    /// </summary>
+    public TimeSpan StartWaitTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How long a <see cref="Detach()"/> waits for teardowns of earlier runtimes that are still
+    /// unloading (a second concurrent detach, or one a bounded detach gave up on). Default 30
+    /// seconds; those teardowns are themselves bounded, this only stops the caller depending on that.
+    /// </summary>
+    public TimeSpan TeardownJoinTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>Where the commander's enable / disable choice is persisted.</summary>
     public IPluginEnablementStore Enablement { get; }
@@ -114,9 +139,20 @@ public sealed class PluginService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(bus);
         ArgumentNullException.ThrowIfNull(state);
+        lock (_gate)
+        {
+            if (_closed) return false;   // the app is exiting: no new runtime
+        }
         try
         {
-            Detach();   // one runtime per engine; a leftover one is bound to a bus that is going away
+            // One runtime per engine; a leftover one is bound to a bus that is going away. Never joins
+            // an earlier runtime's teardown (this runs on the UI thread and that one may be stuck).
+            TearDownCurrent();
+            if (_noPluginsRoot)
+            {
+                Trace.TraceInformation("Plugins: no per-user plugins folder could be determined; plugins are off.");
+                return false;
+            }
             var runtime = PluginRuntime.Create(bus, state, new PluginRuntimeOptions
             {
                 PluginsRoot = _pluginsRoot,
@@ -126,7 +162,8 @@ public sealed class PluginService : IDisposable
                 GrantStore = Grants,
                 IsSimulated = _isSimulated,
                 HandlerErrorObserver = error => Trace.TraceWarning(
-                    $"Plugin {error.PluginId}: handler for '{error.EventName}' threw {error.ExceptionType}: {error.Message}"),
+                    $"Plugin {PluginLogText.Sanitise(error.PluginId, 200)}: handler for '{PluginLogText.Sanitise(error.EventName, 100)}' threw "
+                    + $"{PluginLogText.Sanitise(error.ExceptionType, 200)}: {PluginLogText.Sanitise(error.Message)}"),
             });
             if (runtime is null)
             {
@@ -134,7 +171,18 @@ public sealed class PluginService : IDisposable
                 return false;
             }
             runtime.Supervisor.StatusChanged += OnStatusChanged;
-            lock (_gate) _runtime = runtime;
+            bool closed;
+            lock (_gate)
+            {
+                closed = _closed;   // exit began while the runtime was being built
+                if (!closed) _runtime = runtime;
+            }
+            if (closed)
+            {
+                runtime.Supervisor.StatusChanged -= OnStatusChanged;
+                runtime.Dispose();
+                return false;
+            }
             return true;
         }
         catch (Exception ex)
@@ -153,20 +201,29 @@ public sealed class PluginService : IDisposable
     /// </summary>
     public Task StartAsync()
     {
-        PluginRuntime? runtime;
-        lock (_gate) runtime = _runtime;
-        if (runtime is null) return Task.CompletedTask;
+        PluginRuntime runtime;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_gate)
+        {
+            if (_closed || _runtime is not { } current) return Task.CompletedTask;
+            runtime = current;
+            // Published before the work can run, in the same critical section that read _runtime, so
+            // a Detach can never see this runtime without also seeing the pass that is about to use it.
+            _starting = Task.WhenAll(_starting, done.Task);
+        }
 
-        var task = Task.Run(() =>
+        _ = Task.Run(() =>
         {
             try
             {
                 var report = runtime.Start();
+                // Folder names, install-recovery messages and load reasons come from the plugins folder
+                // (a Linux folder name may hold a newline) or from plugin code: never log them raw.
                 foreach (var error in report.Errors)
-                    Trace.TraceWarning($"Plugins: {error}");
+                    Trace.TraceWarning($"Plugins: {PluginLogText.Sanitise(error)}");
                 foreach (var result in report.Plugins)
-                    Trace.TraceInformation($"Plugins: {result.Manifest?.Id ?? result.FolderName}: {result.Status}"
-                        + (result.Status == PluginLoadStatus.Loaded ? "" : $" ({result.ReasonSummary})"));
+                    Trace.TraceInformation($"Plugins: {PluginLogText.Sanitise(result.Manifest?.Id ?? result.FolderName, 200)}: {result.Status}"
+                        + (result.Status == PluginLoadStatus.Loaded ? "" : $" ({PluginLogText.Sanitise(result.ReasonSummary)})"));
                 // After the load pass, which first repairs an interrupted install: an id whose only
                 // copy is still in a .replaced-* backup has not been uninstalled.
                 PluginChoicePruner.Prune(_settings, runtime.PluginsRoot, Grants, Enablement);
@@ -180,46 +237,52 @@ public sealed class PluginService : IDisposable
                 Trace.TraceError($"Plugins: loading failed: {ex}");
                 Report(ex);
             }
+            finally
+            {
+                done.TrySetResult();
+            }
         });
-        lock (_gate) _starting = task;
-        return task;
+        return done.Task;
+    }
+
+    /// <summary>
+    /// Withdraws consent for a plugin and stops it if it is running (see <see cref="PluginRuntime.Revoke"/>);
+    /// the entry point the management UI uses to revoke, because removing the grant from
+    /// <see cref="Grants"/> alone would leave the loaded plugin running with its capabilities.
+    /// Without a runtime only the persisted grant is removed. Not a disable: nothing is persisted
+    /// beyond the grant removal. Safe off the UI thread (run it on a worker: it unloads plugin code),
+    /// idempotent, never throws.
+    /// </summary>
+    public PluginRevocation Revoke(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return default;
+        PluginRuntime? runtime;
+        lock (_gate) runtime = _runtime;
+        try
+        {
+            if (runtime is not null) return runtime.Revoke(id);
+            return new PluginRevocation(Grants.Remove(id), false);
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"Plugins: revoking a plugin failed: {PluginLogText.Sanitise(ex.Message)}");
+            return default;
+        }
     }
 
     /// <summary>
     /// Unloads every plugin and disposes the current runtime (a no-op when there is none). May take
     /// up to the unload timeout per plugin stuck in a handler: run it on a worker. Never throws.
+    /// Teardowns of earlier runtimes that are still unloading (another <see cref="Detach()"/> in
+    /// progress, or one a bounded detach gave up on) are waited for too, up to
+    /// <see cref="TeardownJoinTimeout"/>, so "returned" always means the plugins are gone, or the
+    /// wait gave up. A runtime attached while an older teardown is still running is torn down
+    /// regardless of it.
     /// </summary>
-    public void Detach()
-    {
-        PluginRuntime? runtime;
-        Task starting;
-        lock (_gate)
-        {
-            runtime = _runtime;
-            _runtime = null;
-            starting = _starting;
-            _starting = Task.CompletedTask;
-        }
-        if (runtime is null) return;
-
-        try
-        {
-            runtime.Supervisor.StatusChanged -= OnStatusChanged;
-            runtime.Dispose();
-            // Dispose stops further loading; let a load that was mid-plugin finish unwinding so its
-            // plugin is not left running against the bridge that was just released.
-            try { starting.Wait(TimeSpan.FromSeconds(10)); }
-            catch (AggregateException) { /* StartAsync observes its own failures */ }
-        }
-        catch (Exception ex)
-        {
-            Trace.TraceError($"Plugins: shutting down the plugin host failed: {ex}");
-            Report(ex);
-        }
-    }
+    public void Detach() => DetachCore(TeardownJoinTimeout);
 
     /// <summary>
-    /// <see cref="Detach"/> with a bound, for an engine rebuild: runs it on a worker and gives up
+    /// <see cref="Detach()"/> with a bound, for an engine rebuild: runs it on a worker and gives up
     /// waiting after <paramref name="timeout"/>, so a plugin that will not stop can never hold the
     /// rebuild (and with it the dashboard) forever. Returns whether it finished in time; when it did
     /// not it is logged and the caller carries on, so the old engine may be disposed while a stuck
@@ -230,7 +293,8 @@ public sealed class PluginService : IDisposable
     {
         try
         {
-            if (Task.Run(Detach).Wait(timeout))
+            var work = Task.Run(() => DetachCore(timeout));
+            if (work.Wait(timeout) && work.Result)
                 return true;
             Trace.TraceWarning($"Plugins: still shutting down after {timeout.TotalSeconds:0.##}s; continuing without waiting for them.");
             return false;
@@ -243,14 +307,19 @@ public sealed class PluginService : IDisposable
     }
 
     /// <summary>
-    /// <see cref="Detach"/> with a bound, for app exit: gives up waiting after
-    /// <paramref name="timeout"/> (the process is ending anyway). Returns whether it finished in time.
+    /// <see cref="Detach()"/> with a bound, for app exit: gives up waiting after
+    /// <paramref name="timeout"/> (the process is ending anyway). Returns whether it finished in time,
+    /// including when another detach was already in progress and has now finished. From here on
+    /// <see cref="Attach"/> and <see cref="StartAsync"/> do nothing, so an engine rebuild that is
+    /// still under way cannot bring plugins back after the exit began.
     /// </summary>
     public bool ShutdownForExit(TimeSpan timeout)
     {
+        lock (_gate) _closed = true;   // a rebuild racing the exit must not attach or load again
         try
         {
-            return Task.Run(Detach).Wait(timeout);
+            var work = Task.Run(() => DetachCore(timeout));
+            return work.Wait(timeout) && work.Result;
         }
         catch (Exception ex)
         {
@@ -259,13 +328,79 @@ public sealed class PluginService : IDisposable
         }
     }
 
-    /// <summary>Equivalent to <see cref="Detach"/>.</summary>
-    public void Dispose() => Detach();
+    /// <summary>
+    /// Tears the current runtime down (if any), then waits up to <paramref name="joinTimeout"/> for
+    /// the teardowns of earlier runtimes that were already running. Returns false if that wait gave up.
+    /// </summary>
+    private bool DetachCore(TimeSpan joinTimeout)
+    {
+        var clock = Stopwatch.StartNew();
+        var older = TearDownCurrent();
+        if (older.Length == 0) return true;
+        var left = joinTimeout == Timeout.InfiniteTimeSpan ? joinTimeout : (joinTimeout > clock.Elapsed ? joinTimeout - clock.Elapsed : TimeSpan.Zero);
+        // These tasks only ever complete normally (TrySetResult), so waiting cannot surface a fault.
+        return Task.WaitAll(older, left);
+    }
+
+    /// <summary>
+    /// Unloads and disposes the current runtime on the calling thread, if there is one, and returns
+    /// the teardowns of other runtimes that were already in flight (never waited for here). Each
+    /// teardown is tracked on its own, so a runtime attached while an older one is still unloading
+    /// is torn down by the next call instead of being mistaken for that older one's work.
+    /// </summary>
+    private Task[] TearDownCurrent()
+    {
+        PluginRuntime runtime;
+        Task starting;
+        Task[] older;
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_gate)
+        {
+            older = [.. _teardowns];
+            if (_runtime is not { } current) return older;
+            runtime = current;
+            _runtime = null;
+            starting = _starting;
+            _starting = Task.CompletedTask;
+            _teardowns.Add(finished.Task);
+        }
+
+        try
+        {
+            runtime.Supervisor.StatusChanged -= OnStatusChanged;
+            // Stop loading first (no further plugin is started and everything loaded is unloaded),
+            // then let a load pass that is mid-plugin finish: that plugin is in no list yet, so only
+            // the end of the pass tells us its session is gone. Only then release the bridge it reads.
+            runtime.Supervisor.Dispose();
+            runtime.Host.Dispose();
+            try { starting.Wait(StartWaitTimeout); }
+            catch (AggregateException) { /* StartAsync observes its own failures */ }
+            runtime.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceError($"Plugins: shutting down the plugin host failed: {ex}");
+            Report(ex);
+        }
+        finally
+        {
+            lock (_gate) _teardowns.Remove(finished.Task);
+            finished.TrySetResult();
+        }
+        return older;
+    }
+
+    /// <summary>Equivalent to <see cref="Detach"/>, and nothing is attached or loaded afterwards.</summary>
+    public void Dispose()
+    {
+        lock (_gate) _closed = true;
+        Detach();
+    }
 
     private void OnStatusChanged(PluginStatus status)
     {
-        Trace.TraceInformation($"Plugins: {status.Id} is now {status.State}"
-            + (string.IsNullOrEmpty(status.LastError) ? "" : $" ({status.LastError})"));
+        Trace.TraceInformation($"Plugins: {PluginLogText.Sanitise(status.Id, 200)} is now {status.State}"
+            + (string.IsNullOrEmpty(status.LastError) ? "" : $" ({PluginLogText.Sanitise(status.LastError)})"));
         StatusChanged?.Invoke(status);
     }
 
@@ -274,6 +409,17 @@ public sealed class PluginService : IDisposable
         try { _onError(ex); }
         catch { /* reporting a fault must not become one */ }
     }
+
+    /// <summary>
+    /// The plugins root the app uses: the per-user folder, or, only when <paramref name="developerTools"/>
+    /// is true (<see cref="FeatureFlags.DeveloperTools"/>), the <c>EDNEXUS_PLUGINS_DIR</c> override
+    /// (<see cref="PluginPaths.Resolve(Func{string, string?})"/>). A shipped build, where developer
+    /// tools are stripped, must not let an environment variable (set by anything that launches it,
+    /// and possibly a UNC share on Windows) redirect where plugin code is loaded from. Null when no
+    /// per-user data folder exists: the app then runs with no plugins.
+    /// </summary>
+    internal static string? ResolvePluginsRoot(bool developerTools, Func<string, string?> getEnvironmentVariable)
+        => developerTools ? PluginPaths.Resolve(getEnvironmentVariable) : PluginPaths.DefaultRoot();
 
     /// <summary>The app's version for plugin <c>minAppVersion</c> gating: the entry assembly's informational version minus any <c>+build</c> suffix.</summary>
     internal static SemanticVersion ResolveAppVersion()

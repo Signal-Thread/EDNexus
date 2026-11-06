@@ -228,7 +228,18 @@ public sealed class PluginBridgeOptions
 /// a higher number, so a sink can drop a report from an old copy that is still running (stuck in a
 /// handler) rather than charge it to the new one. 0 means "not stamped" (an error built by hand).
 /// </param>
-public sealed record PluginHandlerError(string PluginId, string EventName, string ExceptionType, string Message, long Generation = 0);
+public sealed record PluginHandlerError(string PluginId, string EventName, string ExceptionType, string Message, long Generation = 0)
+{
+    /// <summary>
+    /// An error that is not stamped with a session (<see cref="Generation"/> 0). Kept so code and
+    /// binaries built against the four-parameter shape this record had before <c>Generation</c> was
+    /// added still link.
+    /// </summary>
+    public PluginHandlerError(string pluginId, string eventName, string exceptionType, string message)
+        : this(pluginId, eventName, exceptionType, message, 0)
+    {
+    }
+}
 
 /// <summary>
 /// One plugin's attachment to a <see cref="PluginBridge"/>: the <see cref="IPluginEvents"/> and

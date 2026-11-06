@@ -119,7 +119,12 @@ file's CRC-32 is verified. The manifest must be named exactly `plugin.json`, be 
    loaded (see [Consent and capabilities](#consent-and-capabilities)). The plugin gets its own **collectible `AssemblyLoadContext`**: its
    private dependencies resolve from its folder via `AssemblyDependencyResolver` (its `.deps.json`,
    or every assembly beside the entry assembly when there is none), so two plugins can ship
-   different versions of the same library. `EDNexus.Plugins.Abstractions` always binds to the
+   different versions of the same library. A `.deps.json` is vetted first (`PluginDepsJson`): the
+   runtime parses it in native code, where a document that is valid JSON but not shaped like SDK output
+   (no `runtimeTarget`, a library without `type`/`sha512`, a number where an object belongs, ...) aborts
+   the whole host process, which no `try/catch` can stop. A file that is not valid UTF-8 JSON of that shape
+   (also: over 4 MiB, nested deeper than 16, containing comments or duplicate keys) makes the plugin
+   **Rejected** after consent and before any plugin code runs. Files the .NET SDK produces always pass. `EDNexus.Plugins.Abstractions` always binds to the
    **host's** copy, even if the plugin bundles one, so `IEDNexusPlugin` is the same type in host and
    plugin. Anything else the plugin does not ship resolves from the host process (the default
    context): the framework (BCL) **and the host's own third-party libraries** (the desktop app's

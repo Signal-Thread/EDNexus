@@ -84,8 +84,14 @@ public sealed class CrashReporting : IDisposable
     // a Sentry event per line. One report per distinct failure per window is plenty.
     private readonly ErrorThrottle _throttle = new(TimeSpan.FromMinutes(5), maxKeys: 128);
 
-    public CrashReporting()
+    // Where last_crash.txt goes; null: <LocalApplicationData>/EDNexus. Tests only (internal constructor).
+    private readonly string? _crashDirectory;
+
+    public CrashReporting() : this(null) { }
+
+    internal CrashReporting(string? crashDirectory)
     {
+        _crashDirectory = crashDirectory;
         _onUnhandled = (_, e) =>
         {
             if (e.ExceptionObject is Exception ex) CaptureCrash(ex, e.IsTerminating);
@@ -125,32 +131,36 @@ public sealed class CrashReporting : IDisposable
         try
         {
             var repeats = suppressed > 0 ? $" (+{suppressed} similar suppressed)" : "";
-            System.Diagnostics.Trace.TraceError("Captured exception" + repeats + ": " + ex);
+            System.Diagnostics.Trace.TraceError("Captured exception" + repeats + ": " + PluginCrashAttribution.Describe(ex));
         }
         catch { }
 
-        if (IsActive) SentrySdk.CaptureException(ex);
+        // A plugin's failure is logged above but never leaves the machine (its text is plugin-controlled).
+        if (IsActive && PluginCrashAttribution.ShouldSendToSentry(ex)) SentrySdk.CaptureException(ex);
     }
 
     /// <summary>
     /// Report an unhandled exception. When the runtime is terminating because of it, also leaves a
     /// crash marker file so the UI can offer the logs after a real crash (and only then).
     /// </summary>
-    private void CaptureCrash(Exception ex, bool terminating)
+    internal void CaptureCrash(Exception ex, bool terminating)
     {
         try
         {
-            System.Diagnostics.Trace.TraceError("Unhandled exception: " + ex);
+            System.Diagnostics.Trace.TraceError("Unhandled exception: " + PluginCrashAttribution.Describe(ex));
             if (terminating)
             {
-                var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EDNexus");
+                var dir = _crashDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EDNexus");
                 Directory.CreateDirectory(dir);
-                File.WriteAllText(Path.Combine(dir, "last_crash.txt"), DateTime.UtcNow.ToString("o") + "\n" + ex);
+                // Names the plugin first when the exception came from plugin code.
+                File.WriteAllText(Path.Combine(dir, "last_crash.txt"), PluginCrashAttribution.FormatCrashFile(DateTime.UtcNow, ex));
             }
         }
         catch { }
 
-        if (IsActive) SentrySdk.CaptureException(ex);
+        // Plugin code is third-party: its crash text (credits, systems, anything) is plugin-controlled
+        // and the bug is not EDNexus's, so it stays local. See PluginCrashAttribution.
+        if (IsActive && PluginCrashAttribution.ShouldSendToSentry(ex)) SentrySdk.CaptureException(ex);
     }
 
     private JournalEventBus? _attachedBus;
@@ -197,8 +207,14 @@ public sealed class CrashReporting : IDisposable
         _commander?.Name,
     };
 
-    private SentryEvent ScrubEvent(SentryEvent e, SentryHint hint)
+    // Sentry's own integrations capture unhandled and unobserved exceptions too, without going through
+    // Capture / CaptureCrash, so this is the one place every outgoing event passes: an event for an
+    // exception that came from plugin code is dropped here (returning null), whoever raised it.
+    internal SentryEvent? ScrubEvent(SentryEvent e, SentryHint hint)
     {
+        if (!PluginCrashAttribution.ShouldSendToSentry(e.Exception))
+            return null;
+
         e.ServerName = null; // never send the hostname
 
         if (e.Message is { } m)

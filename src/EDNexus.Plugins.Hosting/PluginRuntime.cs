@@ -45,6 +45,9 @@ public sealed class PluginRuntimeOptions
     /// <summary>How long an unload waits for a stuck handler; default 5 seconds.</summary>
     public TimeSpan? UnloadTimeout { get; init; }
 
+    /// <summary>How long an unload waits for a plugin's <c>Shutdown</c> to return; default 5 seconds (<see cref="PluginHost.ShutdownTimeout"/>).</summary>
+    public TimeSpan? ShutdownTimeout { get; init; }
+
     /// <summary>
     /// Called with every handler error, on the plugin's dispatch thread, before it is passed to the
     /// supervisor (exceptions swallowed). For logging and tooling.
@@ -111,6 +114,7 @@ public sealed class PluginRuntime : IDisposable
             Host = new PluginHost(root, options.AppVersion, options.Consent, BuildContext)
             {
                 UnloadTimeout = options.UnloadTimeout ?? TimeSpan.FromSeconds(5),
+                ShutdownTimeout = options.ShutdownTimeout ?? TimeSpan.FromSeconds(5),
             };
             Supervisor = new PluginSupervisor(Host, options.EnablementStore, options.FaultPolicy);
         }
@@ -172,6 +176,53 @@ public sealed class PluginRuntime : IDisposable
     }
 
     /// <summary>
+    /// Withdraws the commander's consent for <paramref name="id"/> and stops it now: the one entry
+    /// point a UI should use to revoke. Consent is only evaluated when a plugin loads, so removing a
+    /// grant from the <see cref="PluginRuntimeOptions.GrantStore"/> alone leaves a running plugin
+    /// holding its capabilities (<c>network</c> included) until it is next unloaded; this removes the
+    /// grant and then reloads the plugin, which re-runs <see cref="PluginRuntimeOptions.Consent"/>
+    /// against the now-empty grant, so the old copy is unloaded (its session, handlers and storage cut
+    /// off) and the plugin ends up <see cref="PluginLoadStatus.Denied"/> (<see cref="PluginState.Failed"/>).
+    /// </summary>
+    /// <remarks>
+    /// Revoking is not disabling: no disable flag is persisted, so a later grant lets the plugin run
+    /// again without an <see cref="PluginSupervisor.Enable"/>. An unknown id, a plugin that is not
+    /// running, or a repeat call is a no-op for that part. Never throws (a grant store or unload
+    /// failure is absorbed; check <see cref="PluginRevocation.StillRunning"/>, which is also true when
+    /// the old copy's <c>Shutdown</c> or a handler did not return within its bound, see
+    /// <see cref="PluginUnloadResult.Stuck"/>). Runs plugin code
+    /// (<c>Shutdown</c>) and writes <c>settings.json</c>: call it off the UI thread, like the
+    /// other lifecycle calls. It stops the plugin only for a consent policy that reads the grant
+    /// store, as <see cref="PluginConsent.FromGrants"/> (the app's) does.
+    /// </remarks>
+    /// <param name="id">The plugin's manifest id.</param>
+    public PluginRevocation Revoke(string id)
+    {
+        var removed = false;
+        try
+        {
+            if (string.IsNullOrEmpty(id)) return default;
+            try { removed = _options.GrantStore?.Remove(id) ?? false; }
+            catch { /* still stop it: the reload below is what matters, and a failed removal shows in GrantRemoved */ }
+
+            if (Volatile.Read(ref _disposed) != 0) return new PluginRevocation(removed, false);
+            // Only a running (or loading) plugin has anything to stop; reloading a stopped one would
+            // just churn its status.
+            if (Supervisor.GetStatus(id) is not { State: PluginState.Enabled or PluginState.Loading })
+                return new PluginRevocation(removed, false);
+            var reloaded = Supervisor.Reload(id);
+            return new PluginRevocation(removed, reloaded?.Status == PluginLoadStatus.Loaded || Supervisor.LastUnloadStuck(id));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Reload throwing (disposed mid-call, ...): report what the host says is still loaded, or
+            // what an unload left executing.
+            try { return new PluginRevocation(removed, Host.Loaded.Any(p => string.Equals(p.Id, id, StringComparison.Ordinal)) || Supervisor.LastUnloadStuck(id)); }
+            catch { return new PluginRevocation(removed, false); }
+        }
+    }
+
+    /// <summary>
     /// Unloads every plugin and releases the bridge. Idempotent. May take up to
     /// <see cref="PluginHost.UnloadTimeout"/> per plugin with a stuck handler: run it off the UI
     /// thread, or bound the wait.
@@ -218,6 +269,17 @@ public sealed class PluginRuntime : IDisposable
     }
 }
 
+/// <summary>What <see cref="PluginRuntime.Revoke"/> did.</summary>
+/// <param name="GrantRemoved">Whether a persisted grant existed and was removed.</param>
+/// <param name="StillRunning">
+/// Whether the plugin may still be running afterwards: true when the consent policy allowed it again
+/// despite the removed grant (a policy that does not read the grant store), the unload failed, or
+/// the old copy was unloaded but is stuck (<see cref="PluginUnloadResult.Stuck"/>: its <c>Shutdown</c>
+/// or a handler had not returned within the bound, so its code may still be executing even though the
+/// host no longer lists it).
+/// </param>
+public readonly record struct PluginRevocation(bool GrantRemoved, bool StillRunning);
+
 /// <summary>
 /// The <see cref="IPluginContext"/> the app hands a plugin: the bridge session's state, events,
 /// storage and UI registry plus a log. Disposing it (the host does, at unload) disposes the session;
@@ -251,9 +313,61 @@ public sealed class PluginContext(PluginManifest manifest, PluginBridgeSession s
     public bool WaitForExit(TimeSpan timeout) => session.WaitForExit(timeout);
 }
 
-/// <summary>Writes a plugin's log lines to <see cref="Trace"/> (the app's log file), tagged with its id and sanitised.</summary>
-internal sealed class TracePluginLog(string pluginId) : IPluginLog
+/// <summary>
+/// Writes a plugin's log lines to <see cref="Trace"/> (the app's log file), tagged with its id and
+/// sanitised, within a per-plugin budget so that a plugin logging in a loop cannot grow the
+/// per-launch log file without bound.
+/// </summary>
+/// <remarks>
+/// <b>Budget.</b> A token bucket: <see cref="BurstLines"/> lines may be written at once, refilled at
+/// <see cref="RefillLinesPerSecond"/>; a line that finds the bucket empty is dropped and counted.
+/// The count is reported as one "N lines suppressed" notice, either on the next line let through
+/// once the bucket has recovered to <see cref="RecoveredLines"/>, or, while the plugin keeps
+/// flooding, every <see cref="NoticeInterval"/> at most. Lines still pending when a plugin goes quiet
+/// are reported at its next line (there is no timer). A single line is cut to
+/// <see cref="MaxLineLength"/> characters. So one plugin's sustained output is at most about
+/// <see cref="RefillLinesPerSecond"/> lines a second of <see cref="MaxLineLength"/> characters each.
+/// The budget is per instance, which is per plugin load.
+/// </remarks>
+internal sealed class TracePluginLog : IPluginLog
 {
+    /// <summary>Lines a plugin may write at once (the bucket's capacity).</summary>
+    public const int BurstLines = 30;
+
+    /// <summary>Lines per second the bucket refills at: the sustained rate a plugin can log.</summary>
+    public const double RefillLinesPerSecond = 1;
+
+    /// <summary>Tokens the bucket must hold again for a pending "suppressed" notice to be flushed on a line that is let through.</summary>
+    public const int RecoveredLines = BurstLines / 2;
+
+    /// <summary>The longest a line may be, in characters, before the cut marker (the whole line: id, level and message).</summary>
+    public const int MaxLineLength = 1024;
+
+    /// <summary>At most one "suppressed" notice per this long while a plugin keeps flooding.</summary>
+    public static readonly TimeSpan NoticeInterval = TimeSpan.FromSeconds(30);
+
+    private readonly string _pluginId;
+    private readonly Func<TimeSpan> _clock;
+    private readonly Action<string> _sink;
+
+    private readonly object _gate = new();
+    private double _tokens = BurstLines;
+    private TimeSpan _lastRefill;
+    private long _suppressed;
+    private TimeSpan _noticeDue;
+
+    /// <param name="pluginId">The plugin's manifest id, tagged on every line.</param>
+    /// <param name="clock">Monotonic time for the budget (default: a <see cref="Stopwatch"/>); injectable so tests need no sleeps.</param>
+    /// <param name="sink">Where a finished line goes (default: <see cref="Trace.WriteLine(string)"/>).</param>
+    public TracePluginLog(string pluginId, Func<TimeSpan>? clock = null, Action<string>? sink = null)
+    {
+        _pluginId = pluginId;
+        var origin = Stopwatch.GetTimestamp();
+        _clock = clock ?? (() => Stopwatch.GetElapsedTime(origin));
+        _sink = sink ?? (static line => Trace.WriteLine(line));
+        _lastRefill = _clock();
+    }
+
     public void Debug(string message) => Write("debug", message, null);
     public void Info(string message) => Write("info", message, null);
     public void Warn(string message) => Write("warn", message, null);
@@ -263,16 +377,63 @@ internal sealed class TracePluginLog(string pluginId) : IPluginLog
     {
         try
         {
+            var notice = Admit(out var admitted);
+            if (notice is not null)
+                _sink($"Plugin {TextRules.ForDisplay(_pluginId, 150)} [warn]: {notice}");
+            if (!admitted)
+                return;
             // Text only: a plugin's message and exception are plugin-controlled (control characters,
             // overridden Message), and holding the exception would pin its load context.
-            var text = $"Plugin {TextRules.ForDisplay(pluginId, 150)} [{level}]: {TextRules.ForDisplay(message)}";
+            var text = $"Plugin {TextRules.ForDisplay(_pluginId, 150)} [{level}]: {TextRules.ForDisplay(message, MaxLineLength)}";
             if (exception is not null)
             {
                 var (typeName, exceptionMessage) = PluginHost.Summarise(exception);
                 text += $" ({typeName}: {exceptionMessage})";
             }
-            Trace.WriteLine(text);
+            _sink(TextRules.ForDisplay(text, MaxLineLength));
         }
         catch { /* logging must not throw into the plugin */ }
+    }
+
+    /// <summary>Takes a token if there is one; returns a "suppressed" notice that is due, if any.</summary>
+    private string? Admit(out bool admitted)
+    {
+        lock (_gate)
+        {
+            var now = _clock();
+            var elapsed = now - _lastRefill;
+            if (elapsed > TimeSpan.Zero)
+            {
+                _tokens = Math.Min(BurstLines, _tokens + elapsed.TotalSeconds * RefillLinesPerSecond);
+                _lastRefill = now;
+            }
+
+            admitted = _tokens >= 1;
+            string? notice = null;
+            if (admitted)
+            {
+                // Flush the count once the bucket has genuinely recovered (or the notice is overdue).
+                if (_suppressed > 0 && (_tokens >= RecoveredLines || now >= _noticeDue))
+                    notice = TakeNotice(now);
+                _tokens -= 1;
+            }
+            else
+            {
+                if (_suppressed == 0)
+                    _noticeDue = now + NoticeInterval;
+                _suppressed++;
+                if (now >= _noticeDue)
+                    notice = TakeNotice(now);
+            }
+            return notice;
+        }
+    }
+
+    private string TakeNotice(TimeSpan now)
+    {
+        var count = _suppressed;
+        _suppressed = 0;
+        _noticeDue = now + NoticeInterval;
+        return $"{count} log line{(count == 1 ? "" : "s")} suppressed (this plugin logs faster than {RefillLinesPerSecond:0.##} line per second after a burst of {BurstLines})";
     }
 }

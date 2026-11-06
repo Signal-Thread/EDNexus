@@ -62,24 +62,24 @@ public class CommodityMeanPriceEstimatorTests
 
         estimator.RequestEstimate("lowtemperaturediamond", "Low Temperature Diamonds");
 
-        // The fetch runs on a background task. The fake's signal fires inside the search call, before
-        // the estimator has averaged the quotes and written the cache, so it only proves the fetch
-        // started; the result itself is awaited by condition below, never by a fixed sleep.
-        await trade.Completed.Task;
+        // The fetch runs on a background task and the result is awaited by condition, never by a fixed
+        // sleep. A non-null cache entry can only exist once the fake search has run, so there is nothing
+        // further to await for "the fetch started" (an unbounded `await` on that signal would hang, not fail).
         var resolved = await WaitUntilAsync(() => estimator.TryGet("lowtemperaturediamond") is not null);
 
         Assert.True(resolved, "The background estimate never reached the cache.");
         Assert.Equal(250_000, estimator.TryGet("lowtemperaturediamond"));
+        Assert.Equal(1, trade.CallCount);   // the cache entry came from the one search, so the dropped "search started" wait added nothing
     }
 
-    /// <summary>Yields until <paramref name="condition"/> holds; the timeout is a failure bound, not a wait.</summary>
+    /// <summary>Polls (1 ms apart, so a slow background task is not starved by a spinning test) until <paramref name="condition"/> holds; the timeout is a failure bound, not a wait.</summary>
     private static async Task<bool> WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (!condition())
         {
             if (DateTime.UtcNow >= deadline) return false;
-            await Task.Yield();
+            await Task.Delay(1);
         }
         return true;
     }
@@ -88,7 +88,6 @@ public class CommodityMeanPriceEstimatorTests
     {
         private readonly IReadOnlyList<TradeStationQuote> _quotes;
         public int CallCount { get; private set; }
-        public TaskCompletionSource Completed { get; } = new();
 
         public FakeTradeSearch(IReadOnlyList<TradeStationQuote> quotes) => _quotes = quotes;
 
@@ -97,7 +96,6 @@ public class CommodityMeanPriceEstimatorTests
         public Task<IReadOnlyList<TradeStationQuote>> SearchAsync(TradeQuery query, CancellationToken ct = default)
         {
             CallCount++;
-            Completed.TrySetResult();
             return Task.FromResult(_quotes);
         }
     }

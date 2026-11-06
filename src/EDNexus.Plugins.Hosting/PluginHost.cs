@@ -534,7 +534,12 @@ public sealed class PluginHost : IDisposable
         var stage = "loading the entry assembly";
         try
         {
-            loadContext = new PluginLoadContext(manifest.Id, entryPath!);
+            // Vets <entry>.deps.json first: the dependency resolver parses it in native code, where a
+            // malformed one aborts the whole process rather than throwing (see PluginDepsJson).
+            // Nothing has been created yet, so there is nothing to release on this path.
+            loadContext = PluginLoadContext.Create(manifest.Id, entryPath!, out var depsProblem);
+            if (loadContext is null)
+                return Result(PluginLoadStatus.Rejected, depsProblem!);
             Assembly assembly;
             try
             {
