@@ -2,8 +2,11 @@
 
   <!--
     A plugin is an ordinary class library that references ONLY the SDK contract
-    (EDNexus.Plugins.Abstractions). Never reference EDNexus.Core, EDNexus.Plugins.Hosting or Avalonia:
-    the host does not let a plugin bind to its own assemblies, so such a plugin fails to load.
+    (EDNexus.Plugins.Abstractions). Never reference EDNexus.Core, EDNexus.Plugins.Hosting or any other
+    EDNexus.* / EliteDangerous.* assembly: the host does not let a plugin bind to those, so such a
+    plugin fails to load. Do not lean on the host's third-party libraries (Avalonia, say) either: the
+    host does not block them, but they are not a contract and can change on any host update, so ship
+    your own copy of any third-party library you use.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>

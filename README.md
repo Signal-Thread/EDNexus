@@ -50,9 +50,11 @@ and folds that into a single live commander state that every feature reads from.
 - **Twitch stream card** — publishes a viewer-facing card of your session to a Twitch extension
   through the EDNexus Extension Backend Service (EBS). Opt-in; you choose which sections are shown.
 - **Plugin SDK (in development)** — `EDNexus.Plugins.Abstractions` and `EDNexus.Plugins.Hosting`
-  define the plugin contract and loader; the desktop app does not load plugins yet. See the
-  **[plugin developer guide](docs/PLUGINS.md)** and the [`Hello Commander` sample](samples/HelloCommander/README.md)
-  (runs today in the CLI harness: `--once --plugin <folder>`).
+  define the plugin contract and loader. The desktop app loads plugins but is deny-all: it runs one only
+  with a consent grant recorded in `settings.json`, and nothing records grants until the plugin
+  management UI exists (#61), so **no plugin runs in the app yet**. Today plugins run in the CLI harness
+  (`--once --plugin <folder>`). See the **[plugin developer guide](docs/PLUGINS.md)** and the
+  [`Hello Commander` sample](samples/HelloCommander/README.md).
 - **Live journal parsing** — a watcher tails the game's own `Journal.*.log` and status sidecar files
   (no third-party account or API key required to get started).
 - **Auto-update (Windows)** — opt-in: downloads the new installer, checks it against the SHA-256
@@ -280,6 +282,6 @@ may warn on first run.
 - [x] In-game overlay + voice callouts (Windows)
 - [x] Mining, radio, Discord Rich Presence
 - [x] Twitch stream card (extension + EBS)
-- [ ] Plugin loading in the desktop app (SDK and host exist)
+- [ ] Plugin loading in the desktop app (SDK, host and loader are wired in, deny-all; waiting on the consent / management UI, #61)
 - [ ] Signed Windows installer
 - [ ] macOS build

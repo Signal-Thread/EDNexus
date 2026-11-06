@@ -75,7 +75,7 @@ public sealed class HelloCommanderPlugin : IEDNexusPlugin
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {
-            // Not granted (or the host has no storage yet): carry on without persistence.
+            // Not granted, or the stored value could not be read: carry on without persistence.
             NoteStorageUnavailable(context, ex);
             return 0;
         }

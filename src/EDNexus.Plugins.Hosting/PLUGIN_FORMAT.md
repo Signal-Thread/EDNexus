@@ -16,8 +16,11 @@ Each installed plugin is a folder named after its id under the per-user plugins 
 |---|---|
 | Windows | `%LOCALAPPDATA%\EDNexus\plugins\` |
 | Linux | `~/.local/share/EDNexus/plugins/` (Flatpak: `~/.var/app/<app-id>/data/EDNexus/plugins/`) |
-| macOS | `~/Library/Application Support/EDNexus/plugins/` |
+| macOS | **Unverified** (tracked in #259). `PluginPaths.DefaultRoot` uses whatever .NET reports as `Environment.SpecialFolder.LocalApplicationData` and does not special-case macOS; `~/Library/Application Support/EDNexus/plugins/` is the intended location per the code comments but has not been checked on a Mac. Set `EDNEXUS_PLUGINS_DIR` rather than rely on it |
 
+The default root is `<LocalApplicationData>/EDNexus/plugins` (on Linux `$XDG_DATA_HOME`, i.e.
+`~/.local/share` by default), falling back to `~/.local/share` when the OS reports no such folder, and
+to no plugins root at all when there is no home folder either (the host then runs with no plugins).
 Set `EDNEXUS_PLUGINS_DIR` to an **absolute** path to use a different folder while developing
 (mirrors `EDNEXUS_JOURNAL_DIR`). It does not need to exist yet; relative values are ignored so the
 root can never depend on the current directory.
@@ -39,12 +42,12 @@ See [`plugin.sample.json`](plugin.sample.json) for a complete example.
 
 | Field | Required | Rules |
 |---|---|---|
-| `id` | yes | Lowercase reverse-DNS, ≥ 2 dot-separated segments of `[a-z0-9_-]` (each starting and ending with a letter/digit), ≤ 128 chars. Must be unique; it is also the install folder name. e.g. `com.acme.jumpcounter` |
+| `id` | yes | Lowercase reverse-DNS, ≥ 2 dot-separated segments of `[a-z0-9_-]` (each starting and ending with a letter/digit), ≤ 128 chars. Must be unique; it is also the install folder name, so it must pass the same safe-path rules as a package entry: an id whose text before its first `.` is a Windows reserved device name (`con.`, `prn.`, `aux.`, `nul.`, `com1.`–`com9.`, `lpt1.`–`lpt9.`, ...) is rejected. e.g. `com.acme.jumpcounter` |
 | `name` | yes | Display name, ≤ 100 chars, no control or invisible formatting characters (bidi overrides, zero-width spaces/joiners). |
 | `version` | yes | The plugin's own version, strict [SemVer 2.0.0](https://semver.org) (`1.2.0`, `2.0.0-beta.1`). |
 | `author` | no | ≤ 200 chars; same character rules as `name`. |
 | `description` | no | ≤ 2000 chars; newlines and tabs allowed, otherwise the same character rules as `name`. |
-| `sdkVersion` | yes | The `EDNexus.Plugins.Abstractions` contract version built against, `"major.minor"` (currently `"2.0"`; plugins built against `"1.x"` are rejected: 2.0 removed `IJournalEvent.Deserialize<T>`). Compatible with any host SDK of the **same major** and an **equal or newer minor** (`PluginSdk.IsCompatible`). The manifest is a claim, not proof: the host also reads the version of the `EDNexus.Plugins.Abstractions` reference recorded in the entry assembly (the SDK assembly's version tracks the SDK's `major.minor`) and rejects a plugin built against a newer SDK than it declares. |
+| `sdkVersion` | yes | The `EDNexus.Plugins.Abstractions` contract version built against, `"major.minor"` (currently `"2.0"`; plugins built against `"1.x"` are rejected: 2.0 removed `IJournalEvent.Deserialize<T>`). The plugin is compatible when its major equals the **host's** SDK major and its minor is **not above the host's** (`PluginSdk.IsCompatible`; so a `2.0` plugin runs on a `2.0` or `2.1` host). The manifest is a claim, not proof: the host also reads the version of the `EDNexus.Plugins.Abstractions` reference recorded in the entry assembly's metadata (the SDK assembly's version tracks the SDK's `major.minor`) and applies the same rule against the **host's** SDK version (`PluginCompatibility.CheckBuiltAgainst`). A plugin whose assembly references a newer minor, or a different major, of the SDK than the host provides is `Incompatible`, whatever its manifest says. |
 | `minAppVersion` | no | Minimum EDNexus app version, SemVer. |
 | `entryAssembly` | yes | Path of the entry `.dll` relative to the plugin folder, `/`-separated (safe-path rules below). |
 | `entryType` | yes | Full CLR type name implementing `IEDNexusPlugin`, e.g. `Acme.JumpCounter.JumpCounterPlugin` (nested types use `+`). |
@@ -65,9 +68,10 @@ Installing validates the whole package, extracts it to a staging folder (`.stagi
 moves it to `<plugins root>/<id>/`; an already-installed id is rejected unless replacement is
 requested. A replace first renames the old version to `.replaced-<id>.<guid>`; if the swap fails
 it is moved back (or, if that also fails, the error names where it was preserved). The host calls
-`PluginInstaller.RecoverInterrupted(root)` at startup to finish any replace cut short by a crash:
-it restores a backup whose `<id>` folder is missing, deletes backups that were superseded, and
-deletes stale `.staging-*` and `.extract-*` folders. (`PluginPackage.ExtractTo` writes into a
+`PluginInstaller.RecoverInterrupted(root)` at startup to repair a replace cut short by a crash. It
+does not complete the replace; it **restores the previous version**: it moves a `.replaced-<id>.<guid>`
+backup back to `<id>` when that folder is missing, deletes backups whose `<id>` folder exists (the
+replacement had completed), and deletes stale `.staging-*` and `.extract-*` folders. (`PluginPackage.ExtractTo` writes into a
 sibling `.extract-<guid>` folder and renames it onto its destination only when complete, so it
 never claims or deletes a destination folder it did not create.) Folder names starting with `.` are never valid plugin ids, so
 discovery ignores them.
@@ -118,8 +122,12 @@ file's CRC-32 is verified. The manifest must be named exactly `plugin.json`, be 
    different versions of the same library. `EDNexus.Plugins.Abstractions` always binds to the
    **host's** copy, even if the plugin bundles one, so `IEDNexusPlugin` is the same type in host and
    plugin. Anything else the plugin does not ship resolves from the host process (the default
-   context): the framework (BCL). **The host's own assemblies (`EDNexus.*` such as `EDNexus.Core`,
-   and `EliteDangerous.*`) do not**: a plugin that references one without shipping its own copy
+   context): the framework (BCL) **and the host's own third-party libraries** (the desktop app's
+   Avalonia, for example). Those are not a contract and can change or disappear on any host update (and
+   the CLI harness and the app carry different sets), so plugins must ship their own copies of
+   third-party libraries. **Only the host's own assemblies (`EDNexus.*` such as `EDNexus.Core`,
+   and `EliteDangerous.*`) are blocked** (`PluginLoadContext.IsHostInternal` matches those two name
+   prefixes and nothing else): a plugin that references one without shipping its own copy
    fails to load with a `FileLoadException` naming it, instead of silently reaching into host
    internals. (A plugin may ship its own library with such a name; it then gets that isolated copy.)
 6. `entryType` must exist, implement the host's `IEDNexusPlugin`, be concrete and non-generic, and
@@ -138,7 +146,20 @@ dispose the context (which stops event delivery), wait up to `PluginHost.UnloadT
 5 s) for event handlers already running to return (when the context is an
 `IPluginSessionControl`, which a bridge session is), drop every reference to the plugin and unload
 its load context, which the GC then collects. Every plugin is unloaded even if another
-misbehaves. While loaded, a plugin's dependency assemblies are locked on Windows; they are
+misbehaves.
+
+**`Shutdown` is time-bounded.** `PluginHost.TryShutdown` runs `Shutdown()` on a dedicated background
+worker thread (named `EDNexus plugin Shutdown`), never the caller's thread, and waits up to
+`PluginHost.ShutdownTimeout` (default 5 s; independent of `UnloadTimeout`, so a plugin stuck in both
+can take about the sum). If it has not returned by then the unload records a **stuck shutdown**
+error, `PluginUnloadResult.Stuck` is `true` (the same path as a stuck handler), and the unload carries
+on: the context is still disposed and the load context released, but the plugin's code is still
+executing so the load context cannot finish unloading until `Shutdown` returns. A late return or a
+late exception is discarded. The same bound applies to the best-effort `Shutdown()` after a failed
+`Initialize`. The worker holds only a private result holder, so a late exception cannot fault
+unobserved or touch host state that has moved on. In the app the plugin runtime is torn down and
+rebuilt on every engine rebuild (leaving developer mode, reset to live), so `Initialize` and
+`Shutdown` can run several times in one process, each time on a freshly constructed instance. While loaded, a plugin's dependency assemblies are locked on Windows; they are
 released after unload and collection.
 
 **The entry assembly is loaded from memory.** The host reads the `entryAssembly` file once (at most
@@ -149,7 +170,8 @@ Consequences for plugin authors: `Assembly.GetExecutingAssembly().Location` is a
 numbers. Dependency DLLs beside the entry assembly are still loaded by path.
 
 A handler that is still running when the wait expires is reported in the unload result's `Errors`
-as a **stuck handler** and `PluginUnloadResult.Stuck` is `true`: the plugin's code is still on a
+as a **stuck handler** (and a `Shutdown` that outlives its timeout as a **stuck shutdown**, above) and
+`PluginUnloadResult.Stuck` is `true`: the plugin's code is still on a
 thread's stack, so the unload is not clean and its files stay locked until that handler returns.
 The app should say so and refuse to replace or delete the plugin's folder while `Stuck`. Handlers
 run on the plugin's own delivery thread, which stops only after `Shutdown` returns, so a handler
@@ -164,8 +186,9 @@ plugin code runs in-process with the host's full trust (the consent UI is #61; t
 stopped. Threads or timers the plugin started, or references held outside the host (for example
 a handler the plugin added to a static event such as `AppDomain.ProcessExit`), keep running and
 keep the load context alive. A stack overflow or `Environment.FailFast` in plugin code ends the
-process, and a constructor, `Initialize` or `Shutdown` that never returns blocks the load or unload
-pass that called it (timeouts belong to the threading contract, #62). `LoadAll()` throws
+process, and a constructor or `Initialize` that never returns blocks the load pass that called it
+(a `Shutdown` that never returns no longer blocks the unload: see above; timeouts for the rest belong
+to the threading contract, #62, which also covers dispatching to the UI thread). `LoadAll()` throws
 `InvalidOperationException` rather than waiting if called while another load pass is in progress
 (from another thread, or from plugin code or the context factory during that load pass).
 
@@ -195,7 +218,7 @@ What the consent screen has to say, per capability:
 | `state` | The commander's **in-game name and credit balance**, current system, body, station, ship, cargo and materials, as of the last completed event. There is no narrower grant for the name or the balance. |
 | `network` | Not enforceable in-process. It is a declaration that the plugin phones home; **with `events` or `state` it can send all of the above off the machine.** Say so when the two are requested together. |
 | `storage` | Lets the plugin save its own key/value data in `<plugins root>/<id>/data/` (see below). Live in the app and the CLI harness: `PluginRuntime` hands the bridge the same plugins root the host scans (`PluginBridgeOptions.PluginsRoot`). A bridge built without a root still refuses every storage call. |
-| `ui.dashboard`, `ui.overlay` | Reserved: the bridge has no UI contribution points yet, so they currently refuse every call (`PluginBridgeSession.Ui`). |
+| `ui.dashboard`, `ui.overlay` | Reserved: the bridge has no UI contribution points yet, so `Register` currently refuses every call whatever is granted (`PluginBridgeSession.Ui`, a `DeniedUiRegistry`). The registries are #58 (dashboard) and #59 (overlay). The CLI harness differs: for a plugin granted either capability it substitutes a counting stub on which `Register` *succeeds*, so a plugin can pass `--plugins-strict` and still fail in the app. |
 
 **Storage contract** (`IPluginStorage`). Keys are 1-100 characters from `A-Z a-z 0-9 . _ -` and are
 **case-insensitive** (`Foo` and `foo` are the same key). Values are strings of valid Unicode, at most
@@ -228,7 +251,9 @@ use that cache.
 **Delivery limits.** Each plugin has its own queue, bounded by event count
 (`PluginBridgeOptions.QueueCapacity`, 8192) *and* by approximate memory
 (`PluginBridgeOptions.QueueByteCapacity`, 16 MiB); when either is exceeded the oldest events are
-dropped and counted (`PluginBridgeSession.DroppedEventCount`). `PluginHandlerError` (reported for
+dropped and counted (`PluginBridgeSession.DroppedEventCount`), and an event larger than the whole
+byte budget is dropped on arrival. A slow handler (a catch-all one especially) can therefore lose
+events during a fast replay. `PluginHandlerError` (reported for
 every throwing handler) carries the exception's type name and message as text only, never the
 exception object, so a log sink that keeps it cannot pin the plugin in memory.
 
@@ -330,5 +355,13 @@ share); a stale entry is harmless (it can no longer match different code) and is
 run.
 
 In the app, plugins load once the engine has finished replaying the journal, on a background thread,
-so they do not receive the startup replay (read `context.State` for what the replay established);
-they receive every event after it. A failing plugin never delays or stops the app.
+so they do not receive the startup replay (`IsHistorical` events; `Initialize` already finds
+`context.State` populated, so read it for what the replay established); they receive every event after
+it. The CLI harness is different: it loads plugins **before** the replay, so its plugins do receive the
+replayed events. A failing plugin never delays or stops the app.
+
+The app builds one `PluginRuntime` per engine host (`PluginService`: `Attach` builds it, `StartAsync`
+loads, `Detach` unloads and disposes it) and rebuilds the engine when it leaves developer mode or resets
+to live, so the runtime is torn down and a new one built and started each time. Quarantine lives in the
+runtime's supervisor and is not persisted, so it is effectively cleared by an engine rebuild (and by a
+restart); the commander's disable flags and grants are persisted.

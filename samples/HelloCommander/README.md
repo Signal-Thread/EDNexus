@@ -29,11 +29,16 @@ today, and the sample does not pretend otherwise:
 
 - There is no dashboard or overlay contribution contract (`IDashboardWidget`, `IOverlayPanel`, ...)
   and no `EDNexus.Plugins.Abstractions.Ui` assembly. `IUiRegistry.Register(id, object)` is an
-  opaque placeholder, and the host's implementation refuses every call.
+  opaque placeholder, and the real host's implementation refuses every call. (The CLI harness is
+  more lenient: it gives a plugin granted `ui.dashboard` or `ui.overlay` a counting stub on which
+  `Register` succeeds, so do not take a clean `--plugins-strict` run as proof that such a call works in
+  the app.)
 - So `plugin.json` does **not** declare `ui.dashboard`. The capability name is recognised, but
-  declaring it today only adds a line to the consent prompt for something that does nothing.
-- The desktop app does not load plugins yet. You can run this plugin with the CLI harness (below)
-  and in the test suite, not inside the app window.
+  declaring it today only adds a line to the (future) consent prompt for something that does nothing.
+- The desktop app loads plugins but is deny-all: it runs a plugin only if `settings.json` holds a consent
+  grant matching its manifest and files, and nothing records grants until the management UI (#61)
+  exists. So this plugin does **not** run inside the app today. Run it with the CLI harness (below)
+  and in the test suite.
 
 When the UI contracts land, this sample is where a widget will be added.
 
@@ -101,16 +106,29 @@ folder there:
 |---|---|
 | Windows | `%LOCALAPPDATA%\EDNexus\plugins\` |
 | Linux | `~/.local/share/EDNexus/plugins/` |
-| macOS | `~/Library/Application Support/EDNexus/plugins/` |
+| macOS | Unverified: the code uses .NET's `LocalApplicationData` and has not been checked on a Mac (tracked in #259); set `EDNEXUS_PLUGINS_DIR` instead |
 
 ```sh
 mkdir -p ~/.local/share/EDNexus/plugins
 cp -r samples/HelloCommander/out/com.ednexus.samples.hellocommander ~/.local/share/EDNexus/plugins/
-dotnet run --project src/EDNexus.Cli -- --once --plugins
+dotnet run --project src/EDNexus.Cli -- --once \
+  --dir samples/HelloCommander/sample-journal --plugins
 ```
 
-Set `EDNEXUS_PLUGINS_DIR` to an absolute path to use a different root while developing. The
-desktop app will pick the folder up once it loads plugins; today only the CLI does.
+(`--dir` points the harness at the synthetic sample journal; without it, and with no real Elite
+Dangerous journal on the machine, the run exits `1` with "Could not locate the Elite Dangerous journal
+folder".) With `--plugins`, whatever the plugin saves lands in
+`<plugins folder>/com.ednexus.samples.hellocommander/data` and persists between runs (this sample saves
+only live jumps, so a journal replay writes nothing); with `--plugin <folder>` (above) it lands in a
+scratch copy that is deleted on exit, so nothing persists.
+
+Set `EDNEXUS_PLUGINS_DIR` to an absolute path to use a different root while developing.
+
+**The desktop app will not run this copy.** The app uses the same plugins folder, but it is deny-all:
+with no consent grant for `com.ednexus.samples.hellocommander` in `settings.json` the plugin is
+reported `Denied` (in the app's trace log) and none of its code is loaded, and nothing records a grant
+until the management UI (#61) exists. Any edit to its `plugin.json`, DLL or other files would revoke a
+grant, too. Only the CLI harness, which grants every declared capability, runs it today.
 
 ### Tests
 
