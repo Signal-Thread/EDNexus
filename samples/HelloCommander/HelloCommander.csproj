@@ -39,6 +39,8 @@
 
   <!-- After every build, lay the plugin out exactly as the host expects: <id>/plugin.json + <id>/HelloCommander.dll. -->
   <Target Name="AssemblePluginFolder" AfterTargets="Build">
+    <!-- Start clean: a file left from an earlier build would otherwise stay in the folder and change its content hash (what the commander's consent is bound to). -->
+    <RemoveDir Directories="$(PluginOutputDir)" />
     <MakeDir Directories="$(PluginOutputDir)" />
     <Copy SourceFiles="$(TargetPath);$(MSBuildProjectDirectory)/plugin.json" DestinationFolder="$(PluginOutputDir)" />
     <Message Importance="high" Text="Hello Commander plugin folder: $(PluginOutputDir)" />

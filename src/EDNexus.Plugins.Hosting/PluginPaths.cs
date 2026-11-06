@@ -1,11 +1,18 @@
 namespace EDNexus.Plugins.Hosting;
 
 /// <summary>
-/// Locates the per-user plugins root. Plugins live beside the settings file under local app data
-/// (<c>%LOCALAPPDATA%\EDNexus\plugins</c> on Windows, <c>~/.local/share/EDNexus/plugins</c> on
-/// Linux, <c>~/Library/Application Support/EDNexus/plugins</c> on macOS) — never in the install
-/// directory, which stays read-only. Each installed plugin is a folder <c>&lt;root&gt;/&lt;id&gt;/</c>.
+/// Locates the per-user plugins root. Plugins live beside the settings file, in an
+/// <c>EDNexus/plugins</c> folder under whatever .NET reports as
+/// <see cref="Environment.SpecialFolder.LocalApplicationData"/> (<c>%LOCALAPPDATA%\EDNexus\plugins</c>
+/// on Windows, <c>~/.local/share/EDNexus/plugins</c> on Linux) — never in the install directory,
+/// which stays read-only. Each installed plugin is a folder <c>&lt;root&gt;/&lt;id&gt;/</c>.
 /// </summary>
+/// <remarks>
+/// <b>macOS is unverified (tracked in #259).</b> The code does not special-case it: the location is
+/// whatever .NET returns there, which has not been checked on a Mac. It is expected, but not
+/// confirmed, to be under <c>~/Library/Application Support</c>. Set <see cref="OverrideEnvVar"/>
+/// rather than rely on it.
+/// </remarks>
 public static class PluginPaths
 {
     /// <summary>
