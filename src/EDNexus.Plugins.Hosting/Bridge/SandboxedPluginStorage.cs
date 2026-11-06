@@ -118,14 +118,14 @@ internal sealed class SandboxedPluginStorage : IPluginStorage
         {
             if (!Directory.Exists(_pluginDirectory))
                 throw new DirectoryNotFoundException("The plugin's folder no longer exists; its storage is unavailable.");
-            Directory.CreateDirectory(_dataDirectory);
+            EnsurePrivateDataDirectory();
             SweepTempFiles();
             EnforceQuota(path, bytes.Length);
 
             var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                using (var stream = new FileStream(temp, PrivateWriteOptions()))
                 {
                     stream.Write(bytes, 0, bytes.Length);
                     stream.Flush(flushToDisk: true);
@@ -150,6 +150,47 @@ internal sealed class SandboxedPluginStorage : IPluginStorage
         {
             // Nothing sensible for a plugin to do; the documented contract is a no-op.
         }
+    }
+
+    // --- Owner-only permissions. The events / state capabilities can put the commander's name and
+    // credits into what a plugin stores, and the default umask would leave the folder and files
+    // readable by other accounts on Unix (as settings.json would be, were it not restricted: see
+    // SettingsStore). The directory is created 0700 and every file 0600; the atomic temp + move write
+    // is unchanged (the temp file is created 0600, and a move keeps the mode). A no-op on Windows,
+    // where the per-user LocalAppData ACL already scopes the plugins folder.
+
+    internal const UnixFileMode OwnerOnlyFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    internal const UnixFileMode OwnerOnlyDirectory = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+    private void EnsurePrivateDataDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(_dataDirectory);
+            return;
+        }
+        if (!Directory.Exists(_dataDirectory))
+        {
+            Directory.CreateDirectory(_dataDirectory, OwnerOnlyDirectory);   // only the data folder: the plugin folder exists
+            return;
+        }
+        // A folder from before this was enforced (created with the default mode): close it now.
+        // Best effort; a folder we cannot chmod we do not own, and the write below will say so.
+        try
+        {
+            if (File.GetUnixFileMode(_dataDirectory) != OwnerOnlyDirectory)
+                File.SetUnixFileMode(_dataDirectory, OwnerOnlyDirectory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+        }
+    }
+
+    private static FileStreamOptions PrivateWriteOptions()
+    {
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = OwnerOnlyFile;
+        return options;
     }
 
     /// <summary>Deletes temp files left by a crash between write and move (once per instance).</summary>
