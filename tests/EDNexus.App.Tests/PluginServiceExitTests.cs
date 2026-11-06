@@ -220,10 +220,20 @@ public sealed class PluginServiceExitTests : IDisposable
         Assert.Null(service.Runtime);                            // and the broken runtime is not kept
         Assert.IsType<NullReferenceException>(Assert.Single(_errors));   // but the failure was reported to onError
 
-        // The service recovers: a new engine gets a working runtime.
         var (bus, state) = Engine();
-        Assert.True(service.Attach(bus, state));
-        Assert.NotNull(service.Runtime);
+        if (entryPoint is "ShutdownForExit" or "Dispose")
+        {
+            // Exit has begun: the service is closed for good, so a rebuild that races it cannot start
+            // plugins nobody will stop (see PluginServiceLifecycleTests).
+            Assert.False(service.Attach(bus, state));
+            Assert.Null(service.Runtime);
+        }
+        else
+        {
+            // A plain detach (engine rebuild) leaves the service open: a new engine gets a working runtime.
+            Assert.True(service.Attach(bus, state));
+            Assert.NotNull(service.Runtime);
+        }
 
         static bool Ret(Action action)
         {
