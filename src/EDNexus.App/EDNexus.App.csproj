@@ -24,6 +24,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- CrashReporting's drop-plugin-crashes decision is tested without a Sentry round trip. -->
+    <InternalsVisibleTo Include="EDNexus.App.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\EDNexus.Core\EDNexus.Core.csproj" />
     <ProjectReference Include="..\EDNexus.Plugins.Hosting\EDNexus.Plugins.Hosting.csproj" />
   </ItemGroup>
