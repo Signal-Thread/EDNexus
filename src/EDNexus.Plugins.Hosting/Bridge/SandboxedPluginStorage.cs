@@ -170,11 +170,11 @@ internal sealed class SandboxedPluginStorage : IPluginStorage
             return;
         }
         if (!Directory.Exists(_dataDirectory))
-        {
             Directory.CreateDirectory(_dataDirectory, OwnerOnlyDirectory);   // only the data folder: the plugin folder exists
-            return;
-        }
-        // A folder from before this was enforced (created with the default mode): close it now.
+        // No early return: another process (the CLI shares this folder) can create the directory between
+        // the Exists check and the call above, and CreateDirectory leaves an existing directory's mode
+        // alone. Checking the mode on every path also closes a folder from before this was enforced
+        // (created with the default mode).
         // Best effort; a folder we cannot chmod we do not own, and the write below will say so.
         try
         {
