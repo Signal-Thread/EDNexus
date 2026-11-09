@@ -159,11 +159,14 @@ public sealed class PluginServiceLifecycleTests : IDisposable
         service.Attach(bus, state);
         await service.StartAsync();
 
-        var first = Task.Run(service.Detach);
+        // Dedicated threads and a blocking probe: both detaches block, and with the pool starved (seen on
+        // the Windows runner) a WaitAsync timeout can't fire until the host's 5 s shutdown bound has let
+        // the first one finish, so the "not done yet" check would pass or fail on scheduling, not on the join.
+        var first = Task.Factory.StartNew(() => service.Detach(), TaskCreationOptions.LongRunning);
         Assert.True(latches.Entered.Wait(Ceiling));
-        var second = Task.Run(() => service.Detach(Ceiling));
+        var second = Task.Factory.StartNew(() => service.Detach(Ceiling), TaskCreationOptions.LongRunning);
         // Joined to the first, which is parked: it cannot be done yet.
-        await Assert.ThrowsAsync<TimeoutException>(() => second.WaitAsync(TimeSpan.FromMilliseconds(200)));
+        Assert.False(SpinWait.SpinUntil(() => second.IsCompleted, TimeSpan.FromMilliseconds(200)));
 
         latches.Gate.Set();
 
