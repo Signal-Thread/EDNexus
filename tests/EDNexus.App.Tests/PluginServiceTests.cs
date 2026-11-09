@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using EDNexus.App.Services.Plugins;
 using EDNexus.Core.Journal;
 using EDNexus.Core.Settings;
@@ -19,8 +20,9 @@ public sealed class PluginServiceTests : IDisposable
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "ednexus-app-plugin-tests-" + Guid.NewGuid().ToString("N"));
     private readonly AppSettings _settings = new();
-    private readonly List<Action> _uiQueue = [];
-    private readonly List<Exception> _errors = [];
+    // Written from whichever thread did the work (StartAsync's pool task reports errors), so thread-safe.
+    private readonly ConcurrentQueue<Action> _uiQueue = new();
+    private readonly ConcurrentQueue<Exception> _errors = new();
     private readonly List<PluginService> _services = [];
     private int _saves;
 
@@ -36,10 +38,10 @@ public sealed class PluginServiceTests : IDisposable
     {
         var service = new PluginService(
             _settings,
-            _ => _saves++,
-            postToUi: action => _uiQueue.Add(action),
+            _ => Interlocked.Increment(ref _saves),
+            postToUi: _uiQueue.Enqueue,
             isSimulated: () => simulated,
-            onError: _errors.Add,
+            onError: _errors.Enqueue,
             appVersion: SemanticVersion.Parse("1.0.0"),
             pluginsRoot: _root,
             consent: consent);
@@ -86,6 +88,18 @@ public sealed class PluginServiceTests : IDisposable
         Assert.Empty(_errors);
     }
 
+    /// <summary>
+    /// The placeholder DLL got past the consent check and was then refused as not a .NET assembly.
+    /// Asserting the error is present, and what it says, matters: <c>DoesNotContain("Denied", null)</c>
+    /// would also pass for a plugin that has no error at all.
+    /// </summary>
+    private static void AssertFailedPastConsent(PluginStatus status)
+    {
+        Assert.Equal(PluginState.Failed, status.State);
+        Assert.NotNull(status.LastError);
+        Assert.Equal($"{nameof(PluginLoadStatus.Rejected)}: entry assembly 'Plugin.dll' is not a valid .NET assembly", status.LastError);
+    }
+
     [Fact]
     public async Task AGrantForTheseContents_IsAppliedToTheConsentCheck_AndAnEditedManifestIsDeniedAgain()
     {
@@ -106,7 +120,7 @@ public sealed class PluginServiceTests : IDisposable
         await observing.StartAsync();
         Assert.Equal(id + "@1.0.0", Assert.Single(asked));
         // Past consent the placeholder DLL is not a real assembly, so loading it fails: it was allowed to try.
-        Assert.DoesNotContain(nameof(PluginLoadStatus.Denied), observing.Runtime!.Supervisor.GetStatus(id)!.LastError);
+        AssertFailedPastConsent(observing.Runtime!.Supervisor.GetStatus(id)!);
 
         InstallUnloadable(id, version: "1.0.1");
         var reloaded = observing.Runtime.Supervisor.Reload(id)!;
@@ -125,7 +139,7 @@ public sealed class PluginServiceTests : IDisposable
         service.Attach(bus, state);
         await service.StartAsync();
         // Past consent the placeholder DLL is not a real assembly, so loading fails: it was allowed to try.
-        Assert.DoesNotContain(nameof(PluginLoadStatus.Denied), service.Runtime!.Supervisor.GetStatus(id)!.LastError);
+        AssertFailedPastConsent(service.Runtime!.Supervisor.GetStatus(id)!);
 
         File.WriteAllBytes(Path.Combine(dir, "Plugin.dll"), [0x4D, 0x5A, 0x90, 0x00, 0xFF]);   // other code, same plugin.json
 
@@ -255,10 +269,10 @@ public sealed class PluginServiceTests : IDisposable
         service.Grants.Set("com.test.app.save", new PluginGrant("hash", "entry", "files", [PluginCapabilities.Events]));
         service.Enablement.SetDisabled("com.test.app.save", true);
 
-        Assert.Equal(0, _saves);   // posted, not run
+        Assert.Equal(0, Volatile.Read(ref _saves));   // posted, not run
         Assert.Equal(2, _uiQueue.Count);
         foreach (var action in _uiQueue) action();
-        Assert.Equal(2, _saves);
+        Assert.Equal(2, Volatile.Read(ref _saves));
         Assert.True(_settings.Plugins.Grants.ContainsKey("com.test.app.save"));
         Assert.Contains("com.test.app.save", _settings.Plugins.DisabledIds);
     }
@@ -438,7 +452,7 @@ public sealed class PluginServiceTests : IDisposable
         // A plugins root under a file cannot be scanned, and an invalid path cannot even be resolved.
         var service = new PluginService(
             _settings, _ => { }, postToUi: a => a(), isSimulated: () => false,
-            onError: _errors.Add, appVersion: SemanticVersion.Parse("1.0.0"), pluginsRoot: "bad\0path");
+            onError: _errors.Enqueue, appVersion: SemanticVersion.Parse("1.0.0"), pluginsRoot: "bad\0path");
         _services.Add(service);
         var (bus, state) = Engine();
 
@@ -453,7 +467,7 @@ public sealed class PluginServiceTests : IDisposable
     {
         InstallUnloadable("com.test.app.status");
         var service = Service();
-        var changes = new System.Collections.Concurrent.ConcurrentQueue<PluginStatus>();
+        var changes = new ConcurrentQueue<PluginStatus>();
         service.StatusChanged += changes.Enqueue;
         var (bus, state) = Engine();
         service.Attach(bus, state);

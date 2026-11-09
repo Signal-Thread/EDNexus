@@ -640,45 +640,45 @@ public class PluginHostTests
     public void UnloadAll_ExceptionWhoseMessageThrows_FromShutdown_StillUnloadsEveryPlugin()
     {
         using var dir = new TempDir();
-        WriteStandard(dir.Path, "com.test.alpha", "Alpha");
-        WriteFolder(dir.Path, "com.test.evilshut", Manifest("com.test.evilshut", "EvilShut.dll", "EvilShut.Plugin"),
+        WriteStandard(dir.Path, "com.test.unloadallshut.alpha", "Alpha");
+        WriteFolder(dir.Path, "com.test.unloadallshut.evilshut", Manifest("com.test.unloadallshut.evilshut", "EvilShut.dll", "EvilShut.Plugin"),
             ("EvilShut.dll", Compile("EvilShut", PluginSource("EvilShut", shutdownBody: "throw new EvilException();", extraMembers: EvilException))));
-        WriteStandard(dir.Path, "com.test.zulu", "Zulu");
+        WriteStandard(dir.Path, "com.test.unloadallshut.zulu", "Zulu");
         var contexts = new RecordingContexts();
         using var host = contexts.Host(dir.Path);
         Assert.Equal(3, LoadCount(host));
 
         var results = host.UnloadAll(); // must not throw
 
-        Assert.Equal(["com.test.alpha", "com.test.evilshut", "com.test.zulu"], results.Select(r => r.Id));
+        Assert.Equal(["com.test.unloadallshut.alpha", "com.test.unloadallshut.evilshut", "com.test.unloadallshut.zulu"], results.Select(r => r.Id));
         Assert.Empty(results[0].Errors);
         Assert.Equal(
             "Shutdown threw: EvilShut.Plugin+EvilException: <message unavailable: EvilShut.Plugin+EvilException>",
             Assert.Single(results[1].Errors));
         Assert.Empty(results[2].Errors);
-        Assert.Contains("shutdown com.test.alpha", contexts.Lines);
-        Assert.Contains("shutdown com.test.zulu", contexts.Lines);
-        Assert.Equal(["com.test.alpha", "com.test.evilshut", "com.test.zulu"], contexts.Disposed.Order());
+        Assert.Contains("shutdown com.test.unloadallshut.alpha", contexts.Lines);
+        Assert.Contains("shutdown com.test.unloadallshut.zulu", contexts.Lines);
+        Assert.Equal(["com.test.unloadallshut.alpha", "com.test.unloadallshut.evilshut", "com.test.unloadallshut.zulu"], contexts.Disposed.Order());
         Assert.Empty(host.Loaded);
         Assert.Empty(host.LastReport!.Loaded);
-        AssertLoadContextsGone("com.test.alpha", "com.test.evilshut", "com.test.zulu");
+        AssertLoadContextsGone("com.test.unloadallshut.alpha", "com.test.unloadallshut.evilshut", "com.test.unloadallshut.zulu");
     }
 
     [Fact]
     public void Dispose_ExceptionWhoseMessageThrows_FromShutdown_DoesNotThrow()
     {
         using var dir = new TempDir();
-        WriteFolder(dir.Path, "com.test.evildispose", Manifest("com.test.evildispose", "EvilDispose.dll", "EvilDispose.Plugin"),
+        WriteFolder(dir.Path, "com.test.disposeshut.evildispose", Manifest("com.test.disposeshut.evildispose", "EvilDispose.dll", "EvilDispose.Plugin"),
             ("EvilDispose.dll", Compile("EvilDispose", PluginSource("EvilDispose", shutdownBody: "throw new EvilException();", extraMembers: EvilException))));
-        WriteStandard(dir.Path, "com.test.zulu", "Zulu");
+        WriteStandard(dir.Path, "com.test.disposeshut.zulu", "Zulu");
         var contexts = new RecordingContexts();
         var host = contexts.Host(dir.Path);
         Assert.Equal(2, LoadCount(host));
 
         host.Dispose();
 
-        Assert.Equal(["com.test.evildispose", "com.test.zulu"], contexts.Disposed.Order());
-        AssertLoadContextsGone("com.test.evildispose", "com.test.zulu");
+        Assert.Equal(["com.test.disposeshut.evildispose", "com.test.disposeshut.zulu"], contexts.Disposed.Order());
+        AssertLoadContextsGone("com.test.disposeshut.evildispose", "com.test.disposeshut.zulu");
     }
 
     private const string ThrowOnUnloading =
@@ -688,26 +688,26 @@ public class PluginHostTests
     public void UnloadAll_UnloadingHandlerThatThrows_IsContainedAndEveryPluginStillUnloads()
     {
         using var dir = new TempDir();
-        WriteStandard(dir.Path, "com.test.alpha", "Alpha");
-        WriteFolder(dir.Path, "com.test.evilunload", Manifest("com.test.evilunload", "EvilUnload.dll", "EvilUnload.Plugin"),
+        WriteStandard(dir.Path, "com.test.unloadingthrows.alpha", "Alpha");
+        WriteFolder(dir.Path, "com.test.unloadingthrows.evilunload", Manifest("com.test.unloadingthrows.evilunload", "EvilUnload.dll", "EvilUnload.Plugin"),
             ("EvilUnload.dll", Compile("EvilUnload", PluginSource("EvilUnload", initBody: ThrowOnUnloading, extraMembers: EvilException))));
-        WriteStandard(dir.Path, "com.test.zulu", "Zulu");
+        WriteStandard(dir.Path, "com.test.unloadingthrows.zulu", "Zulu");
         var contexts = new RecordingContexts();
         using var host = contexts.Host(dir.Path);
         Assert.Equal(3, LoadCount(host));
 
         var results = host.UnloadAll(); // must not throw
 
-        Assert.Equal(["com.test.alpha", "com.test.evilunload", "com.test.zulu"], results.Select(r => r.Id));
+        Assert.Equal(["com.test.unloadingthrows.alpha", "com.test.unloadingthrows.evilunload", "com.test.unloadingthrows.zulu"], results.Select(r => r.Id));
         Assert.Equal(
             "unloading the load context failed: EvilUnload.Plugin+EvilException: <message unavailable: EvilUnload.Plugin+EvilException>",
             Assert.Single(results[1].Errors));
         Assert.Empty(results[2].Errors);
-        Assert.Contains("shutdown com.test.evilunload", contexts.Lines);
-        Assert.Contains("shutdown com.test.zulu", contexts.Lines);
-        Assert.Equal(["com.test.alpha", "com.test.evilunload", "com.test.zulu"], contexts.Disposed.Order());
+        Assert.Contains("shutdown com.test.unloadingthrows.evilunload", contexts.Lines);
+        Assert.Contains("shutdown com.test.unloadingthrows.zulu", contexts.Lines);
+        Assert.Equal(["com.test.unloadingthrows.alpha", "com.test.unloadingthrows.evilunload", "com.test.unloadingthrows.zulu"], contexts.Disposed.Order());
         Assert.Empty(host.Loaded);
-        AssertLoadContextsGone("com.test.alpha", "com.test.evilunload", "com.test.zulu");
+        AssertLoadContextsGone("com.test.unloadingthrows.alpha", "com.test.unloadingthrows.evilunload", "com.test.unloadingthrows.zulu");
     }
 
     [Fact]

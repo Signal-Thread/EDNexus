@@ -33,7 +33,10 @@ public sealed class HelloCommanderTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_root, recursive: true); }
-        catch (IOException) { /* best effort: the unloaded assembly can stay locked briefly */ }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            /* best effort: the unloaded assembly can stay locked briefly */
+        }
     }
 
     [Fact]
@@ -121,6 +124,9 @@ public sealed class HelloCommanderTests : IDisposable
         private readonly PluginBridge _bridge;
         private readonly ConcurrentQueue<string> _lines = new();
         private readonly ConcurrentQueue<string> _errors = new();
+        // One release per log line, so WaitForLine blocks until the plugin's thread has logged instead of polling.
+        // Never disposed: a late log call from an unwinding plugin thread must not throw.
+        private readonly SemaphoreSlim _lineLogged = new(0);
 
         public Rig(string root, string[]? grant = null)
         {
@@ -133,7 +139,7 @@ public sealed class HelloCommanderTests : IDisposable
             });
             Host = new PluginHost(root, SemanticVersion.Parse("1.0.0"),
                 request => grant ?? (IReadOnlyCollection<string>)request.Manifest.Capabilities,
-                (manifest, granted) => new Context(manifest, _bridge.Attach(manifest, granted), new Log(_lines)));
+                (manifest, granted) => new Context(manifest, _bridge.Attach(manifest, granted), new Log(line => { _lines.Enqueue(line); _lineLogged.Release(); })));
         }
 
         public PluginHost Host { get; }
@@ -148,12 +154,17 @@ public sealed class HelloCommanderTests : IDisposable
             _bus.Publish(entry);
         }
 
-        /// <summary>Handlers run on the plugin's own thread, so poll (bounded) until a log line matches.</summary>
+        /// <summary>
+        /// Handlers run on the plugin's own thread: block until a log line matches. Each logged line
+        /// releases <see cref="_lineLogged"/>, so a line logged before the wait starts is never missed.
+        /// The 10 s bound only fails a run in which the line never comes.
+        /// </summary>
         public void WaitForLine(Func<string, bool> match)
         {
-            var deadline = DateTime.UtcNow.AddSeconds(10);
-            while (!_lines.Any(match) && DateTime.UtcNow < deadline)
-                Thread.Sleep(10);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var limit = TimeSpan.FromSeconds(10);
+            while (!_lines.Any(match) && clock.Elapsed < limit)
+                _lineLogged.Wait(limit - clock.Elapsed);
             Assert.True(_lines.Any(match), $"expected log line not seen, got: {string.Join(" | ", _lines)}");
         }
 
@@ -177,11 +188,11 @@ public sealed class HelloCommanderTests : IDisposable
         public bool WaitForExit(TimeSpan timeout) => session.WaitForExit(timeout);
     }
 
-    private sealed class Log(ConcurrentQueue<string> lines) : IPluginLog
+    private sealed class Log(Action<string> sink) : IPluginLog
     {
         public void Debug(string message) { }
-        public void Info(string message) => lines.Enqueue(message);
-        public void Warn(string message) => lines.Enqueue(message);
-        public void Error(string message, Exception? exception = null) => lines.Enqueue("ERROR " + message);
+        public void Info(string message) => sink(message);
+        public void Warn(string message) => sink(message);
+        public void Error(string message, Exception? exception = null) => sink("ERROR " + message);
     }
 }
