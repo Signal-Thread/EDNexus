@@ -8,10 +8,10 @@ is not implemented yet, this guide says so rather than describing the intended d
 >
 > | Works today | Not available yet |
 > |---|---|
-> | The SDK contract (`EDNexus.Plugins.Abstractions` 2.0): events, read-only state, storage, logging | **A plugin you drop into the plugins folder will not run in the desktop app yet.** The app does load plugins (see below), but it runs a plugin only when `settings.json` holds a consent grant for it, and nothing writes grants until the management UI (#61) exists. **Today, run plugins in the CLI harness** (which grants everything you declare) and in tests |
-> | Manifest, folder layout, `.ednplugin` packaging and install (`EDNexus.Plugins.Hosting`) | **UI injection**: no dashboard widget or overlay panel contracts exist ([UI injection](#11-ui-injection-planned)) |
-> | Loading in an isolated, unloadable `AssemblyLoadContext`; fault isolation; quarantine | A consent screen and in-app plugin manager (#61), a command-line installer, a NuGet package for the SDK, a plugin gallery, a trust / signing model (#66) |
-> | **The desktop app loads plugins** (`PluginService`, one `PluginRuntime` per engine) with **deny-all consent**: no grant, no run | A timeout on your constructor, `Initialize` or event handlers (only `Shutdown` is time-bounded), and a stable guarantee about what `ui.*` will look like |
+> | The SDK contract (`EDNexus.Plugins.Abstractions` 2.0): events, read-only state, storage, logging | **UI injection**: no dashboard widget or overlay panel contracts exist ([UI injection](#11-ui-injection-planned)) |
+> | Manifest, folder layout, `.ednplugin` packaging and install (`EDNexus.Plugins.Hosting`) | An install-from-package button, a command-line installer, a NuGet package for the SDK, a plugin gallery, a trust / signing model (#66) |
+> | Loading in an isolated, unloadable `AssemblyLoadContext`; fault isolation; quarantine | A timeout on your constructor, `Initialize` or event handlers (only `Shutdown` is time-bounded), and a stable guarantee about what `ui.*` will look like |
+> | **The desktop app loads plugins** (`PluginService`, one `PluginRuntime` per engine) with **deny-all consent**: a plugin runs only after the user allows it in **Settings → Plugins** (the plugin manager, #61) | |
 > | The CLI harness: `--once --plugin <folder>` / `--plugins` / `--plugins-strict` | |
 >
 > A runnable, tested example is [`samples/HelloCommander`](../samples/HelloCommander/README.md).
@@ -169,10 +169,10 @@ with a `reason :` line; see [Troubleshooting](#troubleshooting). The harness run
 with every declared capability granted and **no consent prompt**; it replays the journal you point it
 at, so use `--dir` with a synthetic journal when you do not want a plugin near your real one.
 
-The harness is where a plugin runs today. Copying this folder into the desktop app's plugins folder
-would **not** run it: the app is deny-all until a consent grant exists for the plugin
-([section 5](#5-capabilities)), and nothing records grants yet. [Section 12](#12-testing-and-running)
-lists the other ways the harness differs from the app.
+To run it in the desktop app, copy this folder into the app's plugins folder (**Settings → Plugins →
+Open plugins folder**), press **Rescan**, and **Allow to run** it there: the app is deny-all until you
+approve the plugin ([section 5](#5-capabilities)). [Section 12](#12-testing-and-running) lists the
+other ways the harness differs from the app.
 
 ---
 
@@ -338,12 +338,15 @@ A capability is a request in `plugin.json`. The user (through the host's consent
 is actually granted: the granted set is the declared set intersected with what the consent returned
 (anything granted but undeclared is ignored).
 
-**A plugin dropped into the plugins folder will not run in the desktop app yet.** The app is
-**deny-all**: it runs a plugin only if `settings.json` holds an entry `Plugins.Grants[<id>]` whose three
-hashes all match what is on disk right now, and then only with the capabilities in that entry. The
-consent screen and plugin manager (#61) are not built, and nothing else writes grants, so on a fresh
-install no plugin runs. Use the CLI harness, which grants everything you declare and says so
-(the trust and signing model is #66).
+**A plugin dropped into the plugins folder does not run in the desktop app until the user allows it.**
+The app is **deny-all**: it runs a plugin only if `settings.json` holds an entry `Plugins.Grants[<id>]`
+whose three hashes all match what is on disk right now, and then only with the capabilities in that
+entry. Only the plugin manager (**Settings → Plugins**) writes grants: it shows the manifest and every
+declared capability, and records a grant for exactly those files with the capabilities the user ticks
+(`network` cannot be unticked, because it cannot be enforced; it is shown with a warning instead).
+Unticking a capability later, or revoking, reloads or stops the running plugin at once. On a fresh
+install no plugin runs. The CLI harness grants everything you declare and says so (the trust and
+signing model is #66).
 
 What a grant is bound to, so you know when your users will be asked again:
 
@@ -414,9 +417,9 @@ to the threading / dispatch contract tracked in #62.
   context) and delivery to your other handlers and to other plugins continues.
 - **Quarantine.** The app's `PluginSupervisor` counts failed calls per plugin. More than **10 failures
   within 1 minute** (the default `PluginFaultPolicy`) unloads the plugin and marks it *Quarantined*.
-  Quarantine is in memory only and not persisted. The supervisor can clear it (enable / reload), but
-  there is no UI to do so yet, so today it lasts until the app rebuilds its engine (which builds a
-  fresh runtime) or restarts. A plugin quarantined this way is unloaded through the normal `Shutdown`
+  Quarantine is in memory only and not persisted. The user sees it, with the last error, in
+  **Settings → Plugins** and clears it with **Reload** (or by disabling and enabling the plugin); it
+  also ends when the app rebuilds its engine (which builds a fresh runtime) or restarts. A plugin quarantined this way is unloaded through the normal `Shutdown`
   path. Do not throw from a handler as control flow. (The CLI harness uses the same supervisor and
   default policy, so it quarantines too, and lists a quarantined plugin as a problem that fails
   `--plugins-strict`.)
@@ -578,8 +581,8 @@ Do not log secrets or the commander's data unnecessarily; logs may be shared in 
 > **Not available yet.** There is no dashboard widget or overlay panel contract, no
 > `EDNexus.Plugins.Abstractions.Ui` assembly, no `IDashboardWidget` / `IOverlayPanel`, and no way to
 > post work to the UI thread. The UI registries are tracked by #58 (dashboard) and #59 (overlay); the
-> threading / dispatch contract (timeouts, `PostToUi`) is #62; the consent and management UI is #61 and
-> the trust / signing model is #66. All are open. Do not build against names you may have seen in
+> threading / dispatch contract (timeouts, `PostToUi`) is #62; the trust / signing model is #66. All are
+> open. Do not build against names you may have seen in
 > planning discussions.
 
 What exists is a placeholder:
@@ -596,7 +599,7 @@ granted `ui.dashboard` or `ui.overlay` a counting stub on which `Register` *succ
 calls `Ui.Register` passes `--plugins-strict` but fails in the app. See
 [section 12](#12-testing-and-running).) So today:
 
-- You *can* declare `ui.dashboard` / `ui.overlay`; it only adds a line to the (future) consent prompt.
+- You *can* declare `ui.dashboard` / `ui.overlay`; it only adds a line to the consent prompt in Settings → Plugins.
   The sample does not declare them.
 - You *cannot* show anything in the app. Plugins that must show output today have to use logs, or
   files / network you manage yourself.
@@ -632,7 +635,7 @@ and where it differs from the app:
 
 | | CLI harness | Desktop app |
 |---|---|---|
-| Consent | Every declared capability is granted without a prompt (a stderr warning appears for plugins declaring `network` together with `events`/`state`) | Deny-all unless a matching persisted grant exists; none can be written yet, so **no plugin runs** |
+| Consent | Every declared capability is granted without a prompt (a stderr warning appears for plugins declaring `network` together with `events`/`state`) | Deny-all unless a matching persisted grant exists; grants are recorded only in **Settings → Plugins** |
 | Load time | **Before** the journal replay: you receive the replayed (`IsHistorical`) events | **After** the replay, on a background thread: no replayed events, `State` already populated |
 | `Ui.Register` | A plugin granted `ui.dashboard` or `ui.overlay` gets a *counting stub* on which `Register` **succeeds** (counted, not rendered). Without either grant it throws like the app | `Register` **always throws** `UnauthorizedAccessException`, whatever is granted. A plugin that calls it passes `--plugins-strict` but fails in the app |
 | Storage | The real sandboxed storage (key rules, 256 keys / 8 MiB quota, 1 MiB values), wrapped in a call counter. `--plugins`: `<plugins folder>/<id>/data`. `--plugin <folder>`: the scratch copy, deleted on exit | The real sandboxed storage in `<plugins root>/<id>/data` |
@@ -680,7 +683,7 @@ The harness prints a `reason :` line for any plugin that is not `Loaded`.
 |---|---|
 | `Rejected` | `plugin.json` missing or invalid (the reasons are listed); folder name is not exactly the `id`; duplicate `id`; `entryAssembly` missing; the plugin folder contains a symbolic link / junction or is over the size limits (so it cannot be hashed for consent); `entryType` not found, not concrete / not generic-free, no public parameterless constructor, or does not implement the host's `IEDNexusPlugin` |
 | `Incompatible` | `sdkVersion` major differs from the host's, or its minor is higher; or your assembly *references* a newer minor (or a different major) of `EDNexus.Plugins.Abstractions` than this host provides (the host compares the version recorded in your DLL's metadata with its own SDK version, not with your manifest); or `minAppVersion` is above the running app |
-| `Denied` | The consent callback refused it. **In the desktop app every plugin without a matching grant is `Denied`**, which today is every plugin, since nothing records grants yet (the app logs `Plugins: <id>: Denied` to its trace log). Not an issue in the CLI harness, which grants what you declare |
+| `Denied` | The consent callback refused it. **In the desktop app every plugin without a matching grant is `Denied`**: one never allowed in Settings → Plugins, or one whose files changed since (the manager shows it as needing approval; the app logs `Plugins: <id>: Denied` to its trace log). Not an issue in the CLI harness, which grants what you declare |
 | `Failed` | Your constructor or `Initialize` threw, or a dependency failed to load (a `FileLoadException` naming an `EDNexus.*` assembly means you referenced a host assembly) |
 | `Disabled` | The user disabled it |
 
@@ -725,9 +728,9 @@ needs a **fresh consent grant** in the app, because its files changed
 **There is no end-user install UI or command yet**; the way to install by hand is to unzip the package
 into the plugins root as a folder named after the id, so that `plugin.json` sits directly inside it
 (`unzip com.acme.jumpcounter-1.0.0.ednplugin -d ~/.local/share/EDNexus/plugins/com.acme.jumpcounter`).
-**A plugin installed this way will not run in the desktop app yet**: the app is deny-all and nothing
-records a consent grant until the management UI (#61) exists, so it shows up `Denied`. Test it with
-the CLI harness (`--once --plugins`, or `--plugin <folder>`), which loads it with the capabilities it
+**A plugin installed this way does not run in the desktop app until the user allows it** in
+**Settings → Plugins** (press **Rescan** if the window was already open); until then it is `Denied`.
+The CLI harness (`--once --plugins`, or `--plugin <folder>`) loads it with the capabilities it
 declares.
 
 Distributing: nothing signs or verifies a package beyond its structure. Publish a checksum with your
@@ -827,9 +830,9 @@ receives, and the entry-assembly and folder hashes a grant is bound to), `Plugin
 
 Collected from the sections above so nothing is a surprise:
 
-- **A plugin dropped into the plugins folder will not run in the desktop app yet.** The app does load
-  plugins but is deny-all: no in-app plugin manager or consent screen (#61), so nothing records the
-  grant a plugin needs. Run plugins in the CLI harness. Any edit to a plugin's files revokes its grant.
+- **A plugin dropped into the plugins folder does not run in the desktop app until the user allows it**
+  in Settings → Plugins. Any edit to a plugin's files revokes its grant (the manager then asks again).
+  There is no install-from-package button: copy or unzip the plugin folder into the plugins folder.
 - No UI injection (dashboard #58 / overlay #59), no UI-thread dispatcher (#62). `Ui.Register` always
   throws in the app but succeeds in the CLI harness for a plugin granted a `ui.*` capability.
 - A plugin update does not preserve `data/`.

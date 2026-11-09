@@ -343,6 +343,90 @@
           </Border>
         </StackPanel>
 
+        <!-- Plugins (#61). Bound to PluginsViewModel; every action applies immediately (Save is not
+             involved). Consent is recorded only by "Allow to run" / "Save permissions", for exactly the
+             files and capabilities that row shows. -->
+        <StackPanel x:Name="PluginsSection" Spacing="8" IsVisible="False" x:DataType="vm:PluginsViewModel">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Grid.Column="0" Text="PLUGINS" Foreground="{StaticResource AmberBrush}" FontSize="12"
+                       FontWeight="SemiBold" LetterSpacing="2" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+              <Button Content="Open plugins folder" Command="{Binding OpenFolderCommand}" IsVisible="{Binding PluginsAvailable}"
+                      Padding="10,4" FontSize="12" ToolTip.Tip="{Binding PluginsFolder}" />
+              <Button Content="Rescan" Command="{Binding RefreshCommand}" IsVisible="{Binding PluginsAvailable}"
+                      Padding="10,4" FontSize="12"
+                      ToolTip.Tip="Look in the plugins folder again and refresh every plugin's state" />
+            </StackPanel>
+          </Grid>
+          <Border Background="{StaticResource SurfaceField}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">
+              <TextBlock Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
+                         Text="Plugins run inside EDNexus with the same access to your computer as EDNexus itself: they are not sandboxed. A plugin runs only after you allow it here, and only with the permissions you tick. Changing any of its files (an update included) asks for your approval again. Changes here apply immediately." />
+              <TextBlock IsVisible="{Binding !PluginsAvailable}" Foreground="{StaticResource Warning}" FontSize="12" TextWrapping="Wrap"
+                         Text="Plugins are off: EDNexus could not find a per-user data folder to load them from." />
+              <TextBlock Text="{Binding Summary}" Foreground="{StaticResource Ink}" FontSize="12" TextWrapping="Wrap"
+                         IsVisible="{Binding PluginsAvailable}" />
+              <WrapPanel IsVisible="{Binding HasErrors}" ItemSpacing="8" LineSpacing="4">
+                <TextBlock Foreground="{StaticResource Bad}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"
+                           Text="Each plugin's latest error is shown below; the full history is in the log." />
+                <Button Content="Open logs" Click="OnOpenLogs" Padding="8,2" FontSize="11" />
+              </WrapPanel>
+
+              <ItemsControl ItemsSource="{Binding Plugins}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:PluginItemViewModel">
+                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="12" Margin="0,4">
+                      <StackPanel Spacing="6">
+                        <Grid ColumnDefinitions="*,Auto">
+                          <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="{Binding Name}" Foreground="{StaticResource Ink}" FontSize="13" FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Byline}" Foreground="{StaticResource InkDim}" FontSize="11" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding Id}" Foreground="{StaticResource InkDim}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                          <!-- One-way: the command applies the change, then the list is re-read from what took effect. -->
+                          <CheckBox Grid.Column="1" Content="Enabled" Foreground="{StaticResource Ink}" VerticalAlignment="Top"
+                                    IsChecked="{Binding IsEnabled, Mode=OneWay}" Command="{Binding ToggleEnabledCommand}"
+                                    IsVisible="{Binding CanToggle}" />
+                        </Grid>
+                        <TextBlock Text="{Binding Description}" Foreground="{StaticResource InkDim}" FontSize="12" TextWrapping="Wrap"
+                                   IsVisible="{Binding Description, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                        <TextBlock Text="{Binding StateText}" Foreground="{StaticResource Ink}" FontSize="12" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding LastError}" Foreground="{StaticResource Bad}" FontSize="12" TextWrapping="Wrap"
+                                   IsVisible="{Binding HasError}" />
+
+                        <TextBlock Text="PERMISSIONS IT ASKS FOR" Foreground="{StaticResource Ink}" FontSize="11" Margin="0,4,0,0"
+                                   IsVisible="{Binding HasCapabilities}" />
+                        <ItemsControl ItemsSource="{Binding Capabilities}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PluginCapabilityViewModel">
+                              <CheckBox IsChecked="{Binding IsGranted}" IsEnabled="{Binding CanChange}" Foreground="{StaticResource Ink}">
+                                <TextBlock Text="{Binding Label}" FontSize="12" TextWrapping="Wrap" />
+                              </CheckBox>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{Binding NetworkWarning}" Foreground="{StaticResource Warning}" FontSize="12" TextWrapping="Wrap"
+                                   IsVisible="{Binding NetworkWarning, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+                        <WrapPanel ItemSpacing="8" LineSpacing="6">
+                          <Button Content="{Binding ApproveLabel}" Command="{Binding ApproveCommand}" IsVisible="{Binding CanApprove}"
+                                  Padding="10,4" FontSize="12"
+                                  ToolTip.Tip="Records your approval for these exact files with the ticked permissions, and starts it now" />
+                          <Button Content="Revoke approval" Command="{Binding RevokeCommand}" IsVisible="{Binding CanRevoke}"
+                                  Padding="10,4" FontSize="12" ToolTip.Tip="Forgets your approval and stops the plugin now" />
+                          <Button Content="Reload" Command="{Binding ReloadCommand}" IsVisible="{Binding CanReload}"
+                                  Padding="10,4" FontSize="12" ToolTip.Tip="Stops the plugin and starts it again from its files (also retries a quarantined plugin)" />
+                        </WrapPanel>
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
         <!-- Developer options — hidden entirely when the dev tools are stripped/disabled (FeatureFlags). -->
         <StackPanel x:Name="DevSection" Spacing="8" IsVisible="False">
           <TextBlock Text="DEVELOPER OPTIONS" Foreground="{StaticResource AmberBrush}" FontSize="12" FontWeight="SemiBold" LetterSpacing="2" />

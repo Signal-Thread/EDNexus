@@ -18,13 +18,13 @@ namespace EDNexus.App.Services.Plugins;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Consent.</b> There is no consent UI yet (the management UI is #61), so the default is
-/// <b>deny</b>: a plugin runs only if <see cref="Grants"/> holds a grant for its id made for the
+/// <b>Consent.</b> The default is <b>deny</b>: a plugin runs only if <see cref="Grants"/> holds a grant for its id made for the
 /// exact manifest, entry assembly and plugin files now on disk (<see cref="PluginConsentRequest"/>),
 /// and then only with the capabilities granted. Grants and disable flags of plugins whose folder is
 /// gone are pruned after the load pass (<see cref="PluginChoicePruner"/>). With an empty store, which is every fresh install, no
-/// plugin code is loaded at all. The consent callback can be replaced through the constructor and
-/// <see cref="Grants"/> is the store the future UI writes to. The decision is taken by
+/// plugin code is loaded at all. The consent callback can be replaced through the constructor.
+/// Grants are recorded only by the commander, in the plugin manager in Settings, through
+/// <see cref="Approve"/> and withdrawn through <see cref="Revoke"/>. The decision is taken by
 /// <see cref="PluginHost"/> on every load, a reload included, from the manifest it reads then, so
 /// editing or updating a plugin revokes its approval until it is granted again.
 /// </para>
@@ -115,10 +115,14 @@ public sealed class PluginService : IDisposable
     public IPluginEnablementStore Enablement { get; }
 
     /// <summary>
-    /// Where the commander's consent is persisted. Empty until the management UI records grants, so
-    /// until then no plugin runs.
+    /// Where the commander's consent is persisted. Empty until the commander approves a plugin in
+    /// the plugin manager, so until then no plugin runs. Record grants through <see cref="Approve"/>
+    /// and withdraw them through <see cref="Revoke"/>, which also apply the change to a running plugin.
     /// </summary>
     public IPluginGrantStore Grants { get; }
+
+    /// <summary>The full path of the plugins root the app loads from, or null when no per-user folder exists (plugins are off).</summary>
+    public string? PluginsRoot => _pluginsRoot is null ? null : Path.GetFullPath(_pluginsRoot);
 
     /// <summary>The current engine's runtime, or null (not attached, no plugins folder, or it could not be built).</summary>
     public PluginRuntime? Runtime
@@ -267,6 +271,78 @@ public sealed class PluginService : IDisposable
         {
             Trace.TraceWarning($"Plugins: revoking a plugin failed: {PluginLogText.Sanitise(ex.Message)}");
             return default;
+        }
+    }
+
+    /// <summary>
+    /// Records the commander's consent for exactly <paramref name="request"/> (the manifest, entry
+    /// assembly and files they were shown, read with <see cref="PluginConsentRequest.TryRead"/>) with
+    /// <paramref name="capabilities"/>, then reloads the plugin so the decision takes effect now: a
+    /// newly approved plugin starts, and one whose grant was narrowed is unloaded and loaded again
+    /// without what was taken away (consent is only evaluated at load). A disabled plugin is only
+    /// recorded, not started; without a runtime only the grant is recorded. Returns the load result,
+    /// or null when nothing was loaded. Runs plugin code and writes <c>settings.json</c>: call it on
+    /// a worker. Never throws for a plugin problem.
+    /// </summary>
+    /// <exception cref="ArgumentException">The request carries no content hash (see <see cref="PluginGrantStoreExtensions.Grant(IPluginGrantStore, PluginConsentRequest, IEnumerable{string})"/>).</exception>
+    public PluginLoadResult? Approve(PluginConsentRequest request, IEnumerable<string> capabilities)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Grants.Grant(request, capabilities);
+        var id = request.Manifest.Id;
+        return Lifecycle(id, "approving", supervisor => supervisor.Reload(id));
+    }
+
+    /// <summary>
+    /// Persists the commander's enable / disable choice and applies it now: disabling unloads the
+    /// plugin, enabling loads it (it still needs a grant to run). Without a runtime only the choice
+    /// is saved. Runs plugin code: call it on a worker. Never throws.
+    /// </summary>
+    public void SetEnabled(string id, bool enabled)
+    {
+        if (string.IsNullOrEmpty(id)) return;
+        try
+        {
+            // Saved first, so the choice sticks even for a plugin the supervisor does not know (no
+            // runtime, or installed after the load pass).
+            Enablement.SetDisabled(id, !enabled);
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"Plugins: saving the enable choice failed: {PluginLogText.Sanitise(ex.Message)}");
+            return;
+        }
+        Lifecycle(id, enabled ? "enabling" : "disabling", supervisor =>
+        {
+            if (enabled) return supervisor.Enable(id);
+            supervisor.Disable(id);
+            return null;
+        });
+    }
+
+    /// <summary>
+    /// Unloads the plugin and loads what is on disk now: picks up a rebuild, retries a quarantined
+    /// plugin, and re-checks consent. A disabled plugin stays unloaded. Returns the load result, or
+    /// null. Runs plugin code: call it on a worker. Never throws.
+    /// </summary>
+    public PluginLoadResult? Reload(string id)
+        => string.IsNullOrEmpty(id) ? null : Lifecycle(id, "reloading", supervisor => supervisor.Reload(id));
+
+    private PluginLoadResult? Lifecycle(string id, string what, Func<PluginSupervisor, PluginLoadResult?> call)
+    {
+        PluginRuntime? runtime;
+        lock (_gate) runtime = _closed ? null : _runtime;
+        if (runtime is null) return null;
+        try
+        {
+            return call(runtime.Supervisor);
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
+        {
+            // The engine was rebuilt mid-call, or a load pass was running; the supervisor records a
+            // failed load on the plugin's status, which is what the manager shows.
+            Trace.TraceWarning($"Plugins: {what} {PluginLogText.Sanitise(id, 200)} failed: {PluginLogText.Sanitise(ex.Message)}");
+            return null;
         }
     }
 

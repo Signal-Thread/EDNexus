@@ -51,9 +51,9 @@ and folds that into a single live commander state that every feature reads from.
   through the EDNexus Extension Backend Service (EBS). Opt-in; you choose which sections are shown.
 - **Plugin SDK (in development)** — `EDNexus.Plugins.Abstractions` and `EDNexus.Plugins.Hosting`
   define the plugin contract and loader. The desktop app loads plugins but is deny-all: it runs one only
-  with a consent grant recorded in `settings.json`, and nothing records grants until the plugin
-  management UI exists (#61), so **no plugin runs in the app yet**. Today plugins run in the CLI harness
-  (`--once --plugin <folder>`). See the **[plugin developer guide](docs/PLUGINS.md)** and the
+  after you allow it under **Settings → Plugins**, which lists installed plugins with their state and
+  last error and lets you enable / disable, grant or revoke each declared capability, reload, and open
+  the plugins folder. Plugin developers can also use the CLI harness (`--once --plugin <folder>`). See the **[plugin developer guide](docs/PLUGINS.md)** and the
   [`Hello Commander` sample](samples/HelloCommander/README.md).
 - **Live journal parsing** — a watcher tails the game's own `Journal.*.log` and status sidecar files
   (no third-party account or API key required to get started).
@@ -282,6 +282,6 @@ may warn on first run.
 - [x] In-game overlay + voice callouts (Windows)
 - [x] Mining, radio, Discord Rich Presence
 - [x] Twitch stream card (extension + EBS)
-- [ ] Plugin loading in the desktop app (SDK, host and loader are wired in, deny-all; waiting on the consent / management UI, #61)
+- [x] Plugin loading in the desktop app (SDK, host and loader are wired in, deny-all; plugins are approved in Settings → Plugins, #61)
 - [ ] Signed Windows installer
 - [ ] macOS build
