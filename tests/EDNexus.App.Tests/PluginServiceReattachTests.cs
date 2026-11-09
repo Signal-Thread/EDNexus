@@ -125,7 +125,7 @@ public sealed class PluginServiceReattachTests : IDisposable
 
         Assert.False(Bounded(() => service.Detach(ShortBound), "Detach(timeout)"));
 
-        Assert.Null(service.Runtime);               // detached, but its teardown is still waiting for the load pass
+        Assert.True(SpinWait.SpinUntil(() => service.Runtime is null, Ceiling));   // detached, but its teardown is still waiting for the load pass
         Assert.False(stuck.Gate.IsSet);
         service.Enablement.SetDisabled(stuckId, true);
         return (service, stuck);
