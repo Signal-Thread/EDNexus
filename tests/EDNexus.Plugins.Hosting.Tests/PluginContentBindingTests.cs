@@ -318,8 +318,10 @@ public sealed class PluginContentBindingTests : IDisposable
     [Fact]
     public void FolderHash_IsDeterministic_AndIndependentOfCreationOrder()
     {
-        var a = Tree("order-a", ("b.txt", "2"), ("a.txt", "1"), ("sub/z.txt", "3"), ("sub/y.txt", "4"), ("A.txt", "5"));
-        var b = Tree("order-b", ("A.txt", "5"), ("sub/y.txt", "4"), ("sub/z.txt", "3"), ("a.txt", "1"), ("b.txt", "2"));
+        // "C.txt" (not "A.txt"): an upper-case name that ordinal order puts first, without colliding
+        // with "a.txt" on a case-insensitive file system (Windows, macOS), where the two are one file.
+        var a = Tree("order-a", ("b.txt", "2"), ("a.txt", "1"), ("sub/z.txt", "3"), ("sub/y.txt", "4"), ("C.txt", "5"));
+        var b = Tree("order-b", ("C.txt", "5"), ("sub/y.txt", "4"), ("sub/z.txt", "3"), ("a.txt", "1"), ("b.txt", "2"));
 
         Assert.Equal(Hash(a), Hash(a));
         Assert.Equal(Hash(a), Hash(b));
