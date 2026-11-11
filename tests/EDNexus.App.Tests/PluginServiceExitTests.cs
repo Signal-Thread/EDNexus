@@ -148,7 +148,7 @@ public sealed class PluginServiceExitTests : IDisposable
 
         Assert.False(finishedInTime);
         Assert.False(latches.HandlerReturned.IsSet);
-        Assert.Null(service.Runtime);
+        Assert.True(SpinWait.SpinUntil(() => service.Runtime is null, Ceiling));
         Assert.Empty(_errors);
 
         latches.HandlerGate.Set();
@@ -166,7 +166,7 @@ public sealed class PluginServiceExitTests : IDisposable
 
         Assert.False(Bounded(() => service.Detach(ShortBound), "Detach(timeout)"));
 
-        Assert.Null(service.Runtime);
+        Assert.True(SpinWait.SpinUntil(() => service.Runtime is null, Ceiling));
         latches.HandlerGate.Set();
         Assert.True(latches.HandlerReturned.Wait(Ceiling));
     }

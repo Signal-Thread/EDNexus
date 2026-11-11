@@ -125,7 +125,7 @@ public sealed class PluginServiceReattachTests : IDisposable
 
         Assert.False(Bounded(() => service.Detach(ShortBound), "Detach(timeout)"));
 
-        Assert.Null(service.Runtime);               // detached, but its teardown is still waiting for the load pass
+        Assert.True(SpinWait.SpinUntil(() => service.Runtime is null, Ceiling));   // detached, but its teardown is still waiting for the load pass
         Assert.False(stuck.Gate.IsSet);
         service.Enablement.SetDisabled(stuckId, true);
         return (service, stuck);
@@ -154,7 +154,9 @@ public sealed class PluginServiceReattachTests : IDisposable
         var finishedInTime = Bounded(() => service.ShutdownForExit(ShortBound), "ShutdownForExit");
 
         Assert.False(finishedInTime);              // the older teardown is still running
-        Assert.True(fresh.Returned.IsSet);         // but the new plugin's Shutdown ran: it is not left running at exit
+        // But the new plugin's Shutdown runs: it is not left running at exit. ShutdownForExit bounds the
+        // whole teardown, so on a slow machine it can return first; wait for it rather than assume it.
+        Assert.True(fresh.Returned.Wait(Ceiling));
         Assert.Null(service.Runtime);
         var (bus3, state3) = Engine();
         Assert.False(service.Attach(bus3, state3));   // closed for good

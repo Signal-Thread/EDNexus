@@ -772,6 +772,10 @@ public class TwitchStreamCardServiceTests
         Assert.Equal(EbsCleanupKind.ClearCard, pending.Kind);
         Assert.Equal("ebs-token", pending.Token);
 
+        // Stop the service first: its pump keeps retrying the failed clear (up to MaxPublishRetries), and
+        // each retry re-enqueues the entry while its own clear is in flight, so a count taken during one
+        // would see it. What is under test here is the queue's retry alone, as after an app restart.
+        service.Dispose();
         client.RespondToClear = () => StreamStatePublishResult.ClearedOk;
         Assert.Equal(0, await env.Queue.RetryPendingAsync());
         Assert.Empty(env.Store.Load().Twitch.PendingCleanups);
