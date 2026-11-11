@@ -39,13 +39,12 @@ public class DiscordPresenceServiceTests
     [Fact]
     public void A_relevant_change_outside_the_throttle_window_sends_immediately()
     {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var state = new CommanderState();
         var client = new FakeDiscordRpcClient();
-        // A near-zero window so the very first change (which follows the constructor's own send)
-        // isn't itself throttled by the earlier push.
-        using var service = new DiscordPresenceService(state, client, TimeSpan.FromMilliseconds(1));
+        using var service = new DiscordPresenceService(state, client, TimeSpan.FromSeconds(15), clock: () => now);
 
-        System.Threading.Thread.Sleep(5);   // clear the 1ms window from the constructor's initial send
+        now = now.AddMinutes(1);   // past the window opened by the constructor's initial send
         state.StarSystem = "Colonia";
 
         var last = Assert.Single(client.Sent, p => p.State == "Exploring Colonia");
