@@ -134,7 +134,10 @@ public sealed class LoopbackOAuthCallbackListener : IOAuthCallbackListener
                 HttpListenerContext context;
                 try
                 {
-                    context = await _listener.GetContextAsync().ConfigureAwait(false);
+                    // Waited on together with the token, not only through Stop(): HttpListener can miss a
+                    // Stop() that lands while GetContextAsync is starting and leave that call pending for
+                    // good, which would hang Callback instead of faulting it.
+                    context = await _listener.GetContextAsync().WaitAsync(_ct).ConfigureAwait(false);
                 }
                 catch (Exception) when (_ct.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
                 {
