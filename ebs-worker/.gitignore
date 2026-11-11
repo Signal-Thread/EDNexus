@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+# The real config holds the id of YOUR D1 database; commit only wrangler.example.jsonc.
+wrangler.jsonc
+# Local secrets for `wrangler dev`.
+.dev.vars

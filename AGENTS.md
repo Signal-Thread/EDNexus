@@ -75,7 +75,8 @@ Journal.*.log + *.json  ──►  JournalWatcher  ──►  JournalEventBus  �
 | `src/EDNexus.Core` | Engine + feature services. No UI dependencies. |
 | `src/EDNexus.App` | Avalonia 12 desktop UI (MVVM via CommunityToolkit.Mvvm). |
 | `src/EDNexus.Cli` | Headless harness for validation. |
-| `src/EDNexus.Ebs` | Twitch Extension Backend Service: relays commander state to viewers. |
+| `src/EDNexus.Ebs` | Twitch Extension Backend Service (ASP.NET): relays commander state to viewers. Being replaced by `ebs-worker/`; keep both in step until the cutover is done and this project is removed. |
+| `ebs-worker/` | The same EBS as a Cloudflare Worker (Hono + TypeScript + D1). Same HTTP contract. `cd ebs-worker && npm test`; see its README. Uses Wrangler (it has a Wrangler config). |
 | `extension/` | The Twitch extension frontend (vanilla HTML/CSS/JS, no build step). |
 | `src/EDNexus.Plugins.Abstractions`, `src/EDNexus.Plugins.Hosting` | Plugin SDK contract (plugins reference only this) and the plugin loader/installer/bridge. |
 | `samples/HelloCommander` | Sample plugin + template. Its build assembles `out/<id>/` (git-ignored); `tests/EDNexus.Samples.Tests` loads it through the real host. |

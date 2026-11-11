@@ -1,0 +1,13 @@
+# Copy to .dev.vars (git-ignored) for `wrangler dev`. Never put real secrets in this example file.
+# Restart `wrangler dev` after editing .dev.vars.
+TWITCH_CLIENT_ID=
+TWITCH_CLIENT_SECRET=
+TWITCH_EXTENSION_ID=
+# base64, the Extension Secret from the Twitch Developer Console (at least 16 bytes once decoded)
+TWITCH_EXTENSION_SECRET=
+# base64 of 32 random bytes. Encrypts the Twitch tokens stored in D1:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+TOKEN_ENCRYPTION_KEY=
+TWITCH_OAUTH_REDIRECT_URI=http://localhost:8787/oauth/callback
+# TWITCH_OWNER_USER_ID=
+# ADDITIONAL_ALLOWED_FRONTEND_ORIGINS=https://localhost:8080
