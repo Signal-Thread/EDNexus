@@ -5,8 +5,10 @@ export type LimitResult = { allowed: true } | { allowed: false; retryAfterSecond
 /**
  * Fixed-window counter in D1, keyed per policy and partition (a channel id). One atomic upsert both
  * counts and rolls the window, so concurrent requests cannot both slip under the limit. Used where the
- * window is shorter than the Rate Limiting binding supports (update-state: 1 per 2 seconds) and where
- * the partition is an authenticated channel, so the write volume is bounded by real broadcasters.
+ * window is shorter than the Rate Limiting binding supports (update-state: 1 per 2 seconds). The
+ * partition is the authenticated channel, or the client address when authentication failed, so an
+ * unauthenticated caller also costs a D1 row write per request (and a row per address until the prune
+ * cron removes it); only the row count of authenticated channels is bounded by real broadcasters.
  */
 export async function checkFixedWindow(deps: Deps, policy: string, partition: string, limit: number, windowSeconds: number): Promise<LimitResult> {
   const windowMs = windowSeconds * 1000;

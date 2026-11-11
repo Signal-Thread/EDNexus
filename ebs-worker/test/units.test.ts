@@ -17,7 +17,10 @@ describe('encryption at rest', () => {
     const sealed = await encryptText(ENCRYPTION_KEY, 'secret', 'chan-1');
     await expect(decryptText(ENCRYPTION_KEY, sealed, 'chan-2')).rejects.toBeInstanceOf(DecryptionError);
     await expect(decryptText(b64(32, 1), sealed, 'chan-1')).rejects.toBeInstanceOf(DecryptionError);
-    await expect(decryptText(ENCRYPTION_KEY, sealed.slice(0, -2) + 'AA', 'chan-1')).rejects.toBeInstanceOf(DecryptionError);
+    // Change the second-to-last character: its 6 bits always change the final tag byte, so this can never
+    // reproduce the original (replacing the last two with a fixed value would, about 1 run in 256).
+    const tampered = sealed.slice(0, -2) + (sealed.at(-2) === 'A' ? 'B' : 'A') + sealed.at(-1);
+    await expect(decryptText(ENCRYPTION_KEY, tampered, 'chan-1')).rejects.toBeInstanceOf(DecryptionError);
     await expect(decryptText(ENCRYPTION_KEY, 'plaintext', 'chan-1')).rejects.toBeInstanceOf(DecryptionError);
   });
 });

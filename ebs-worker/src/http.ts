@@ -44,9 +44,31 @@ export async function readJsonBody(request: Request, limit: number): Promise<Bod
   const declared = Number(request.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > limit) return tooLarge();
 
-  const buffer = await request.arrayBuffer();
-  if (buffer.byteLength > limit) return tooLarge();
-  if (buffer.byteLength === 0) return { ok: true, value: undefined };
+  // Count bytes as they arrive and stop reading the moment the limit is passed, so an undeclared
+  // (chunked) upload cannot make the isolate buffer far more than it will ever accept.
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  if (request.body) {
+    const reader = request.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        await reader.cancel();
+        return tooLarge();
+      }
+      chunks.push(value);
+    }
+  }
+  if (total === 0) return { ok: true, value: undefined };
+
+  const buffer = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
 
   try {
     return { ok: true, value: JSON.parse(new TextDecoder().decode(buffer)) };

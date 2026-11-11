@@ -33,15 +33,21 @@ export async function getCredentialStatus(deps: Deps): Promise<CredentialStatus>
 
 // Written only when the verdict changes. Every real broadcast reports success, and an unconditional
 // write per publish would cost a D1 row write for no new information.
+// This is health bookkeeping, so a failed write is logged and swallowed: it must never turn a publish or
+// a sign-out that Twitch already answered into an error.
 async function write(deps: Deps, state: CredentialState, httpStatus: number | null): Promise<void> {
-  await deps.db
-    .prepare(
-      `INSERT INTO service_status (key, value, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-       WHERE service_status.value != excluded.value`,
-    )
-    .bind(KEY, JSON.stringify({ state, httpStatus }), iso(deps.now()))
-    .run();
+  try {
+    await deps.db
+      .prepare(
+        `INSERT INTO service_status (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+         WHERE service_status.value != excluded.value`,
+      )
+      .bind(KEY, JSON.stringify({ state, httpStatus }), iso(deps.now()))
+      .run();
+  } catch (error) {
+    console.warn(`Could not record the PubSub credential status: ${error instanceof Error ? error.message : error}`);
+  }
 }
 
 export const markCredentialsAccepted = (deps: Deps) => write(deps, 'accepted', null);

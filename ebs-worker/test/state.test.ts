@@ -156,6 +156,36 @@ describe('POST /api/update-state', () => {
       expect(response.status).toBe(413);
     });
 
+    it('stops reading an undeclared body as soon as it passes the cap', async () => {
+      const world = makeWorld();
+      const { token } = await world.login();
+      let pulls = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulls++;
+          controller.enqueue(new Uint8Array(8 * 1024));
+          if (pulls >= 1000) controller.close();
+        },
+      });
+      const response = await world.request('/api/update-state', {
+        method: 'POST',
+        headers: bearer(token),
+        body: stream,
+        // @ts-expect-error duplex is required by undici for a streamed request body
+        duplex: 'half',
+      });
+      expect(response.status).toBe(413);
+      expect(pulls).toBeLessThan(10); // not the whole 8 MB
+    });
+
+    it('does not fail a publish when recording the credential status fails', async () => {
+      const world = makeWorld();
+      const { token } = await world.login();
+      world.sqlite.exec('DROP TABLE service_status');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      expect((await world.request('/api/update-state', postState(token))).status).toBe(200);
+    });
+
     it('applies the same body cap to /oauth/*', async () => {
       const world = makeWorld();
       const response = await world.request('/oauth/token', { method: 'POST', headers: { 'content-length': '20000' }, body: '{}' });
