@@ -186,7 +186,7 @@ If the host is disposed during a load pass (app shutdown), the pass stops: plugi
 constructed are not constructed, and the report says so in `Errors`.
 
 **Limits.** A load context isolates dependency *versions*; it is **not a security boundary** —
-plugin code runs in-process with the host's full trust (the consent UI is #61; the trust and signing model is #66). "Failed" and
+plugin code runs in-process with the host's full trust (consent is given in the app's Settings → Plugins; the trust and signing model is #66). "Failed" and
 "unloaded" mean the host has released everything it holds; they do not guarantee plugin code has
 stopped. Threads or timers the plugin started, or references held outside the host (for example
 a handler the plugin added to a static event such as `AppDomain.ProcessExit`), keep running and
@@ -337,11 +337,11 @@ against a plugin that is approved and then misbehaves: consent is not a sandbox.
 
 Grants are persisted in `settings.json` under `Plugins.Grants`:
 `{ "<id>": { "ManifestHash": "...", "EntryHash": "...", "FilesHash": "...", "Capabilities": [...] } }`
-through `AppSettingsPluginGrantStore`. A missing or `null` hash reads as empty (denied). The management
-UI (#61) records consent with `IPluginGrantStore.Grant(request, capabilities)` using the
+through `AppSettingsPluginGrantStore`. A missing or `null` hash reads as empty (denied). The app's
+plugin manager (Settings → Plugins, `PluginsViewModel` through `PluginService.Approve`) records consent with `IPluginGrantStore.Grant(request, capabilities)` using the
 `PluginConsentRequest` it showed (`PluginConsentRequest.TryRead(folder, ...)` builds the same request
 the host would; `Grant(folder, capabilities)` does both steps). There is deliberately no overload
-that takes only a manifest. Until a UI does, no plugin runs in the desktop app (the CLI harness is
+that takes only a manifest. Nothing else records a grant in the desktop app (the CLI harness is
 different: it grants everything declared, and says so). The trust and signing model is #66.
 
 Consent is applied in one place, `PluginHost`, on every load, **including a reload**: the host

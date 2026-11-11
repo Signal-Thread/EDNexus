@@ -34,11 +34,11 @@ today, and the sample does not pretend otherwise:
   `Register` succeeds, so do not take a clean `--plugins-strict` run as proof that such a call works in
   the app.)
 - So `plugin.json` does **not** declare `ui.dashboard`. The capability name is recognised, but
-  declaring it today only adds a line to the (future) consent prompt for something that does nothing.
+  declaring it today only adds a line to the consent prompt for something that does nothing.
 - The desktop app loads plugins but is deny-all: it runs a plugin only if `settings.json` holds a consent
-  grant matching its manifest and files, and nothing records grants until the management UI (#61)
-  exists. So this plugin does **not** run inside the app today. Run it with the CLI harness (below)
-  and in the test suite.
+  grant matching its manifest and files, recorded when you allow it in **Settings → Plugins**. Until
+  you do, it does not run inside the app. The CLI harness (below) and the test suite run it without
+  asking.
 
 When the UI contracts land, this sample is where a widget will be added.
 
@@ -126,9 +126,9 @@ Set `EDNEXUS_PLUGINS_DIR` to an absolute path to use a different root while deve
 
 **The desktop app will not run this copy.** The app uses the same plugins folder, but it is deny-all:
 with no consent grant for `com.ednexus.samples.hellocommander` in `settings.json` the plugin is
-reported `Denied` (in the app's trace log) and none of its code is loaded, and nothing records a grant
-until the management UI (#61) exists. Any edit to its `plugin.json`, DLL or other files would revoke a
-grant, too. Only the CLI harness, which grants every declared capability, runs it today.
+reported `Denied` (in the app's trace log) and none of its code is loaded until you allow it in
+**Settings → Plugins**. Any edit to its `plugin.json`, DLL or other files revokes that approval, and the
+manager asks again. The CLI harness grants every declared capability without asking.
 
 ### Tests
 

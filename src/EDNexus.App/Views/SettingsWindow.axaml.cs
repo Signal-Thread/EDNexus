@@ -68,6 +68,23 @@ public partial class SettingsWindow : Window
         Refresh();
     }
 
+    /// <summary>
+    /// Binds the plugin manager to the live plugin service; its actions apply at once, not on Save.
+    /// Stops listening for plugin status changes when the dialog closes.
+    /// </summary>
+    private void WatchPlugins(EDNexus.App.Services.Plugins.PluginService plugins)
+    {
+        var manager = new ViewModels.PluginsViewModel(plugins, action => Dispatcher.UIThread.Post(action), OpenFolder);
+        PluginsSection.DataContext = manager;
+        PluginsSection.IsVisible = true;
+        Closed += (_, _) => manager.Dispose();
+        manager.RefreshAsync().Forget("Plugins: list for Settings");
+    }
+
+    // Same as "Open logs": hand the folder to the OS (Explorer, Finder, or xdg-open on Linux).
+    private static void OpenFolder(string folder)
+        => Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true })?.Dispose();
+
     public SettingsWindow(Bootstrap boot,ViewModels.MainWindowViewModel? dashboard = null) : this()
     {
         _boot = boot;
@@ -114,6 +131,8 @@ public partial class SettingsWindow : Window
         DiscordShowSystemToggle.IsChecked = boot.Settings.Discord.ShowSystem;
         DiscordShowCommanderToggle.IsChecked = boot.Settings.Discord.ShowCommander;
         UpdateDiscordPrivacyEnabled();
+
+        WatchPlugins(boot.Plugins);
 
         // The whole section disappears when the dev tools are compiled out / disabled.
         DevSection.IsVisible = boot.Dev.Available;
