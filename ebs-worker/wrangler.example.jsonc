@@ -1,0 +1,44 @@
+// Template for ebs-worker/wrangler.jsonc. Copy it and fill in your own values:
+//
+//   cp wrangler.example.jsonc wrangler.jsonc
+//
+// wrangler.jsonc is gitignored on purpose: it holds the ID of YOUR D1 database, which belongs to your
+// Cloudflare account and should not be committed or shared. See README.md for the full setup.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ednexus-ebs",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "d1_databases": [
+    // Run `npx wrangler d1 create ednexus-ebs`, then paste the database_id it prints.
+    { "binding": "DB", "database_name": "ednexus-ebs", "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID", "migrations_dir": "migrations" }
+  ],
+  // Per-client-IP limits on the unauthenticated routes. The Rate Limiting binding only supports a 10 or
+  // 60 second period, which is exactly what these two limits use. (The per-channel limits on
+  // /api/update-state are counted in D1: they need a 2 second window.)
+  "ratelimits": [
+    { "name": "RL_INITIAL_STATE", "namespace_id": "1001", "simple": { "limit": 60, "period": 10 } },
+    { "name": "RL_OAUTH", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } }
+  ],
+  // Replaces the three background services of the ASP.NET build.
+  //   */15 * * * *  prune expired snapshots, pending logins and rate-limit rows
+  //   */30 * * * *  refresh Twitch grants that are close to expiring
+  //   0 */6 * * *   check that Twitch accepts the PubSub credentials
+  "triggers": { "crons": ["*/15 * * * *", "*/30 * * * *", "0 */6 * * *"] },
+  "vars": {
+    // The EBS's own redirect URI, exactly as registered on the Twitch application.
+    "TWITCH_OAUTH_REDIRECT_URI": "https://ednexus.signal-and-thread.com/oauth/callback"
+    // Optional tunables (defaults shown in README.md): TWITCH_OAUTH_SCOPES, TWITCH_OWNER_USER_ID,
+    // MAX_STATE_PAYLOAD_BYTES, MAX_REQUEST_BODY_BYTES, UPDATE_STATE_RATE_LIMIT,
+    // UPDATE_STATE_RATE_LIMIT_WINDOW_SECONDS, INITIAL_STATE_CACHE_SECONDS, OAUTH_SESSION_TTL_MINUTES,
+    // OAUTH_CODE_TTL_SECONDS, TWITCH_TOKEN_REFRESH_BUFFER_MINUTES, CHANNEL_STATE_MAX_AGE_HOURS,
+    // ADDITIONAL_ALLOWED_FRONTEND_ORIGINS
+  },
+  "observability": { "enabled": true }
+  // The custom domain (ednexus.signal-and-thread.com) is attached in the dashboard at cutover, not here:
+  // Worker -> Settings -> Domains & Routes -> Add -> Custom Domain.
+  //
+  // Secrets (set with `wrangler secret put <NAME>`, or put in .dev.vars for local runs):
+  //   TWITCH_CLIENT_ID, TWITCH_CLIENT_SECRET, TWITCH_EXTENSION_ID, TWITCH_EXTENSION_SECRET,
+  //   TOKEN_ENCRYPTION_KEY
+}

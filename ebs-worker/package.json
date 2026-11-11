@@ -1,0 +1,25 @@
+{
+  "name": "ednexus-ebs-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EDNexus Twitch Extension Backend Service as a Cloudflare Worker",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply ednexus-ebs --local",
+    "db:migrate:remote": "wrangler d1 migrations apply ednexus-ebs --remote"
+  },
+  "dependencies": {
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261110.1",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.0.0"
+  }
+}

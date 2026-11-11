@@ -20,6 +20,15 @@ updates:
       nuget:
         patterns: ['*']
 
+  # The EBS Cloudflare Worker (ebs-worker/).
+  - package-ecosystem: npm
+    directory: /ebs-worker
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ['*']
+
   # The EBS container's base images (mcr.microsoft.com/dotnet/sdk + aspnet).
   - package-ecosystem: docker
     directory: /src/EDNexus.Ebs
