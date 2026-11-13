@@ -548,11 +548,19 @@ public class TwitchStreamCardServiceTests
         };
 
         using var service = Create(state, client);
-        service.ReauthRequired += () => reauth++;
+        service.ReauthRequired += () => Interlocked.Increment(ref reauth);
+        // ReauthRequired is raised before PublishCompleted for the same attempt, so once the fault
+        // has been reported, any reauth it was going to cause has already happened.
+        var faulted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.PublishCompleted += r =>
+        {
+            if (r.Status == StreamStatePublishStatus.BackendRejectedByTwitch) faulted.TrySetResult();
+        };
         service.RequestPublish();
-        await Task.Delay(FastInterval * 6);
+        await faulted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(0, reauth);   // the commander's sign-in is not the problem
+        Assert.Equal(0, Volatile.Read(ref reauth));   // the commander's sign-in is not the problem
+        Assert.False(service.StoppedForReauth);
     }
 
     [Fact]

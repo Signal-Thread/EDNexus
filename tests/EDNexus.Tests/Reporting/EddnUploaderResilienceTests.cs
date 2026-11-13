@@ -59,8 +59,10 @@ public class EddnUploaderResilienceTests
     public async Task Queue_is_bounded_and_drops_the_oldest_queued_messages()
     {
         var gate = new TaskCompletionSource();
+        var inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var handler = new ScriptedHandler(async (_, _) =>
         {
+            inFlight.TrySetResult();
             await gate.Task;
             return new HttpResponseMessage(HttpStatusCode.OK);
         });
@@ -70,7 +72,7 @@ public class EddnUploaderResilienceTests
 
         var messages = Enumerable.Range(0, 10).Select(Message).ToList();
         uploader.Enqueue(messages[0]);
-        while (handler.Calls == 0) await Task.Delay(5);      // message 0 is now in flight, queue empty
+        await inFlight.Task.WaitAsync(TimeSpan.FromSeconds(10));   // message 0 is now in flight, queue empty
         foreach (var m in messages.Skip(1)) uploader.Enqueue(m);
 
         gate.SetResult();
@@ -104,11 +106,16 @@ public class EddnUploaderResilienceTests
     [Fact]
     public async Task Dispose_cancels_a_pending_retry_wait_promptly()
     {
-        var handler = new ScriptedHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)));
+        var attempted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new ScriptedHandler((_, _) =>
+        {
+            attempted.TrySetResult();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+        });
         var uploader = new EddnUploader(Options(o => o.RetryDelay = TimeSpan.FromHours(1)), new HttpClient(handler));
 
         uploader.Enqueue(Message(1));
-        while (handler.Calls == 0) await Task.Delay(5);   // first attempt failed; now sleeping the retry delay
+        await attempted.Task.WaitAsync(TimeSpan.FromSeconds(10));   // the first attempt is failing; the retry waits an hour
 
         var sw = Stopwatch.StartNew();
         await uploader.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));

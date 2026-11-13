@@ -102,7 +102,8 @@ public class InaraBridgeResilienceTests
         bus.Publish(Entry("""{ "timestamp": "2020-01-01T00:00:03Z", "event": "Loadout", "Ship": "python", "ShipID": 7 }""", historical: true));
         bus.Publish(Entry("""{ "timestamp": "2020-01-01T00:00:04Z", "event": "Reputation", "Empire": 10.0 }""", historical: true));
         bus.Publish(Entry("""{ "timestamp": "2020-01-01T00:20:00Z", "event": "Shutdown" }""", historical: true));
-        await Task.Delay(150);
+        // Disposing flushes whatever is pending and waits for the send chain, so anything the history
+        // had queued would be sent here.
         await bridge.DisposeAsync();
 
         Assert.Equal(0, handler.CallCount);

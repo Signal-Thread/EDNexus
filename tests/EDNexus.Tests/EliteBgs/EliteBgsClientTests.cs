@@ -209,8 +209,8 @@ public class EliteBgsClientTests
         var handler = new CountingGateHandler(gate.Task, () => Interlocked.Increment(ref calls));
         using var client = NewClient(null!, http: new HttpClient(handler));
 
+        // Each call joins the in-flight request before it returns, so all eight share it by now.
         var tasks = Enumerable.Range(0, 8).Select(_ => client.GetSystemAsync("Sol")).ToArray();
-        await Task.Delay(100);
         gate.SetResult();
         var results = await Task.WhenAll(tasks);
 
