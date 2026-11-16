@@ -28,9 +28,26 @@ public class InaraBridgeResilienceTests
         return e;
     }
 
-    private static InaraBridge NewBridge(JournalEventBus bus, HttpMessageHandler handler, TimeSpan minInterval, TimeSpan retryBackoff)
+    private static InaraBridge NewBridge(JournalEventBus bus, HttpMessageHandler handler, TimeSpan minInterval, TimeSpan retryBackoff, TimeProvider? time = null)
         => new(bus, EnabledSettings(), new InaraClient(ClientOptions, new HttpClient(handler)), TimeSpan.Zero, minInterval,
-            isSuppressed: null, log: null, retryBackoff: retryBackoff);
+            isSuppressed: null, log: null, retryBackoff: retryBackoff, time: time);
+
+    /// <summary>
+    /// Lets every scheduled retry play out on the manual clock, and returns once the bridge has nothing
+    /// left to send: no flush waiting, the send chain finished. A test can then assert on the final
+    /// call count without waiting on the wall clock.
+    /// </summary>
+    private static async Task SettleAsync(InaraBridge bridge, ManualTimeProvider time)
+    {
+        for (var i = 0; i < 100; i++)
+        {
+            var settled = bridge.WhenSettledAsync();
+            var timer = time.NextTimerCreated;
+            time.Advance(TimeSpan.FromMinutes(10));   // the longest backoff the bridge will use
+            if (await Task.WhenAny(settled, timer).WaitAsync(TimeSpan.FromSeconds(10)) == settled) return;
+        }
+        Assert.Fail("The bridge never settled.");
+    }
 
     private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 3000)
     {
@@ -63,12 +80,12 @@ public class InaraBridgeResilienceTests
     {
         var bus = new JournalEventBus();
         var handler = new RecordingHandler(HttpStatusCode.InternalServerError, "");
-        await using var bridge = NewBridge(bus, handler, TimeSpan.Zero, TimeSpan.FromMilliseconds(5));
+        var time = new ManualTimeProvider();
+        await using var bridge = NewBridge(bus, handler, TimeSpan.Zero, TimeSpan.FromMilliseconds(5), time);
 
         bus.Publish(Entry(Commander));
         bus.Publish(Entry(Dock));
-        await WaitForAsync(() => handler.CallCount >= 4);
-        await Task.Delay(300);
+        await SettleAsync(bridge, time);
 
         Assert.Equal(4, handler.CallCount);   // the original attempt plus three retries, then given up
     }
@@ -78,12 +95,12 @@ public class InaraBridgeResilienceTests
     {
         var bus = new JournalEventBus();
         var handler = new RecordingHandler(HttpStatusCode.OK, """{ "header": { "eventStatus": 400, "eventStatusText": "Invalid API key" } }""");
-        await using var bridge = NewBridge(bus, handler, TimeSpan.Zero, TimeSpan.FromMilliseconds(5));
+        var time = new ManualTimeProvider();
+        await using var bridge = NewBridge(bus, handler, TimeSpan.Zero, TimeSpan.FromMilliseconds(5), time);
 
         bus.Publish(Entry(Commander));
         bus.Publish(Entry(Dock));
-        await WaitForAsync(() => handler.CallCount >= 1);
-        await Task.Delay(150);
+        await SettleAsync(bridge, time);
 
         Assert.Equal(1, handler.CallCount);
     }

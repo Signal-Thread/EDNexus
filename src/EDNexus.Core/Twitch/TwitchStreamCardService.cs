@@ -89,6 +89,7 @@ public sealed class TwitchStreamCardService : IDisposable
     private readonly Func<StreamCardVisibility> _visibility;
     private readonly Func<bool> _isSuppressed;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly TimeProvider _time;
     private readonly EbsCleanupQueue? _cleanup;
     private readonly TimeSpan _minInterval;
     private readonly CancellationTokenSource _cts = new();
@@ -154,7 +155,11 @@ public sealed class TwitchStreamCardService : IDisposable
         EbsCleanupQueue? cleanup = null)
         : this(state, sources, client, updateStateEndpoint, token, visibility, isSuppressed, DefaultMinInterval, null, null, cleanup) { }
 
-    /// <summary>Test-only constructor: a shortened publish interval and/or a controllable clock.</summary>
+    /// <summary>
+    /// Test-only constructor: a shortened publish interval and/or a controllable clock.
+    /// <paramref name="time"/> drives the pump's waits (the rate-limit floor and the heartbeat) as well
+    /// as the clock when <paramref name="clock"/> is null.
+    /// </summary>
     internal TwitchStreamCardService(
         CommanderState state,
         StreamCardSources sources,
@@ -166,9 +171,11 @@ public sealed class TwitchStreamCardService : IDisposable
         TimeSpan minInterval,
         Func<DateTimeOffset>? clock,
         TimeSpan? refreshInterval = null,
-        EbsCleanupQueue? cleanup = null)
+        EbsCleanupQueue? cleanup = null,
+        TimeProvider? time = null)
     {
         _cleanup = cleanup;
+        _time = time ?? TimeProvider.System;
         _refreshInterval = refreshInterval ?? DefaultRefreshInterval;
         _state = state;
         _sources = sources;
@@ -177,7 +184,7 @@ public sealed class TwitchStreamCardService : IDisposable
         _token = token;
         _visibility = visibility ?? (static () => StreamCardVisibility.Default);
         _isSuppressed = isSuppressed ?? (static () => false);
-        _clock = clock ?? (static () => DateTimeOffset.UtcNow);
+        _clock = clock ?? _time.GetUtcNow;
         _minInterval = minInterval;
 
         _state.PropertyChanged += OnStateChanged;
@@ -286,7 +293,7 @@ public sealed class TwitchStreamCardService : IDisposable
         while (!ct.IsCancellationRequested)
         {
             bool changed;
-            try { changed = await _dirty.WaitAsync(NextHeartbeatIn(), ct).ConfigureAwait(false); }
+            try { changed = await WaitForChangeAsync(NextHeartbeatIn(), ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
             catch (ObjectDisposedException) { return; }
 
@@ -341,12 +348,62 @@ public sealed class TwitchStreamCardService : IDisposable
 
             // Rate-limit floor. Any change arriving during this wait has already re-armed the signal,
             // so the next iteration publishes the newest state immediately after it elapses.
-            try { await Task.Delay(backoff, ct).ConfigureAwait(false); }
+            try { await Task.Delay(backoff, _time, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
 
             // Nothing else will wake the pump for a retry: MarkDirty only fires on journal activity,
             // and a commander configuring this typically has the game closed.
             if (retry) MarkDirty();
+        }
+    }
+
+    /// <summary>
+    /// Waits for <see cref="MarkDirty"/> or for <paramref name="timeout"/> to pass on <see cref="_time"/>,
+    /// whichever comes first. True when the card was marked dirty.
+    /// </summary>
+    private async Task<bool> WaitForChangeAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        lock (_idleGate)
+        {
+            _parked = true;
+            if (_dirty.CurrentCount == 0) _idle?.TrySetResult();
+        }
+        try
+        {
+            using var heartbeat = new CancellationTokenSource(timeout, _time);
+            using var either = CancellationTokenSource.CreateLinkedTokenSource(ct, heartbeat.Token);
+            try
+            {
+                await _dirty.WaitAsync(either.Token).ConfigureAwait(false);
+                return true;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return false;   // the heartbeat fell due
+            }
+        }
+        finally
+        {
+            lock (_idleGate) _parked = false;
+        }
+    }
+
+    private readonly Lock _idleGate = new();
+    private bool _parked;
+    private TaskCompletionSource? _idle;
+
+    /// <summary>
+    /// Test hook: completes once the pump is parked waiting for a change with none pending, i.e. it
+    /// will do nothing more until something marks the card dirty or the heartbeat falls due.
+    /// </summary>
+    internal Task WhenIdleAsync()
+    {
+        lock (_idleGate)
+        {
+            if (_parked && _dirty.CurrentCount == 0) return Task.CompletedTask;
+            _idle ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (_idle.Task.IsCompleted) _idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _idle.Task;
         }
     }
 

@@ -20,7 +20,8 @@ public class TwitchStreamCardServiceTests
         FakeStreamStateApiClient client,
         Func<string?>? token = null,
         Func<StreamCardVisibility>? visibility = null,
-        Func<bool>? isSuppressed = null) =>
+        Func<bool>? isSuppressed = null,
+        TimeProvider? time = null) =>
         new(
             state,
             StreamCardSources.Empty,
@@ -30,7 +31,27 @@ public class TwitchStreamCardServiceTests
             visibility,
             isSuppressed,
             FastInterval,
-            clock: null);
+            clock: null,
+            time: time);
+
+    /// <summary>
+    /// Lets the pump run to rest on the manual clock: each rate-limit wait it starts is advanced past,
+    /// and this returns once it is parked with nothing marked dirty. From then on it does nothing
+    /// until the card is marked dirty again or the heartbeat falls due, so a test can assert that
+    /// nothing (more) was published without waiting on the wall clock.
+    /// </summary>
+    private static async Task SettleAsync(TwitchStreamCardService service, ManualTimeProvider time, TimeSpan? step = null)
+    {
+        for (var i = 0; i < 100; i++)
+        {
+            var idle = service.WhenIdleAsync();
+            if (idle.IsCompleted) return;
+            var timer = time.NextTimerCreated;
+            time.Advance(step ?? FastInterval * 2);
+            await Task.WhenAny(idle, timer).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        Assert.Fail("The pump never came to rest.");
+    }
 
     [Fact]
     public async Task Nothing_is_published_until_the_host_has_replayed_the_journal()
@@ -39,9 +60,10 @@ public class TwitchStreamCardServiceTests
 
         // Built inside EngineHost's constructor, before the replay. Publishing here would send an
         // empty card and leave that as the EBS's initial state until the warm one follows.
-        using var service = Create(new CommanderState(), client);
+        var time = new ManualTimeProvider();
+        using var service = Create(new CommanderState(), client, time: time);
 
-        Assert.False(await client.WaitForPublishAsync(TimeSpan.FromMilliseconds(300)));
+        await SettleAsync(service, time);
         Assert.Empty(client.Snapshots);
     }
 
@@ -66,9 +88,11 @@ public class TwitchStreamCardServiceTests
         var state = new CommanderState { StarSystem = "Nervi" };
         var client = new FakeStreamStateApiClient();
 
-        using var service = Create(state, client, token: static () => null);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, token: static () => null, time: time);
+        service.RequestPublish();
 
-        Assert.False(await client.WaitForPublishAsync(TimeSpan.FromMilliseconds(300)));
+        await SettleAsync(service, time);
         Assert.Empty(client.Snapshots);
     }
 
@@ -80,9 +104,11 @@ public class TwitchStreamCardServiceTests
 
         // Developer mode feeds fabricated journal events through the real bus; they must never reach
         // a live audience.
-        using var service = Create(state, client, isSuppressed: static () => true);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, isSuppressed: static () => true, time: time);
+        service.RequestPublish();
 
-        Assert.False(await client.WaitForPublishAsync(TimeSpan.FromMilliseconds(300)));
+        await SettleAsync(service, time);
         Assert.Empty(client.Snapshots);
     }
 
@@ -92,15 +118,16 @@ public class TwitchStreamCardServiceTests
         var state = new CommanderState { StarSystem = "Nervi" };
         var client = new FakeStreamStateApiClient();
 
-        using var service = Create(state, client);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, time: time);
         service.RequestPublish();
         Assert.True(await client.WaitForPublishAsync());
 
         // LastUpdated ticks on virtually every journal line but changes nothing on the card.
         for (var i = 0; i < 5; i++)
         {
-            state.LastUpdated = DateTimeOffset.UtcNow;
-            await Task.Delay(FastInterval);
+            state.LastUpdated = time.GetUtcNow();
+            await SettleAsync(service, time);
         }
 
         Assert.Single(client.Snapshots);
@@ -128,20 +155,21 @@ public class TwitchStreamCardServiceTests
         var state = new CommanderState { StarSystem = "Nervi" };
         var client = new FakeStreamStateApiClient();
 
-        using var service = Create(state, client);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, time: time);
         service.RequestPublish();
         Assert.True(await client.WaitForPublishAsync());
 
         // A single hyperspace jump touches several properties at once; viewers only need the result.
+        // The clock stands still, so the whole burst lands inside the rate-limit wait.
         state.StarSystem = "Colonia";
         state.Body = "Colonia 2 a";
         state.FuelMain = 18.2;
         state.CargoTons = 24;
 
-        Assert.True(await client.WaitForPublishAsync());
-        await Task.Delay(FastInterval * 4);
+        await SettleAsync(service, time);
 
-        Assert.True(client.Snapshots.Count < 5, $"Expected a coalesced burst, saw {client.Snapshots.Count} publishes.");
+        Assert.Equal(2, client.Snapshots.Count);   // the first card, then ONE for the whole burst
         Assert.Equal("Colonia", client.Snapshots[^1].Location!.System);
     }
 
@@ -154,7 +182,8 @@ public class TwitchStreamCardServiceTests
             Respond = _ => new StreamStatePublishResult(StreamStatePublishStatus.Unauthorized, "revoked"),
         };
 
-        using var service = Create(state, client);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, time: time);
         // Subscribe before asking for the publish: the pump can answer the 401 and raise the event
         // before the next line runs, and an event raised with no handler attached is lost for good.
         var reauth = new TaskCompletionSource();
@@ -167,7 +196,7 @@ public class TwitchStreamCardServiceTests
 
         var attempts = client.Snapshots.Count;
         state.StarSystem = "Colonia";
-        await Task.Delay(FastInterval * 4);
+        await SettleAsync(service, time);
 
         // Retrying a revoked grant can only ever earn a rate-limit, so publishing stays stopped.
         Assert.Equal(attempts, client.Snapshots.Count);
@@ -214,8 +243,10 @@ public class TwitchStreamCardServiceTests
         var enabled = false;
 
         // How the app wires it: the card being off reads through as "no token".
-        using var service = Create(state, client, token: () => enabled ? "ebs-token" : null);
-        Assert.False(await client.WaitForPublishAsync(TimeSpan.FromMilliseconds(300)));
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, token: () => enabled ? "ebs-token" : null, time: time);
+        await SettleAsync(service, time);
+        Assert.Empty(client.Snapshots);
 
         // The commander ticks "Show my session to viewers". Nothing about the commander picture has
         // changed, and with the game closed no journal event is ever coming — so the settings dialog
@@ -233,7 +264,8 @@ public class TwitchStreamCardServiceTests
         var state = new CommanderState { StarSystem = "Nervi" };
         var client = new FakeStreamStateApiClient();
 
-        using var service = Create(state, client);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, time: time);
         service.RequestPublish();
         Assert.True(await client.WaitForPublishAsync());
 
@@ -242,7 +274,7 @@ public class TwitchStreamCardServiceTests
         for (var i = 0; i < 3; i++)
         {
             service.RequestPublish();
-            await Task.Delay(FastInterval * 2);
+            await SettleAsync(service, time);
         }
 
         Assert.Single(client.Snapshots);
@@ -279,14 +311,15 @@ public class TwitchStreamCardServiceTests
         // How EngineHost wires it: "card switched off" reads through as "no token".
         var enabled = true;
 
-        using var service = Create(state, client, token: () => enabled ? "ebs-token" : null);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, token: () => enabled ? "ebs-token" : null, time: time);
         service.RequestPublish();
         Assert.True(await client.WaitForPublishAsync());
 
         enabled = false;
         var attempts = client.Snapshots.Count;
         state.StarSystem = "Colonia";
-        await Task.Delay(FastInterval * 4);
+        await SettleAsync(service, time);
 
         Assert.Equal(attempts, client.Snapshots.Count);
     }
@@ -313,11 +346,15 @@ public class TwitchStreamCardServiceTests
     {
         var client = new FakeStreamStateApiClient();
 
+        var time = new ManualTimeProvider();
         using var service = new TwitchStreamCardService(
             new CommanderState(), StreamCardSources.Empty, client, static () => Endpoint, static () => "ebs-token",
-            null, null, FastInterval, clock: null, refreshInterval: TimeSpan.FromMilliseconds(50));
+            null, null, FastInterval, clock: null, refreshInterval: TimeSpan.FromMilliseconds(50), time: time);
 
-        Assert.False(await client.WaitForPublishAsync(TimeSpan.FromMilliseconds(400)));
+        await SettleAsync(service, time);
+        time.Advance(TimeSpan.FromMilliseconds(50) * 8);   // eight heartbeats' worth
+        await SettleAsync(service, time);
+        Assert.Empty(client.Snapshots);
     }
 
     [Fact]
@@ -572,14 +609,15 @@ public class TwitchStreamCardServiceTests
             Respond = _ => new StreamStatePublishResult(StreamStatePublishStatus.Failed, "connection refused"),
         };
 
-        using var service = Create(state, client);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, time: time);
         service.RequestPublish();
 
-        await Task.Delay(FastInterval * (TwitchStreamCardService.MaxPublishRetries + 6) * 2);
+        await SettleAsync(service, time);
 
-        // One initial attempt plus at most MaxPublishRetries, then the pump sleeps until something
-        // really changes.
-        Assert.InRange(client.Snapshots.Count, 1, TwitchStreamCardService.MaxPublishRetries + 1);
+        // One initial attempt plus MaxPublishRetries, then the pump sleeps until something really
+        // changes.
+        Assert.Equal(TwitchStreamCardService.MaxPublishRetries + 1, client.Snapshots.Count);
     }
 
     [Fact]
@@ -651,14 +689,16 @@ public class TwitchStreamCardServiceTests
         var state = new CommanderState();
         var client = new FakeStreamStateApiClient();
 
-        using var service = Create(state, client);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, time: time);
 
         // The journal replay warms the picture property by property.
         state.Name = "CMDR Jameson";
         state.StarSystem = "Nervi";
         state.Docked = true;
 
-        Assert.False(await client.WaitForPublishAsync(TimeSpan.FromMilliseconds(300)));
+        await SettleAsync(service, time);
+        Assert.Empty(client.Snapshots);
 
         service.RequestPublish();
         Assert.True(await client.WaitForPublishAsync());
@@ -670,18 +710,19 @@ public class TwitchStreamCardServiceTests
         var state = new CommanderState { StarSystem = "Nervi" };
         var client = new FakeStreamStateApiClient();
 
-        using var service = Create(state, client);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, time: time);
         service.RequestPublish();
         Assert.True(await client.WaitForPublishAsync());
 
         service.GameExited();
-        await WaitUntilAsync(() => client.Clears.Count == 1);
+        await SettleAsync(service, time);
 
         Assert.Equal(new[] { "ebs-token" }, client.Clears.ToArray());
 
         // Journal chatter and further state changes after the Shutdown must not put it back.
         state.StarSystem = "Colonia";
-        await Task.Delay(FastInterval * 4);
+        await SettleAsync(service, time);
         Assert.Single(client.Snapshots);
         Assert.Single(client.Clears);
     }
@@ -726,15 +767,18 @@ public class TwitchStreamCardServiceTests
         var state = new CommanderState { StarSystem = "Nervi" };
         var client = new FakeStreamStateApiClient();
 
+        var time = new ManualTimeProvider();
         using var service = new TwitchStreamCardService(
             state, StreamCardSources.Empty, client, static () => Endpoint, static () => "ebs-token",
-            null, null, FastInterval, clock: null, refreshInterval: TimeSpan.FromMilliseconds(100));
+            null, null, FastInterval, clock: null, refreshInterval: TimeSpan.FromMilliseconds(100), time: time);
         service.RequestPublish();
         Assert.True(await client.WaitForPublishAsync());
         service.GameExited();
-        await WaitUntilAsync(() => client.Clears.Count == 1);
+        await SettleAsync(service, time);
+        Assert.Single(client.Clears);
 
-        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        time.Advance(TimeSpan.FromMilliseconds(100) * 5);   // five heartbeats' worth
+        await SettleAsync(service, time);
 
         Assert.Single(client.Snapshots);
         Assert.Single(client.Clears);
@@ -747,13 +791,14 @@ public class TwitchStreamCardServiceTests
         var client = new FakeStreamStateApiClient();
         var dev = false;
 
-        using var service = Create(state, client, isSuppressed: () => dev);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, isSuppressed: () => dev, time: time);
         service.RequestPublish();
         Assert.True(await client.WaitForPublishAsync());
 
         dev = true;
         service.GameExited();
-        await Task.Delay(FastInterval * 4);
+        await SettleAsync(service, time);
 
         Assert.Empty(client.Clears);
     }
@@ -936,12 +981,13 @@ public class TwitchStreamCardServiceTests
         var state = new CommanderState { StarSystem = "Nervi" };
         var client = new FakeStreamStateApiClient();
 
-        using var service = Create(state, client, token: static () => null);
+        var time = new ManualTimeProvider();
+        using var service = Create(state, client, token: static () => null, time: time);
 
         var preview = service.Preview();
 
         Assert.Equal("Nervi", preview.Location!.System);
+        await SettleAsync(service, time);
         Assert.Empty(client.Snapshots);
-        Assert.False(await client.WaitForPublishAsync(TimeSpan.FromMilliseconds(200)));
     }
 }
