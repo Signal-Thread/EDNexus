@@ -376,6 +376,9 @@ public sealed class TwitchStreamCardService : IDisposable
             // the clock once idle is reported always reaches it.
             using var heartbeat = new CancellationTokenSource(timeout, _time);
             using var either = CancellationTokenSource.CreateLinkedTokenSource(ct, heartbeat.Token);
+            // Like MarkDirty, a heartbeat falling due ends the idle state at once, not when the pump's
+            // continuation gets to run.
+            using var unpark = heartbeat.Token.Register(static s => ((TwitchStreamCardService)s!).Unpark(), this);
             lock (_idleGate)
             {
                 _parked = true;
@@ -395,6 +398,11 @@ public sealed class TwitchStreamCardService : IDisposable
         {
             lock (_idleGate) _parked = false;
         }
+    }
+
+    private void Unpark()
+    {
+        lock (_idleGate) _parked = false;
     }
 
     private readonly Lock _idleGate = new();
