@@ -381,8 +381,13 @@ public sealed class TwitchStreamCardService : IDisposable
             using var unpark = heartbeat.Token.Register(static s => ((TwitchStreamCardService)s!).Unpark(), this);
             lock (_idleGate)
             {
-                _parked = true;
-                if (_dirty.CurrentCount == 0) _idle?.TrySetResult();
+                // A heartbeat that fell due before this point has already run Unpark; parking now
+                // would report idle with that heartbeat still to be handled.
+                if (!heartbeat.IsCancellationRequested)
+                {
+                    _parked = true;
+                    if (_dirty.CurrentCount == 0) _idle?.TrySetResult();
+                }
             }
             try
             {
