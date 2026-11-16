@@ -272,7 +272,8 @@ public sealed class TwitchStreamCardService : IDisposable
 
     /// <summary>
     /// Marks the card as needing a republish. Called from journal-processing threads, so it does no
-    /// work beyond releasing the pump's signal — never any I/O, and never a lock the bus could contend.
+    /// work beyond releasing the pump's signal — never any I/O, and no lock but one held only to set a
+    /// flag alongside that release.
     /// </summary>
     private void MarkDirty()
     {
@@ -283,9 +284,15 @@ public sealed class TwitchStreamCardService : IDisposable
         // publish; reacting to those would put a half-warmed card (and, with the game closed, its last
         // location) on the air.
         if (Volatile.Read(ref _armed) == 0) return;
-        try { _dirty.Release(); }
-        catch (SemaphoreFullException) { /* already dirty — the pump will pick up the newest state */ }
-        catch (ObjectDisposedException) { /* raced with Dispose */ }
+        // A parked pump handed this signal is no longer idle, even though the semaphore count reads 0
+        // until its continuation runs. The gate is only ever held for a flag and this release.
+        lock (_idleGate)
+        {
+            _parked = false;
+            try { _dirty.Release(); }
+            catch (SemaphoreFullException) { /* already dirty — the pump will pick up the newest state */ }
+            catch (ObjectDisposedException) { /* raced with Dispose */ }
+        }
     }
 
     private async Task PumpAsync(CancellationToken ct)
@@ -363,15 +370,17 @@ public sealed class TwitchStreamCardService : IDisposable
     /// </summary>
     private async Task<bool> WaitForChangeAsync(TimeSpan timeout, CancellationToken ct)
     {
-        lock (_idleGate)
-        {
-            _parked = true;
-            if (_dirty.CurrentCount == 0) _idle?.TrySetResult();
-        }
         try
         {
+            // The heartbeat timer exists before the pump reports itself idle, so a test that advances
+            // the clock once idle is reported always reaches it.
             using var heartbeat = new CancellationTokenSource(timeout, _time);
             using var either = CancellationTokenSource.CreateLinkedTokenSource(ct, heartbeat.Token);
+            lock (_idleGate)
+            {
+                _parked = true;
+                if (_dirty.CurrentCount == 0) _idle?.TrySetResult();
+            }
             try
             {
                 await _dirty.WaitAsync(either.Token).ConfigureAwait(false);
