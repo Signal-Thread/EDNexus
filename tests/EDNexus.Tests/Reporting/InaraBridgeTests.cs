@@ -59,8 +59,20 @@ public class InaraBridgeTests
         bus.Publish(Live("""{ "timestamp": "2020-01-01T00:00:01Z", "event": "Loadout", "Ship": "python", "ShipID": 7 }"""));
         bus.Publish(Live("""{ "timestamp": "2020-01-01T00:00:02Z", "event": "Rank", "Combat": 3 }"""));
 
-        await Task.Delay(150);
+        // Let any flush those events might have scheduled run first, so a dock cannot cancel it unseen.
+        await bridge.WhenSettledAsync().WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(0, handler.CallCount);   // nothing sent — no trigger occurred
+
+        // A dock is a trigger, and flushes synchronously on this thread. Had any of the events above
+        // sent on its own, it would have gone out first and taken its event out of the batch; instead
+        // the first and only request carries all of them together with the dock.
+        bus.Publish(Live("""{ "timestamp": "2020-01-01T00:10:00Z", "event": "Docked", "StarSystem": "Sol", "StationName": "X", "MarketID": 1 }"""));
+        await bridge.DisposeAsync();   // waits for the send chain
+
+        var body = Assert.Single(handler.Bodies);
+        Assert.Contains("setCommanderShip", body);
+        Assert.Contains("setCommanderRankPilot", body);
+        Assert.Contains("addCommanderTravelDock", body);
     }
 
     [Fact]
@@ -110,7 +122,9 @@ public class InaraBridgeTests
         bus.Publish(Live("""{ "timestamp": "2020-01-01T00:00:00Z", "event": "LoadGame", "Commander": "Jameson", "FID": "F1", "Credits": 100 }"""));
         bus.Publish(Live("""{ "timestamp": "2020-01-01T00:10:00Z", "event": "Docked", "StarSystem": "Sol", "StationName": "X", "MarketID": 1 }"""));
 
-        await Task.Delay(150);
+        // The dock flushes synchronously, and disposing flushes again and waits for the send chain, so
+        // anything that was going to go out has gone out by now.
+        await bridge.DisposeAsync();
         Assert.Equal(0, handler.CallCount);
     }
 
@@ -125,7 +139,9 @@ public class InaraBridgeTests
         bus.Publish(Live("""{ "timestamp": "2020-01-01T00:00:00Z", "event": "LoadGame", "Commander": "Jameson", "FID": "F1", "Credits": 100 }"""));
         bus.Publish(Live("""{ "timestamp": "2020-01-01T00:10:00Z", "event": "Docked", "StarSystem": "Sol", "StationName": "X", "MarketID": 1 }"""));
 
-        await Task.Delay(150);
+        // The dock flushes synchronously, and disposing flushes again and waits for the send chain, so
+        // anything that was going to go out has gone out by now.
+        await bridge.DisposeAsync();
         Assert.Equal(0, handler.CallCount);
     }
 

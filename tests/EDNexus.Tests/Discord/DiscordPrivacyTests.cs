@@ -238,23 +238,26 @@ public class DiscordPresenceServicePrivacyTests
     [Fact]
     public async Task A_system_change_queued_in_the_throttle_window_never_leaks_after_hiding_the_system()
     {
-        // A frozen clock guarantees the system change lands inside the throttle window however slow
+        // A manual clock guarantees the system change lands inside the throttle window however slow
         // the machine is, so it is always queued rather than sent.
-        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var time = new ManualTimeProvider();
         var state = new CommanderState { StarSystem = "Sol" };
         var client = new FakeDiscordRpcClient();
         using var service = new DiscordPresenceService(
-            state, client, TimeSpan.FromMilliseconds(50), clock: () => now);
+            state, client, TimeSpan.FromMilliseconds(50), time: time);
 
+        var scheduled = time.NextTimerCreated;
         state.StarSystem = "Colonia";
         Assert.DoesNotContain(client.Sent, p => p.State?.Contains("Colonia") == true);   // queued, not sent
+        var queued = service.PendingSend;
+        await scheduled.WaitAsync(TimeSpan.FromSeconds(10));   // its wait has started
 
         service.UpdatePrivacy(new DiscordPrivacyOptions(ShowSystem: false, ShowCommander: true));
 
-        // Open the throttle so the queued send would be allowed through if it hadn't been superseded,
-        // then give its (real, 50 ms) delay ample time to fire.
-        now = now.AddMinutes(1);
-        await Task.Delay(300);
+        // Open the throttle and let the queued send's wait run out, so it would go through if it hadn't
+        // been superseded, then wait for it to finish either way.
+        time.Advance(TimeSpan.FromMinutes(1));
+        await queued.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.DoesNotContain(client.Sent, p =>
             p.State?.Contains("Colonia") == true || p.Buttons.Any(b => b.Url.Contains("Colonia")));

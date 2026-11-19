@@ -23,6 +23,12 @@ public class EddnUploaderHandOffTests
         SoftwareName = "T",
         SoftwareVersion = "1",
         RetryDelay = TimeSpan.Zero,
+        // Dispose only waits DisposeGrace for the queue to drain before cancelling. These tests count
+        // what was sent after dispose, so a drain cut short by a starved thread pool (16-way parallel on
+        // a small CI runner) would look exactly like a stranded message. A generous grace removes that
+        // false positive; dispose still returns as soon as the worker finishes, so a stranded message
+        // (the worker exiting without it) is still caught.
+        DisposeGrace = TimeSpan.FromMinutes(1),
     };
 
     /// <summary>

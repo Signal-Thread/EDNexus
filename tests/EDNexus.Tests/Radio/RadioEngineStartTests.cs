@@ -35,9 +35,12 @@ public class RadioEngineStartTests
         try
         {
             // This is what the UI thread does every 250 ms; it must not wait for the native start.
-            var read = Task.Run(() => radio.Snapshot);
-            var finished = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(2)));
-            Assert.Same(read, finished);
+            // Read on a dedicated thread, not the pool: the blocked start already holds a pool thread,
+            // and on a busy CI runner a pooled read can sit queued for seconds without ever touching
+            // the lock. The start is held for 30 s, so a read blocked on it cannot finish inside 10.
+            var read = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            new Thread(() => { _ = radio.Snapshot; read.SetResult(); }) { IsBackground = true }.Start();
+            await read.Task.WaitAsync(TimeSpan.FromSeconds(10));
         }
         finally
         {

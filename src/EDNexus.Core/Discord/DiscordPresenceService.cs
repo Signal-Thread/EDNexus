@@ -64,6 +64,7 @@ public sealed class DiscordPresenceService : IDisposable
     private readonly PresenceThrottle _throttle;
     private readonly Func<bool> _isSuppressed;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly TimeProvider _time;
     private readonly DateTimeOffset _sessionStartedAt;
     private readonly object _gate = new();
 
@@ -73,6 +74,8 @@ public sealed class DiscordPresenceService : IDisposable
     private DiscordPrivacyOptions _privacy;
     private bool _clearedForSuppression;
     private CancellationTokenSource? _pending;
+    /// <summary>The trailing send scheduled last (or a completed task). Test hook: see <see cref="PendingSend"/>.</summary>
+    private Task _pendingSend = Task.CompletedTask;
     private bool _disposed;
 
     /// <param name="state">The live commander picture to mirror. Never written to.</param>
@@ -94,17 +97,21 @@ public sealed class DiscordPresenceService : IDisposable
         DiscordPrivacyOptions? privacy = null)
         : this(state, client, DefaultMinInterval, isSuppressed, null, privacy) { }
 
-    /// <summary>Test-only constructor: a shortened throttle window and/or a controllable clock.</summary>
+    /// <summary>
+    /// Test-only constructor: a shortened throttle window and/or a controllable clock.
+    /// <paramref name="time"/> drives the trailing send's wait, and the clock when <paramref name="clock"/> is null.
+    /// </summary>
     internal DiscordPresenceService(
         CommanderState state, IDiscordRpcClient client, TimeSpan minInterval,
         Func<bool>? isSuppressed = null, Func<DateTimeOffset>? clock = null,
-        DiscordPrivacyOptions? privacy = null)
+        DiscordPrivacyOptions? privacy = null, TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _state = state;
         _client = client;
         _privacy = privacy ?? DiscordPrivacyOptions.Default;
         _isSuppressed = isSuppressed ?? (static () => false);
-        _clock = clock ?? (static () => DateTimeOffset.UtcNow);
+        _clock = clock ?? _time.GetUtcNow;
         _throttle = new PresenceThrottle(minInterval, _clock);
 
         _sessionStartedAt = _clock();
@@ -240,9 +247,9 @@ public sealed class DiscordPresenceService : IDisposable
         var cts = new CancellationTokenSource();
         _pending = cts;
 
-        _ = Task.Run(async () =>
+        _pendingSend = Task.Run(async () =>
         {
-            try { await Task.Delay(delay, cts.Token).ConfigureAwait(false); }
+            try { await Task.Delay(delay, _time, cts.Token).ConfigureAwait(false); }
             catch (TaskCanceledException) { return; }
 
             lock (_gate)
@@ -251,6 +258,14 @@ public sealed class DiscordPresenceService : IDisposable
                 if (_lastComputed is { } latest && _throttle.TryAcquire()) Send(latest);
             }
         });
+    }
+
+    /// <summary>
+    /// Test hook: the trailing send scheduled last, which finishes once it has sent or stood down.
+    /// </summary>
+    internal Task PendingSend
+    {
+        get { lock (_gate) return _pendingSend; }
     }
 
     public void Dispose()

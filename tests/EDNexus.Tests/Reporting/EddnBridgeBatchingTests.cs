@@ -94,7 +94,7 @@ public class EddnBridgeBatchingTests
         bus.Publish(Entry(Jump, historical: true));
         bus.Publish(Entry(Signal("A"), historical: true));
         bus.Publish(Entry("""{ "timestamp": "2020-01-01T00:00:06Z", "event": "Music", "MusicTrack": "x" }""", historical: true));
-        await Task.Delay(100);
+        // Disposing flushes a trailing run and waits for the upload, so anything buffered would be sent here.
         await bridge.DisposeAsync();
 
         Assert.Equal(0, handler.CallCount);

@@ -149,16 +149,20 @@ public class SettingsStorePersistenceTests : IDisposable
     }
 
     [Fact]
-    public async Task A_brief_lock_on_startup_is_waited_out()
+    public void A_brief_lock_on_startup_is_waited_out()
     {
         Directory.CreateDirectory(Dir);
         File.WriteAllText(SettingsPath, """{"Reporting":{"Inara":{"ApiKey":"keep-me"}}}""");
 
+        // The 150 ms lock is the scenario itself, well inside the store's ~600 ms of retries. It is
+        // released from a dedicated thread rather than a pool timer, so a busy thread pool on a loaded
+        // CI runner cannot stretch it past the retry budget.
         var locked = new FileStream(SettingsPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        var release = Task.Run(async () => { await Task.Delay(150); locked.Dispose(); });
+        var release = new Thread(() => { Thread.Sleep(150); locked.Dispose(); }) { IsBackground = true };
+        release.Start();
 
         var loaded = NewStore().Load();
-        await release;
+        release.Join();
 
         Assert.Equal("keep-me", loaded.Reporting.Inara.ApiKey);
     }

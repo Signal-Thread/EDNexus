@@ -54,6 +54,8 @@ public sealed class InaraBridge : IAsyncDisposable
 
     private Task _tail = Task.CompletedTask;
     private CancellationTokenSource? _debounce;
+    private Task _debounceTask = Task.CompletedTask;
+    private readonly TimeProvider _time;
     private DateTimeOffset? _rateLimitedAt;   // when Inara last refused us for rate limiting; null once a send is accepted
     private readonly Queue<DateTimeOffset> _sendTimes = new();   // start time of recent requests (rolling window)
     private readonly CancellationTokenSource _disposeCts = new();
@@ -64,9 +66,13 @@ public sealed class InaraBridge : IAsyncDisposable
     public InaraBridge(JournalEventBus bus, AppSettings settings, InaraClient client, Func<bool>? isSuppressed = null, IReportingLog? log = null)
         : this(bus, settings, client, SessionStartDebounce, MinInterval, isSuppressed, log) { }
 
-    /// <summary>Test-only constructor allowing the debounce/throttle windows to be shortened.</summary>
-    internal InaraBridge(JournalEventBus bus, AppSettings settings, InaraClient client, TimeSpan debounceDelay, TimeSpan minInterval, Func<bool>? isSuppressed = null, IReportingLog? log = null, TimeSpan? retryBackoff = null)
+    /// <summary>
+    /// Test-only constructor allowing the debounce/throttle windows to be shortened, and the clock that
+    /// drives them and the retry backoff to be replaced.
+    /// </summary>
+    internal InaraBridge(JournalEventBus bus, AppSettings settings, InaraClient client, TimeSpan debounceDelay, TimeSpan minInterval, Func<bool>? isSuppressed = null, IReportingLog? log = null, TimeSpan? retryBackoff = null, TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _retryBackoff = retryBackoff ?? RetryBackoff;
         _settings = settings;
         _client = client;
@@ -209,12 +215,30 @@ public sealed class InaraBridge : IAsyncDisposable
         _debounce?.Cancel();
         var cts = new CancellationTokenSource();
         _debounce = cts;
-        _ = Task.Run(async () =>
+        var flush = Task.Run(async () =>
         {
-            try { await Task.Delay(delay, cts.Token).ConfigureAwait(false); }
+            try { await Task.Delay(delay, _time, cts.Token).ConfigureAwait(false); }
             catch (TaskCanceledException) { return; }
             FlushNow();
         });
+        lock (_gate) _debounceTask = flush;
+    }
+
+    /// <summary>
+    /// Test hook: completes once no debounced or retry flush is waiting and the send chain has finished,
+    /// i.e. the bridge will send nothing more until a new journal event arrives.
+    /// </summary>
+    internal async Task WhenSettledAsync()
+    {
+        while (true)
+        {
+            Task debounce, tail;
+            lock (_gate) (debounce, tail) = (_debounceTask, _tail);
+            try { await debounce.ConfigureAwait(false); } catch { }
+            try { await tail.ConfigureAwait(false); } catch { }
+            lock (_gate)
+                if (debounce == _debounceTask && tail == _tail) return;
+        }
     }
 
     private void FlushImmediate()
@@ -267,11 +291,11 @@ public sealed class InaraBridge : IAsyncDisposable
                 return;
             }
 
-            try { await Task.Delay(wait, _disposing ? CancellationToken.None : _disposeCts.Token).ConfigureAwait(false); }
+            try { await Task.Delay(wait, _time, _disposing ? CancellationToken.None : _disposeCts.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) { }   // dispose began: re-evaluate against the shutdown cap
         }
 
-        lock (_gate) _sendTimes.Enqueue(DateTimeOffset.UtcNow);
+        lock (_gate) _sendTimes.Enqueue(_time.GetUtcNow());
         var response = await _client.SendAsync(identity, batch).ConfigureAwait(false);
 
         LogUpload(batch, response);
@@ -297,7 +321,7 @@ public sealed class InaraBridge : IAsyncDisposable
     private void TrackRateLimit(InaraResponse response)
     {
         DateTimeOffset? next;
-        if (response.IsRateLimited) next = DateTimeOffset.UtcNow;
+        if (response.IsRateLimited) next = _time.GetUtcNow();
         else if (response.IsOk) next = null;
         else return;   // some other failure says nothing about the limit either way
 
@@ -314,7 +338,7 @@ public sealed class InaraBridge : IAsyncDisposable
     private TimeSpan TimeUntilSendAllowed()
     {
         var window = _minInterval * MaxSendsPerWindow;
-        var now = DateTimeOffset.UtcNow;
+        var now = _time.GetUtcNow();
         lock (_gate)
         {
             while (_sendTimes.Count > 0 && now - _sendTimes.Peek() >= window) _sendTimes.Dequeue();
@@ -378,7 +402,7 @@ public sealed class InaraBridge : IAsyncDisposable
         var payload = _settings.Reporting.LogPayloads ? SerializeEvents(batch) : null;
 
         _log.Record(new ReportingUpload(
-            DateTimeOffset.UtcNow, ReportingTarget.Inara, summary, response.IsOk, status,
+            _time.GetUtcNow(), ReportingTarget.Inara, summary, response.IsOk, status,
             Error: response.IsOk ? null
                  : response.IsRateLimited ? $"{response.StatusText}. {RateLimitAdvice}"
                  : (response.StatusText ?? "error"),
