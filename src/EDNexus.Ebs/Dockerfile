@@ -15,7 +15,7 @@
 # key ring unless Ebs__DataProtectionKeysDirectory points it elsewhere (the compose file uses /keys).
 # Mount a persistent volume there (the compose file does) or every restart logs every broadcaster out.
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 
 COPY src/EDNexus.Ebs/EDNexus.Ebs.csproj src/EDNexus.Ebs/
@@ -24,7 +24,7 @@ RUN dotnet restore src/EDNexus.Ebs/EDNexus.Ebs.csproj
 COPY src/EDNexus.Ebs/ src/EDNexus.Ebs/
 RUN dotnet publish src/EDNexus.Ebs/EDNexus.Ebs.csproj -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS runtime
 WORKDIR /app
 
 # The aspnet image ships neither curl nor wget, so a HEALTHCHECK — and any orchestrator that reads
